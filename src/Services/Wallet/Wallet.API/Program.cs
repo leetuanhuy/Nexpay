@@ -82,6 +82,8 @@ builder.Services.AddMassTransit(x =>
 {
     // Register Consumer for UserRegisteredIntegrationEvent
     x.AddConsumer<UserRegisteredConsumer>();
+    // Register Consumer for Saga OrderCreatedIntegrationEvent
+    x.AddConsumer<OrderCreatedConsumer>();
 
     x.UsingRabbitMq((context, cfg) =>
     {

@@ -13,6 +13,9 @@
   <Folder Name="/src/Services/Notification/">
     <Project Path="src/Services/Notification/Notification.Service/Notification.Service.csproj" />
   </Folder>
+  <Folder Name="/src/Services/Payment/">
+    <Project Path="src/Services/Payment/Payment.API/Payment.API.csproj" />
+  </Folder>
   <Folder Name="/src/Services/Wallet/">
     <Project Path="src/Services/Wallet/Wallet.API/Wallet.API.csproj" />
     <Project Path="src/Services/Wallet/Wallet.Application/Wallet.Application.csproj" />

@@ -62,7 +62,8 @@ app.MapGet("/", () => Results.Ok(new
     routes = new[]
     {
         "/api/auth/* -> Identity Service (Port 5248)",
-        "/api/wallets/* -> Wallet Service (Port 5249)"
+        "/api/wallets/* -> Wallet Service (Port 5249)",
+        "/api/payments/* -> Payment Service (Port 5251)"
     }
 }));
 
