@@ -1,4 +1,5 @@
 using System.Text;
+using BuildingBlocks.Middleware;
 using Identity.API.Data;
 using Identity.API.Services;
 using MassTransit;
@@ -9,8 +10,9 @@ using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add Controllers
+// Add Controllers and Health Checks
 builder.Services.AddControllers();
+builder.Services.AddHealthChecks();
 builder.Services.AddEndpointsApiExplorer();
 
 // Configure Swagger with JWT Bearer Support
@@ -109,6 +111,8 @@ builder.Services.AddMassTransit(x =>
 
 var app = builder.Build();
 
+app.UseCorrelationId();
+
 // Pipeline
 if (app.Environment.IsDevelopment())
 {
@@ -119,9 +123,14 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-app.UseHttpsRedirection();
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
+
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+app.MapHealthChecks("/health");
 
 app.Run();

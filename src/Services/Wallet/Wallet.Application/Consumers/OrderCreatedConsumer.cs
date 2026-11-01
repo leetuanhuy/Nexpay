@@ -84,3 +84,4 @@ public class OrderCreatedConsumer : IConsumer<OrderCreatedIntegrationEvent>
         }
     }
 }
+

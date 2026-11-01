@@ -1,4 +1,5 @@
 using System.Threading.RateLimiting;
+using BuildingBlocks.Middleware;
 using Microsoft.AspNetCore.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -44,14 +45,17 @@ builder.Services.AddRateLimiter(options =>
             }));
 });
 
-// 3. YARP Reverse Proxy Configuration
+// 3. YARP Reverse Proxy & Health Checks
+builder.Services.AddHealthChecks();
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
 
 var app = builder.Build();
 
+app.UseCorrelationId();
 app.UseCors("AllowAll");
 app.UseRateLimiter();
+app.MapHealthChecks("/health");
 
 // Health Check & Gateway Status
 app.MapGet("/", () => Results.Ok(new

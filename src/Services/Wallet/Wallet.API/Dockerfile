@@ -1,9 +1,10 @@
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-preview AS base
 WORKDIR /app
 EXPOSE 8080
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0-preview AS build
 WORKDIR /src
+COPY ["Directory.Build.props", "./"]
 COPY ["src/Services/Wallet/Wallet.API/Wallet.API.csproj", "src/Services/Wallet/Wallet.API/"]
 COPY ["src/Services/Wallet/Wallet.Infrastructure/Wallet.Infrastructure.csproj", "src/Services/Wallet/Wallet.Infrastructure/"]
 COPY ["src/Services/Wallet/Wallet.Application/Wallet.Application.csproj", "src/Services/Wallet/Wallet.Application/"]
@@ -21,4 +22,3 @@ FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
 ENTRYPOINT ["dotnet", "Wallet.API.dll"]
-

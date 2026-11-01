@@ -41,3 +41,4 @@ public class OrderPaymentSucceededConsumer : IConsumer<OrderPaymentSucceededInte
         _logger.LogInformation("Order {OrderCode} marked as COMPLETED successfully.", message.OrderCode);
     }
 }
+

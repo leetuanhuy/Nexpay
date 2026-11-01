@@ -30,3 +30,4 @@ public record OrderPaymentFailedIntegrationEvent(
     decimal Amount,
     string Reason
 ) : IIntegrationEvent;
+

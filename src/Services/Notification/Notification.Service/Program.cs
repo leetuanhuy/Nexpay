@@ -4,6 +4,9 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Add Health Checks
+builder.Services.AddHealthChecks();
+
 // Configure Serilog with Console & Seq Sink
 var seqUrl = builder.Configuration["Seq:ServerUrl"] ?? "http://localhost:5341";
 Log.Logger = new LoggerConfiguration()
@@ -44,6 +47,7 @@ builder.Services.AddMassTransit(x =>
 
 var app = builder.Build();
 
+app.MapHealthChecks("/health");
 app.MapGet("/", () => "Notification Microservice is running and actively consuming RabbitMQ messages...");
 
 app.Run();

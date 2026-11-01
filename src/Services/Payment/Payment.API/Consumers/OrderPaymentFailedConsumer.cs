@@ -42,3 +42,4 @@ public class OrderPaymentFailedConsumer : IConsumer<OrderPaymentFailedIntegratio
         _logger.LogWarning("Order {OrderCode} marked as FAILED with reason: {Reason}.", message.OrderCode, message.Reason);
     }
 }
+
