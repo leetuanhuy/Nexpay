@@ -70,15 +70,18 @@ export const usePaymentViewModel = (onSagaSuccess?: () => void) => {
             fetchOrders();
           }
 
-          if (attempts > 15) {
+          if (attempts > 25) {
             clearInterval(interval);
             setLoading(false);
+            if (updated.status === 'Pending') {
+              setError('Saga transaction took longer than expected. Please check order history.');
+            }
           }
         } catch {
           clearInterval(interval);
           setLoading(false);
         }
-      }, 800);
+      }, 600);
     } catch (err: any) {
       setError(err.message || 'Payment checkout initiation failed.');
       setSagaStep(0);
@@ -104,4 +107,3 @@ export const usePaymentViewModel = (onSagaSuccess?: () => void) => {
     resetSaga,
   };
 };
-

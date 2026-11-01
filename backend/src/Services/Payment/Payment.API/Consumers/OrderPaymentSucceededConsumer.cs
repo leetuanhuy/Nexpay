@@ -35,10 +35,10 @@ public class OrderPaymentSucceededConsumer : IConsumer<OrderPaymentSucceededInte
             return;
         }
 
-        order.MarkAsCompleted(message.TransactionId.ToString());
+        var attempt = order.MarkAsCompleted(message.TransactionId.ToString());
+        _context.Entry(attempt).State = EntityState.Added;
         await _context.SaveChangesAsync(context.CancellationToken);
 
         _logger.LogInformation("Order {OrderCode} marked as COMPLETED successfully.", message.OrderCode);
     }
 }
-

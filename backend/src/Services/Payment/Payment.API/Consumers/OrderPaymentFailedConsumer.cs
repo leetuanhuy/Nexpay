@@ -21,7 +21,7 @@ public class OrderPaymentFailedConsumer : IConsumer<OrderPaymentFailedIntegratio
         var message = context.Message;
 
         _logger.LogWarning(
-            "Saga Finalizing: Payment failed for Order {OrderCode}. Reason: {Reason}. Updating status to FAILED...",
+            "Saga Finalizing: Payment failed for Order {OrderCode}, Reason: {Reason}. Updating status to FAILED...",
             message.OrderCode,
             message.Reason
         );
@@ -36,10 +36,10 @@ public class OrderPaymentFailedConsumer : IConsumer<OrderPaymentFailedIntegratio
             return;
         }
 
-        order.MarkAsFailed(message.Reason);
+        var attempt = order.MarkAsFailed(message.Reason);
+        _context.Entry(attempt).State = EntityState.Added;
         await _context.SaveChangesAsync(context.CancellationToken);
 
-        _logger.LogWarning("Order {OrderCode} marked as FAILED with reason: {Reason}.", message.OrderCode, message.Reason);
+        _logger.LogInformation("Order {OrderCode} marked as FAILED successfully.", message.OrderCode);
     }
 }
-

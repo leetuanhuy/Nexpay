@@ -36,31 +36,34 @@ public class PaymentOrder
         };
     }
 
-    public void MarkAsCompleted(string? transactionId = null)
+    public PaymentAttempt MarkAsCompleted(string? transactionId = null)
     {
         Status = "Completed";
         UpdatedAtUtc = DateTime.UtcNow;
 
-        _attempts.Add(PaymentAttempt.Create(
+        var attempt = PaymentAttempt.Create(
             paymentOrderId: Id,
             method: "InternalWallet",
             status: "Success",
             externalTransactionId: transactionId
-        ));
+        );
+        _attempts.Add(attempt);
+        return attempt;
     }
 
-    public void MarkAsFailed(string reason)
+    public PaymentAttempt MarkAsFailed(string reason)
     {
         Status = "Failed";
         FailureReason = reason;
         UpdatedAtUtc = DateTime.UtcNow;
 
-        _attempts.Add(PaymentAttempt.Create(
+        var attempt = PaymentAttempt.Create(
             paymentOrderId: Id,
             method: "InternalWallet",
             status: "Failed",
             rawResponse: reason
-        ));
+        );
+        _attempts.Add(attempt);
+        return attempt;
     }
 }
-

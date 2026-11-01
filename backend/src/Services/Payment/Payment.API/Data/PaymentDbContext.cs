@@ -20,6 +20,7 @@ public class PaymentDbContext : DbContext
         {
             builder.ToTable("PaymentOrders");
             builder.HasKey(o => o.Id);
+            builder.Property(o => o.Id).ValueGeneratedNever();
 
             builder.Property(o => o.OrderCode).HasMaxLength(50).IsRequired();
             builder.HasIndex(o => o.OrderCode).IsUnique();
@@ -45,6 +46,7 @@ public class PaymentDbContext : DbContext
         {
             builder.ToTable("PaymentAttempts");
             builder.HasKey(a => a.Id);
+            builder.Property(a => a.Id).ValueGeneratedNever();
 
             builder.Property(a => a.Method).HasMaxLength(50).IsRequired();
             builder.Property(a => a.Status).HasMaxLength(50).IsRequired();
@@ -56,4 +58,3 @@ public class PaymentDbContext : DbContext
         });
     }
 }
-
