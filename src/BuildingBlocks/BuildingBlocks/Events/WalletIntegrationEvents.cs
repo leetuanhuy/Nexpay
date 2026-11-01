@@ -23,3 +23,4 @@ public record WalletCreditedIntegrationEvent(
     string? ReferenceId,
     string? Description
 ) : IIntegrationEvent;
+

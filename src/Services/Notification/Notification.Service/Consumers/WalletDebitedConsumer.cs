@@ -29,3 +29,4 @@ public class WalletDebitedConsumer : IConsumer<WalletDebitedIntegrationEvent>
         return Task.CompletedTask;
     }
 }
+
