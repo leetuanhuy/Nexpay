@@ -7,3 +7,4 @@ public record UserRegisteredIntegrationEvent(
     string Email,
     string FullName
 ) : IIntegrationEvent;
+

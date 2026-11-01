@@ -30,3 +30,4 @@ public record AuthResponse(
     int ExpiresInSeconds,
     UserDto User
 );
+
