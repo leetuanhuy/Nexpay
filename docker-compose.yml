@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # =========================================================================
   # 1. SQL SERVER 2022 (Database-per-Service Storage)
@@ -25,7 +23,7 @@ services:
     networks:
       - nexpay-network
 
-  # Tự động chạy script khởi tạo Database (IdentityDb, WalletDb, PaymentDb) khi SQL Server sẵn sàng
+  # Database Initialization: Runs scripts to create tables, indexes, and stored procedures
   sqlserver-init:
     image: mcr.microsoft.com/mssql/server:2022-latest
     container_name: nexpay-sqlserver-init
@@ -43,7 +41,7 @@ services:
       - nexpay-network
 
   # =========================================================================
-  # 2. RABBITMQ (Message Broker cho Event-Driven & Outbox / Saga)
+  # 2. RABBITMQ (Message Broker for EDA, Sagas & Notification)
   # =========================================================================
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
@@ -53,8 +51,8 @@ services:
       - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER:-guest}
       - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS:-guest}
     ports:
-      - "${RABBITMQ_PORT:-5672}:5672"       # AMQP protocol
-      - "${RABBITMQ_MGMT_PORT:-15672}:15672" # Management Web UI (http://localhost:15672)
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672" # http://localhost:15672
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -67,7 +65,7 @@ services:
       - nexpay-network
 
   # =========================================================================
-  # 3. REDIS (Distributed Lock, Idempotency Cache & Fast Balance Lookup)
+  # 3. REDIS (Distributed Caching & Locks)
   # =========================================================================
   redis:
     image: redis:7-alpine
@@ -81,7 +79,7 @@ services:
       - nexpay-network
 
   # =========================================================================
-  # 4. SEQ (Tập trung Logs & Distributed Tracing cho toàn bộ Microservices)
+  # 4. SEQ (Centralized Logging & Observability)
   # =========================================================================
   seq:
     image: datalust/seq:latest
@@ -91,9 +89,202 @@ services:
       - ACCEPT_EULA=Y
       - SEQ_FIRSTRUN_NOAUTHENTICATION=true
     ports:
-      - "${SEQ_PORT:-5341}:80" # Web UI (http://localhost:5341)
+      - "${SEQ_PORT:-5341}:80" # http://localhost:5341
     volumes:
       - seq_data:/data
+    networks:
+      - nexpay-network
+
+  # =========================================================================
+  # 5. IDENTITY SERVICE (Auth, JWT, User Management)
+  # =========================================================================
+  identity-service:
+    build:
+      context: ./backend
+      dockerfile: src/Services/Identity/Identity.API/Dockerfile
+    container_name: nexpay-identity-service
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_HTTP_PORTS=8080
+      - ConnectionStrings__IdentityDb=Server=sqlserver,1433;Database=Nexpay_IdentityDb;User Id=sa;Password=${MSSQL_SA_PASSWORD:-Password123!};TrustServerCertificate=True;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__Username=${RABBITMQ_DEFAULT_USER:-guest}
+      - RabbitMQ__Password=${RABBITMQ_DEFAULT_PASS:-guest}
+      - JwtSettings__Secret=Nexpay_Super_Secret_Key_For_JWT_Signing_2026_AtLeast32Bytes!
+      - JwtSettings__Issuer=Nexpay.Identity
+      - JwtSettings__Audience=Nexpay.Client
+      - JwtSettings__ExpiryMinutes=60
+      - JwtSettings__RefreshTokenExpiryDays=7
+    ports:
+      - "5248:8080"
+    depends_on:
+      sqlserver-init:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/8080' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - nexpay-network
+
+  # =========================================================================
+  # 6. WALLET SERVICE (Accounts, Double-Entry Ledger, Banking Stored Procedures)
+  # =========================================================================
+  wallet-service:
+    build:
+      context: ./backend
+      dockerfile: src/Services/Wallet/Wallet.API/Dockerfile
+    container_name: nexpay-wallet-service
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_HTTP_PORTS=8080
+      - ConnectionStrings__WalletDb=Server=sqlserver,1433;Database=Nexpay_WalletDb;User Id=sa;Password=${MSSQL_SA_PASSWORD:-Password123!};TrustServerCertificate=True;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__Username=${RABBITMQ_DEFAULT_USER:-guest}
+      - RabbitMQ__Password=${RABBITMQ_DEFAULT_PASS:-guest}
+      - JwtSettings__Secret=Nexpay_Super_Secret_Key_For_JWT_Signing_2026_AtLeast32Bytes!
+      - JwtSettings__Issuer=Nexpay.Identity
+      - JwtSettings__Audience=Nexpay.Client
+    ports:
+      - "5249:8080"
+    depends_on:
+      sqlserver-init:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/8080' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - nexpay-network
+
+  # =========================================================================
+  # 7. NOTIFICATION SERVICE (Event Consumer, Seq Structured Auditing)
+  # =========================================================================
+  notification-service:
+    build:
+      context: ./backend
+      dockerfile: src/Services/Notification/Notification.Service/Dockerfile
+    container_name: nexpay-notification-service
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_HTTP_PORTS=8080
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__Username=${RABBITMQ_DEFAULT_USER:-guest}
+      - RabbitMQ__Password=${RABBITMQ_DEFAULT_PASS:-guest}
+      - Seq__ServerUrl=http://seq:80
+    ports:
+      - "5250:8080"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      seq:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/8080' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - nexpay-network
+
+  # =========================================================================
+  # 8. PAYMENT SERVICE (Orders, Checkouts, Distributed Saga Orchestrator)
+  # =========================================================================
+  payment-service:
+    build:
+      context: ./backend
+      dockerfile: src/Services/Payment/Payment.API/Dockerfile
+    container_name: nexpay-payment-service
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_HTTP_PORTS=8080
+      - ConnectionStrings__PaymentDb=Server=sqlserver,1433;Database=Nexpay_PaymentDb;User Id=sa;Password=${MSSQL_SA_PASSWORD:-Password123!};TrustServerCertificate=True;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__Username=${RABBITMQ_DEFAULT_USER:-guest}
+      - RabbitMQ__Password=${RABBITMQ_DEFAULT_PASS:-guest}
+      - JwtSettings__Secret=Nexpay_Super_Secret_Key_For_JWT_Signing_2026_AtLeast32Bytes!
+      - JwtSettings__Issuer=Nexpay.Identity
+      - JwtSettings__Audience=Nexpay.Client
+    ports:
+      - "5251:8080"
+    depends_on:
+      sqlserver-init:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/8080' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - nexpay-network
+
+  # =========================================================================
+  # 9. API GATEWAY (Microsoft YARP, Rate Limiting, CORS, Correlation ID)
+  # =========================================================================
+  api-gateway:
+    build:
+      context: ./backend
+      dockerfile: src/Gateway/Nexpay.Gateway/Dockerfile
+    container_name: nexpay-gateway
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_HTTP_PORTS=8080
+      - ReverseProxy__Clusters__identity-cluster__Destinations__identity-service__Address=http://identity-service:8080
+      - ReverseProxy__Clusters__wallet-cluster__Destinations__wallet-service__Address=http://wallet-service:8080
+      - ReverseProxy__Clusters__payment-cluster__Destinations__payment-service__Address=http://payment-service:8080
+    ports:
+      - "5000:8080"
+    depends_on:
+      identity-service:
+        condition: service_healthy
+      wallet-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/8080' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - nexpay-network
+
+  # =========================================================================
+  # 10. FRONTEND WEB PORTAL (React 19, Vite, Tailwind Modular Architecture)
+  # =========================================================================
+  frontend:
+    build:
+      context: ./frontend/web
+      dockerfile: Dockerfile
+    container_name: nexpay-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      api-gateway:
+        condition: service_started
     networks:
       - nexpay-network
 
@@ -106,4 +297,3 @@ volumes:
 networks:
   nexpay-network:
     driver: bridge
-
