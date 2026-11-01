@@ -1,4 +1,6 @@
+using System.Security.Claims;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Wallet.Application.Commands.CreateWallet;
 using Wallet.Application.Commands.CreditWallet;
@@ -8,6 +10,7 @@ using Wallet.Application.Queries.GetWalletByUserId;
 
 namespace Wallet.API.Controllers;
 
+[Authorize]
 [ApiController]
 [Route("api/[controller]")]
 public class WalletsController : ControllerBase
@@ -19,23 +22,37 @@ public class WalletsController : ControllerBase
         _sender = sender;
     }
 
-    /// <summary>
-    /// Creates a new wallet for a user
-    /// </summary>
-    [HttpPost]
-    public async Task<IActionResult> CreateWallet([FromBody] CreateWalletRequest request, CancellationToken ct)
+    private Guid CurrentUserId
     {
-        var command = new CreateWalletCommand(request.UserId, request.Currency ?? "VND");
-        var result = await _sender.Send(command, ct);
+        get
+        {
+            var claim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                ?? User.FindFirst("sub")?.Value;
 
-        if (result.IsFailure)
-            return BadRequest(new { error = result.Error });
+            if (Guid.TryParse(claim, out var userId))
+                return userId;
 
-        return CreatedAtAction(nameof(GetWalletByUserId), new { userId = result.Value!.UserId }, result.Value);
+            throw new UnauthorizedAccessException("User identifier claim is missing or invalid in JWT token.");
+        }
     }
 
     /// <summary>
-    /// Retrieves wallet details and current balance by UserId
+    /// Gets current authenticated user's wallet and balance
+    /// </summary>
+    [HttpGet("me")]
+    public async Task<IActionResult> GetMyWallet(CancellationToken ct)
+    {
+        var query = new GetWalletByUserIdQuery(CurrentUserId);
+        var result = await _sender.Send(query, ct);
+
+        if (result.IsFailure)
+            return NotFound(new { error = result.Error });
+
+        return Ok(result.Value);
+    }
+
+    /// <summary>
+    /// Gets wallet details by UserId (Admin or Service lookup)
     /// </summary>
     [HttpGet("{userId:guid}")]
     public async Task<IActionResult> GetWalletByUserId(Guid userId, CancellationToken ct)
@@ -50,13 +67,29 @@ public class WalletsController : ControllerBase
     }
 
     /// <summary>
-    /// Credits money to the wallet via Banking Stored Procedure
+    /// Explicitly creates a wallet for a user
+    /// </summary>
+    [HttpPost]
+    public async Task<IActionResult> CreateWallet([FromBody] CreateWalletRequest request, CancellationToken ct)
+    {
+        var targetUserId = request.UserId ?? CurrentUserId;
+        var command = new CreateWalletCommand(targetUserId, request.Currency ?? "VND");
+        var result = await _sender.Send(command, ct);
+
+        if (result.IsFailure)
+            return BadRequest(new { error = result.Error });
+
+        return CreatedAtAction(nameof(GetWalletByUserId), new { userId = result.Value!.UserId }, result.Value);
+    }
+
+    /// <summary>
+    /// Credits money to authenticated user's wallet via Banking Stored Procedure
     /// </summary>
     [HttpPost("credit")]
     public async Task<IActionResult> CreditWallet([FromBody] CreditWalletRequest request, CancellationToken ct)
     {
         var command = new CreditWalletCommand(
-            request.UserId,
+            CurrentUserId,
             request.Amount,
             request.Description ?? "Wallet topup",
             request.ReferenceId
@@ -71,13 +104,13 @@ public class WalletsController : ControllerBase
     }
 
     /// <summary>
-    /// Debits money from the wallet via Banking Stored Procedure (Pessimistic Lock & Atomic Ledger)
+    /// Debits money from authenticated user's wallet via Banking Stored Procedure
     /// </summary>
     [HttpPost("debit")]
     public async Task<IActionResult> DebitWallet([FromBody] DebitWalletRequest request, CancellationToken ct)
     {
         var command = new DebitWalletCommand(
-            request.UserId,
+            CurrentUserId,
             request.Amount,
             request.Description ?? "Payment transaction",
             request.ReferenceId
@@ -92,12 +125,12 @@ public class WalletsController : ControllerBase
     }
 
     /// <summary>
-    /// Retrieves transaction audit ledger by UserId
+    /// Retrieves transaction audit ledger for authenticated user
     /// </summary>
-    [HttpGet("{userId:guid}/transactions")]
-    public async Task<IActionResult> GetTransactions(Guid userId, [FromQuery] int limit = 50, CancellationToken ct = default)
+    [HttpGet("transactions")]
+    public async Task<IActionResult> GetMyTransactions([FromQuery] int limit = 50, CancellationToken ct = default)
     {
-        var query = new GetTransactionsQuery(userId, limit);
+        var query = new GetTransactionsQuery(CurrentUserId, limit);
         var result = await _sender.Send(query, ct);
 
         if (result.IsFailure)
@@ -107,6 +140,6 @@ public class WalletsController : ControllerBase
     }
 }
 
-public record CreateWalletRequest(Guid UserId, string? Currency);
-public record CreditWalletRequest(Guid UserId, decimal Amount, string? Description, string? ReferenceId);
-public record DebitWalletRequest(Guid UserId, decimal Amount, string? Description, string? ReferenceId);
+public record CreateWalletRequest(Guid? UserId, string? Currency);
+public record CreditWalletRequest(decimal Amount, string? Description, string? ReferenceId);
+public record DebitWalletRequest(decimal Amount, string? Description, string? ReferenceId);
