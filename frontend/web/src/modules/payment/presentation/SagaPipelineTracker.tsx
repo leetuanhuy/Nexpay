@@ -1,7 +1,8 @@
 import React from 'react';
-import { Zap, CheckCircle, RefreshCw, XCircle, Clock } from 'lucide-react';
+import { Zap, CheckCircle2, RefreshCw, XCircle, Clock, Server } from 'lucide-react';
 import type { PaymentOrder } from '../domain/PaymentOrder';
 import { Badge } from '../../../shared/Badge';
+import { CurrencyFormatter } from '../../../core/utils/formatters';
 
 interface SagaPipelineTrackerProps {
   order: PaymentOrder;
@@ -27,86 +28,141 @@ export const SagaPipelineTracker: React.FC<SagaPipelineTrackerProps> = ({
     }
   };
 
+  const isFailed = order.status === 'Failed' || sagaStep === 4;
+  const isCompleted = order.status === 'Completed' || sagaStep === 3;
+  const isProcessing = order.status === 'Processing' && !isCompleted && !isFailed;
+
   return (
-    <div className="rounded-2xl p-5 bg-slate-900 border border-emerald-500/30 shadow-xl space-y-4 animate-fade-in">
-      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-        <div className="flex items-center space-x-2">
-          <Zap className="h-4 w-4 text-emerald-400" />
-          <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
-            Saga Execution Pipeline: Order #{order.orderCode}
-          </span>
+    <div className="rounded-3xl p-6 bg-gradient-to-br from-slate-900 via-[#0d1627] to-slate-900 border border-emerald-500/40 shadow-2xl shadow-emerald-950/20 space-y-5 animate-fade-in">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-800">
+        <div className="flex items-center space-x-3">
+          <div className="p-2.5 rounded-2xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            <Zap className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="flex items-center space-x-2">
+              <span className="text-sm font-black text-white font-mono">
+                Order #{order.orderCode}
+              </span>
+              <Badge variant={getBadgeVariant()} pulse={isProcessing}>
+                {order.status}
+              </Badge>
+            </div>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {order.description} • Amount:{' '}
+              <strong className="text-emerald-400 font-mono">
+                {CurrencyFormatter.formatVND(order.amount)}
+              </strong>
+            </p>
+          </div>
         </div>
-        <Badge variant={getBadgeVariant()} pulse={order.status === 'Processing'}>
-          {order.status}
-        </Badge>
+
+        {/* Microservices Tag */}
+        <div className="flex items-center space-x-2 text-[11px] text-slate-400 font-mono bg-slate-950/70 px-3 py-1.5 rounded-xl border border-slate-800">
+          <Server className="h-3.5 w-3.5 text-teal-400" />
+          <span>Payment.API ↔ RabbitMQ ↔ Wallet.API</span>
+        </div>
       </div>
 
-      {/* Stepper */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-        {/* Step 1 */}
+      {/* Interactive 3-Stage Pipeline Stepper */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+        {/* Step 1: Payment Initiated */}
         <div
-          className={`p-3 rounded-xl border ${
+          className={`p-4 rounded-2xl border transition-all duration-300 ${
             sagaStep >= 1
-              ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
-              : 'bg-slate-800 border-slate-700 text-slate-400'
+              ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-200'
+              : 'bg-slate-950/40 border-slate-800 text-slate-400'
           }`}
         >
-          <div className="flex items-center space-x-2 font-semibold">
-            <CheckCircle className="h-4 w-4" />
-            <span>1. Order Initiated</span>
+          <div className="flex items-center justify-between font-bold mb-2">
+            <div className="flex items-center space-x-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+              <span>1. Order Initiated</span>
+            </div>
+            <span className="text-[10px] font-mono text-emerald-400/80 bg-emerald-500/10 px-2 py-0.5 rounded">
+              Payment.API
+            </span>
           </div>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Payment.API created order and published OrderCreatedIntegrationEvent.
+          <p className="text-[11px] text-slate-300/80 leading-relaxed">
+            Record created in SQL Server. Emitted{' '}
+            <code className="text-emerald-300 font-mono text-[10px]">OrderCreatedIntegrationEvent</code> to RabbitMQ.
           </p>
         </div>
 
-        {/* Step 2 */}
+        {/* Step 2: RabbitMQ Choreography & Wallet Debit */}
         <div
-          className={`p-3 rounded-xl border ${
+          className={`p-4 rounded-2xl border transition-all duration-300 ${
             sagaStep >= 2
-              ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
-              : 'bg-slate-800 border-slate-700 text-slate-400'
+              ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-200'
+              : 'bg-slate-950/40 border-slate-800 text-slate-400'
           }`}
         >
-          <div className="flex items-center space-x-2 font-semibold">
-            <RefreshCw className={`h-4 w-4 ${sagaStep === 2 ? 'animate-spin' : ''}`} />
-            <span>2. RabbitMQ Choreography</span>
+          <div className="flex items-center justify-between font-bold mb-2">
+            <div className="flex items-center space-x-2">
+              {sagaStep === 2 ? (
+                <RefreshCw className="h-4 w-4 text-amber-400 animate-spin" />
+              ) : sagaStep > 2 ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+              ) : (
+                <Clock className="h-4 w-4 text-slate-500" />
+              )}
+              <span>2. RabbitMQ Choreography</span>
+            </div>
+            <span className="text-[10px] font-mono text-teal-400/80 bg-teal-500/10 px-2 py-0.5 rounded">
+              Wallet.API
+            </span>
           </div>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Wallet.API executes sp_DebitWallet with rowlock and publishes outcome.
+          <p className="text-[11px] text-slate-300/80 leading-relaxed">
+            Wallet consumer executed{' '}
+            <code className="text-teal-300 font-mono text-[10px]">sp_DebitWallet</code> with rowlock. Outcome returned to bus.
           </p>
         </div>
 
-        {/* Step 3 */}
+        {/* Step 3: Saga Outcome Finalized */}
         <div
-          className={`p-3 rounded-xl border ${
-            sagaStep === 3
-              ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
-              : sagaStep === 4
-              ? 'bg-rose-500/10 border-rose-500/40 text-rose-300'
-              : 'bg-slate-800 border-slate-700 text-slate-400'
+          className={`p-4 rounded-2xl border transition-all duration-300 ${
+            isCompleted
+              ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-200'
+              : isFailed
+              ? 'bg-rose-500/15 border-rose-500/50 text-rose-200'
+              : 'bg-slate-950/40 border-slate-800 text-slate-400'
           }`}
         >
-          <div className="flex items-center space-x-2 font-semibold">
-            {sagaStep === 3 ? (
-              <CheckCircle className="h-4 w-4 text-emerald-400" />
-            ) : sagaStep === 4 ? (
-              <XCircle className="h-4 w-4 text-rose-400" />
-            ) : (
-              <Clock className="h-4 w-4" />
-            )}
-            <span>3. Finalize Status</span>
+          <div className="flex items-center justify-between font-bold mb-2">
+            <div className="flex items-center space-x-2">
+              {isCompleted ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+              ) : isFailed ? (
+                <XCircle className="h-4 w-4 text-rose-400" />
+              ) : (
+                <Clock className="h-4 w-4 text-slate-500" />
+              )}
+              <span>3. Saga Outcome</span>
+            </div>
+            <span
+              className={`text-[10px] font-mono px-2 py-0.5 rounded ${
+                isCompleted
+                  ? 'text-emerald-400 bg-emerald-500/10'
+                  : isFailed
+                  ? 'text-rose-400 bg-rose-500/10'
+                  : 'text-slate-400 bg-slate-800'
+              }`}
+            >
+              {isCompleted ? 'SUCCESS' : isFailed ? 'COMPENSATED' : 'WAITING'}
+            </span>
           </div>
-          <p className="text-[11px] text-slate-400 mt-1">
-            {sagaStep === 3
-              ? 'Payment succeeded & balance debited.'
-              : sagaStep === 4
-              ? `Failed: ${error || order.failureReason || 'Insufficient balance'}`
-              : 'Awaiting event confirmation...'}
+          <p className="text-[11px] text-slate-300/80 leading-relaxed">
+            {isCompleted && 'Payment succeeded. Double-entry ledger debited.'}
+            {isFailed && (
+              <span className="text-rose-300 font-medium">
+                {error || order.failureReason || 'Failed: Insufficient balance. Saga transaction compensated.'}
+              </span>
+            )}
+            {!isCompleted && !isFailed && 'Awaiting transaction finalization event...'}
           </p>
         </div>
       </div>
     </div>
   );
 };
-
