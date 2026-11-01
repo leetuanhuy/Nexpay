@@ -1,5 +1,7 @@
 using BuildingBlocks.Common;
 using BuildingBlocks.CQRS;
+using BuildingBlocks.Events;
+using MassTransit;
 using Wallet.Application.DTOs;
 using Wallet.Domain.Repositories;
 using Wallet.Domain.Exceptions;
@@ -16,10 +18,12 @@ public record DebitWalletCommand(
 public class DebitWalletCommandHandler : ICommandHandler<DebitWalletCommand, WalletTransactionDto>
 {
     private readonly IWalletRepository _walletRepository;
+    private readonly IPublishEndpoint _publishEndpoint;
 
-    public DebitWalletCommandHandler(IWalletRepository walletRepository)
+    public DebitWalletCommandHandler(IWalletRepository walletRepository, IPublishEndpoint publishEndpoint)
     {
         _walletRepository = walletRepository;
+        _publishEndpoint = publishEndpoint;
     }
 
     public async Task<Result<WalletTransactionDto>> Handle(DebitWalletCommand request, CancellationToken cancellationToken)
@@ -34,6 +38,19 @@ public class DebitWalletCommandHandler : ICommandHandler<DebitWalletCommand, Wal
                 referenceType: "Payment",
                 cancellationToken: cancellationToken
             );
+
+            // Publish Integration Event to RabbitMQ
+            await _publishEndpoint.Publish(new WalletDebitedIntegrationEvent(
+                EventId: Guid.NewGuid(),
+                OccurredOnUtc: DateTime.UtcNow,
+                UserId: request.UserId,
+                WalletId: transaction.WalletId,
+                Amount: transaction.Amount,
+                BalanceBefore: transaction.BalanceBefore,
+                BalanceAfter: transaction.BalanceAfter,
+                ReferenceId: transaction.ReferenceId,
+                Description: transaction.Description
+            ), cancellationToken);
 
             var dto = new WalletTransactionDto(
                 transaction.Id,

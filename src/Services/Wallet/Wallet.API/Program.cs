@@ -1,3 +1,4 @@
+using MassTransit;
 using Wallet.Application;
 using Wallet.Infrastructure;
 
@@ -14,6 +15,27 @@ builder.Services.AddSwaggerGen(c =>
 // Clean Architecture Layers
 builder.Services.AddWalletApplication();
 builder.Services.AddWalletInfrastructure(builder.Configuration);
+
+// MassTransit & RabbitMQ Event Bus
+builder.Services.AddMassTransit(x =>
+{
+    x.UsingRabbitMq((context, cfg) =>
+    {
+        var rabbitConfig = builder.Configuration.GetSection("RabbitMQ");
+        var host = rabbitConfig["Host"] ?? "localhost";
+        var port = ushort.TryParse(rabbitConfig["Port"], out var p) ? p : (ushort)5672;
+        var username = rabbitConfig["Username"] ?? "guest";
+        var password = rabbitConfig["Password"] ?? "guest";
+
+        cfg.Host(host, port, "/", h =>
+        {
+            h.Username(username);
+            h.Password(password);
+        });
+
+        cfg.ConfigureEndpoints(context);
+    });
+});
 
 var app = builder.Build();
 
