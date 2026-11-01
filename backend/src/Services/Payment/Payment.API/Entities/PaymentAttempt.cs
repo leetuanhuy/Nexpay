@@ -12,7 +12,7 @@ public class PaymentAttempt
 
     public PaymentOrder? PaymentOrder { get; private set; }
 
-    private PaymentAttempt() { }
+    public PaymentAttempt() { }
 
     public static PaymentAttempt Create(
         Guid paymentOrderId,
@@ -33,4 +33,3 @@ public class PaymentAttempt
         };
     }
 }
-
