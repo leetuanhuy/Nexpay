@@ -106,3 +106,4 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({ transactions, loading 
     </Card>
   );
 };
+

@@ -77,3 +77,4 @@ export class AxiosHttpClient implements IHttpClient {
 
 // Global singleton instance for app-wide use
 export const defaultHttpClient = new AxiosHttpClient();
+

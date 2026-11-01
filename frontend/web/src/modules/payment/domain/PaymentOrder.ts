@@ -12,3 +12,4 @@ export interface PaymentOrder {
   readonly createdAtUtc: string;
   readonly completedAtUtc?: string;
 }
+

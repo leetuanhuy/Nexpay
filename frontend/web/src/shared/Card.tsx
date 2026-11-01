@@ -20,3 +20,4 @@ export const Card: React.FC<CardProps> = ({ children, className = '', glow = fal
     </div>
   );
 };
+

@@ -8,3 +8,4 @@ export class GetCurrentUserUseCase {
     return await this.authRepository.getCurrentUser();
   }
 }
+

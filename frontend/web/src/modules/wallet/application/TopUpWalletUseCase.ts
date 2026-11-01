@@ -13,3 +13,4 @@ export class TopUpWalletUseCase {
     return await this.walletRepository.credit(amount, description || 'Online Deposit');
   }
 }
+

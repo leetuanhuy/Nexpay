@@ -19,3 +19,4 @@ export class RegisterUseCase {
     return await this.authRepository.register(payload);
   }
 }
+

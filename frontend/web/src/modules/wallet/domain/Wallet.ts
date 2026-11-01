@@ -9,3 +9,4 @@ export interface Wallet {
   readonly createdAtUtc: string;
   readonly updatedAtUtc?: string;
 }
+

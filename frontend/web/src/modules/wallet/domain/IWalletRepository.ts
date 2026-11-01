@@ -7,3 +7,4 @@ export interface IWalletRepository {
   debit(amount: number, description?: string): Promise<WalletTransaction>;
   getTransactions(limit?: number): Promise<WalletTransaction[]>;
 }
+

@@ -6,3 +6,4 @@ export interface IAuthRepository {
   register(payload: { email: string; password: string; fullName: string }): Promise<AuthSession>;
   getCurrentUser(): Promise<User>;
 }
+

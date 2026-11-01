@@ -8,3 +8,4 @@ export class GetTransactionsUseCase {
     return await this.walletRepository.getTransactions(limit);
   }
 }
+

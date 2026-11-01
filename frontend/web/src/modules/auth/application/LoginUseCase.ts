@@ -16,3 +16,4 @@ export class LoginUseCase {
     return await this.authRepository.login(credentials);
   }
 }
+

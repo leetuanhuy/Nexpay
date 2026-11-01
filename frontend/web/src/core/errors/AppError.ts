@@ -28,3 +28,4 @@ export class NetworkError extends AppError {
     super(message, 'NETWORK_ERROR', 0);
   }
 }
+

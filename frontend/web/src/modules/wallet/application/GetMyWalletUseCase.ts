@@ -8,3 +8,4 @@ export class GetMyWalletUseCase {
     return await this.walletRepository.getMyWallet();
   }
 }
+

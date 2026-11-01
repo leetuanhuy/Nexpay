@@ -57,3 +57,4 @@ export const useWalletViewModel = () => {
     clearError: () => setError(null),
   };
 };
+

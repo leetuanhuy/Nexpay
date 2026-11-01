@@ -3,3 +3,4 @@ export interface AuthSession {
   readonly refreshToken: string;
   readonly expiresIn: number;
 }
+

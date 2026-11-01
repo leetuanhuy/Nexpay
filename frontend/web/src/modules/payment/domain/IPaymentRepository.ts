@@ -5,3 +5,4 @@ export interface IPaymentRepository {
   getOrderById(orderId: string): Promise<PaymentOrder>;
   getMyOrders(limit?: number): Promise<PaymentOrder[]>;
 }
+

@@ -128,3 +128,4 @@ export const CheckoutSimulator: React.FC<CheckoutSimulatorProps> = ({ onOrderCom
     </div>
   );
 };
+

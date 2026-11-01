@@ -3,3 +3,4 @@ export interface User {
   readonly email: string;
   readonly fullName: string;
 }
+

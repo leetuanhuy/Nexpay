@@ -111,3 +111,4 @@ export const OrdersHistory: React.FC<OrdersHistoryProps> = ({ orders, loading })
     </Card>
   );
 };
+

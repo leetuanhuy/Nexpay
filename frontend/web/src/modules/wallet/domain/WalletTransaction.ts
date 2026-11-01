@@ -12,3 +12,4 @@ export interface WalletTransaction {
   readonly description: string;
   readonly createdAtUtc: string;
 }
+

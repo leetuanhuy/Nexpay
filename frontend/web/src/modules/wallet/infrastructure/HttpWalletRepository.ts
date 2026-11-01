@@ -28,3 +28,4 @@ export class HttpWalletRepository implements IWalletRepository {
     return await this.http.get<WalletTransaction[]>(`/api/wallets/transactions?limit=${limit}`);
   }
 }
+

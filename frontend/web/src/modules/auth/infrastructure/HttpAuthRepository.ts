@@ -23,3 +23,4 @@ export class HttpAuthRepository implements IAuthRepository {
     return await this.http.get<User>('/api/auth/me');
   }
 }
+
