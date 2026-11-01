@@ -1,0 +1,49 @@
+#!/usr/bin/env node
+// `starci release cut`: the entry of cutRelease (scripts/supervisor/release-cut.mjs), the only path that pushes main and a release tag.
+import path from 'node:path';
+import process from 'node:process';
+import { cliInput } from '../lib/cli-input.mjs';
+import { isMain } from '../lib/is-main.mjs';
+import { cutRelease } from './release-cut.mjs';
+import { skillRoot } from '../../engine/runtime-root.mjs';
+
+const VALUE_FLAGS = new Set(['--repo', '--remote', '--branch', '--tag', '--rows']);
+
+/** Parse `[--repo <dir>] [--remote <name>] [--branch <name>] [--tag <v*>] [--rows <row,row>] [--no-reuse] [--plan] [--json]`; a bad argument is an Error. */
+export function parseArgs(argv) {
+  const out = { json: false };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--json') { out.json = true; continue; }
+    if (arg === '--plan') { out.plan = true; continue; }
+    if (arg === '--no-reuse') { out['no-reuse'] = true; continue; }
+    if (!VALUE_FLAGS.has(arg)) throw new Error(`unknown argument ${arg}`);
+    const value = argv[i + 1];
+    if (value === undefined || value.startsWith('--')) throw new Error(`${arg} needs a value`);
+    out[arg.slice(2)] = value;
+    i += 1;
+  }
+  return out;
+}
+
+/** Run the release cut: exit 0 when the release was cut (or would be, by the result's own verdict), 1 when it was refused, 2 on bad usage. */
+export async function main(argv = process.argv.slice(2), io = {}) {
+  const input = cliInput(argv, io, parseArgs, 'starci release cut');
+  if (!input) return 2;
+  const { options, write } = input;
+  const cut = io.cutRelease ?? cutRelease;
+  const result = await cut({ repo: path.resolve(options.repo ?? skillRoot), remote: options.remote, branch: options.branch, tag: options.tag ?? null, plan: options.plan === true, rows: options.rows ? options.rows.split(',').map((row) => row.trim()).filter(Boolean) : null, reuse: options['no-reuse'] !== true });
+  let output;
+  if (options.json) output = `${JSON.stringify(result)}\n`;
+  else {
+    let verdict = 'refused';
+    if (result.ok) verdict = result.verdict === 'plan' ? 'plan' : 'cut';
+    const tag = result.tag ? ` ${result.tag}` : '';
+    const why = result.why ? `: ${result.why}` : '';
+    output = `starci release cut: ${verdict} (${result.verdict ?? 'unknown'})${tag}${why}\n`;
+  }
+  write(output);
+  return result.ok ? 0 : 1;
+}
+
+if (isMain(import.meta.url)) process.exitCode = await main();

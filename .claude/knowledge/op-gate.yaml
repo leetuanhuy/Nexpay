@@ -1,0 +1,226 @@
+schema: starci/op-gate@1
+# The READ-CODE-CHECK-FIX-REPORT loop every code-writing op follows (owner 2026-10-01), as data. Three readers use it:
+#   scripts/gates/read-digest.mjs   prints what a slice must READ before coding (the pattern files of its file kinds, the
+#                                    matching example files, the slot map) and records the READ digest with each file's sha256
+#   starci gate run                 the one gate the op forces every round (its base is the workflow's previous checkpoint,
+#                                    the merge-base with main for the first op) and the workflow's finish runs over the
+#                                    whole branch against main's merge-base
+#   scripts/kernel/gate-settle.mjs   re-reads the attached gate JSON and READ digest at `starci kernel settle` and refuses a done that
+#                                    is red, could not run, or skipped READ
+# The round bound is each op's `params.gateRounds`; nothing here restates it.
+purpose: >-
+  Who runs the loop follows the app's hfs.json edition (owner ruling lite-chat-full-op): an app of edition full is changed only by
+  the ops of enforcedOps, which run the loop below inside the op and settle it; an app of edition lite is coded directly by a chat
+  agent with no op, ledger or settle, and runs the same READ, CODE with specs, CHECK (starci gate run, starci app lint, starci app
+  check) and FIX as standalone app gates before each commit through the managed pre-commit hook, reporting both JSON documents.
+  The loop an op runs: READ only what the slice needs (the pattern files of the file kinds it will touch, the example files of
+  the same slots, the slot map of its folders from `starci app explain`), CODE, FORCE THE CHECKS with `starci gate run`, FIX and repeat up to
+  params.gateRounds rounds, REPORT with the gate JSON and the READ digest attached. Still red after the last round is
+  `blocked` with the exact findings; `done` while red is refused at settle. The op works in its workflow's one worktree
+  (serially with the other ops of its side, in parallel with the other side); the gate's base is the previous
+  checkpoint, so only the op's own new findings block. A green settle commits the op's checkpoint on wf-<workflowId>; a
+  failed or blocked op is preserved to preserved/<workflowId>/<op> and the worktree reset to the last checkpoint. Main is
+  touched only at the workflow's finish.
+  The READ set an op owes is the one filed at admission (filedRequiredReads, scripts/lib/filed-reads.mjs): run inside the op,
+  `starci gate read` records every filed required ref whatever --touch names; --touch adds the slice's own pattern and example files.
+  Before CODE, READ docs/architecture.md and docs/code-pattern-enforcement.md (REF-COMMENT-1) and applicable comment topics,
+  recording them in the operation's existing READ proof. Within each existing round, CHECK comment
+  meaning against source, callers and relevant tests alongside actual owning lint, typecheck and tests.
+  App source uses its existing gate and ESLint profile; non-app code uses its declared supported owning
+  checks, never an app-gate fallback. Missing applicable checkers or tooling block conformance under
+  REF-VERIFY-1. REPORT mechanical proof and required semantic criterion judgments separately in existing
+  evidence; failed or unjudged required criteria prevent done. This instruction creates no new write
+  authority or checker profile.
+enforcedOps:
+  - backend.scaffold
+  - backend.implement
+  - interface.scaffold
+  - interface.implement
+  - package.scaffold
+  - code.refactor
+  - test.author
+  - unit.verify
+  - integration.verify
+  - e2e.verify
+  - grammar.update
+  - task.execute
+gate:
+  script: scripts/cli/gate-run.mjs
+  schema: starci/gate@1
+  attach: gate.json
+digest:
+  script: scripts/cli/gate-read.mjs
+  schema: starci/read-digest@1
+  attach: read-digest.json
+  required: [docs/architecture.md, docs/code-pattern-enforcement.md]
+# The READ set of a deciding or authoring op (an op with the read-knowledge proof in opProofs) is the law inputs plus the knowledge its own READ
+# step names; every mandatory file is carried in the agent's context for every later turn, so the set stays small.
+readSet:
+  maxMandatoryFiles: 60
+  maxPromptBytes: 40000
+  # An op files only the record schemas its own record kinds use: the cap per op (business.decide writes fr, nfr, br, ac, decision, data,
+  # journey and the feature overview, and their common and layout contracts).
+  maxSchemaFiles: {business.decide: 12}
+  # Ops that carry no read-knowledge proof but are held to the same bound.
+  alsoBound: [code.refactor, content.generate, security.verify]
+# Topics select stable reference IDs; the catalog binds their complete actual app source sets.
+examples:
+  catalog: examples/index.yaml
+# File kind -> pattern files. A touched file's kind is the slot `starci app explain` names; its family is the slot id's first
+# segment. It owes the family's `always` files plus the topics of the longest dotted slot prefix the derived map knows:
+# each pattern topic declares the slots it teaches in its own `slots` field (knowledge/patterns/<family>/<topic>.yaml),
+# and scripts/gates/read-digest.mjs inverts them (slotTopicMap), a slot's topics in index.yaml reading order. A slot no
+# topic names owes the `always` files alone. Paths are relative to knowledge/patterns/.
+kinds:
+  be:
+    always: [be/index.yaml, be/folder.yaml, be/naming.yaml, be/imports.yaml, be/typing.yaml, be/function.yaml, be/comment.yaml]
+  fe:
+    always: [fe/index.yaml, fe/folder.yaml, fe/naming.yaml, fe/imports.yaml, fe/typing.yaml, fe/function.yaml, fe/comment.yaml]
+  repo:
+    always: [repo/index.yaml, repo/folder.yaml]
+  app:
+    always: [repo/index.yaml, repo/folder.yaml]
+# Native mechanism proofs of the ops beyond the code loop. Every op named
+# under opProofs runs the mechanism its job touches and attaches the document it prints; `starci kernel settle` re-reads each document
+# itself (scripts/kernel/gate-settle.mjs judgeProofs) and records the runtime check op-proof. An op under both enforcedOps and
+# opProofs owes the code loop AND its proofs. A proof listed with `modes` is owed only by a dispatch whose params.mode is one of
+# them (`select` included, since the request may pick any mode). A test-world proof lists the `projects` whose summary must be
+# attached; every test-world summary attached (a contract run beside an integration run) must be green as well. review.verify's
+# lint mode owes neither review proof: its findings are its measured result, every one of them caught by the lint itself.
+proofs:
+  read-knowledge:
+    schema: starci/read-digest@1
+    attach: read-digest.json
+    script: scripts/cli/gate-read.mjs
+    purpose: >-
+      The READ step of a deciding or authoring op: the knowledge/patterns files of the kinds it touches, the knowledge files its
+      decision cites (--knowledge), and the hfs slot map of the records it writes, each with its sha256. A done whose digest names
+      no knowledge file is refused.
+  doc-gate:
+    schema: starci/gate@1
+    profile: docs
+    attach: doc-gate.json
+    script: scripts/cli/gate-run.mjs
+    purpose: >-
+      The document gate (`starci gate run --scope docs`): the docChecks below over the runtime documents and, with --tree, the Work
+      records the op wrote. A red or unrunnable document gate is never done.
+  test-world:
+    schema: starci/test-world-run@1
+    attach: test-world-run.json
+    script: scripts/gates/test-world-run.mjs
+    purpose: >-
+      The test-world run summary per project: the app runs its world projects on @starci/jest-preset's world runner, the specs
+      take their world from the library in the layer's form (useTestWorld({ apps }) for e2e, useTestWorld({ modules }) for
+      integration, useSandbox for contract), use the outage API for failure paths and hand-roll no docker, container,
+      DataSource or process.env, and the run is green with at least one test and none skipped.
+  unit-kit:
+    schema: starci/unit-run@1
+    attach: unit-run.json
+    script: scripts/gates/unit-run.mjs
+    purpose: >-
+      The unit run summary: the whole unit project ran green, every measured file of the coverage scope (a
+      `ruleParams.be.logicRoles` file inside a `coverage: required` slot, R204) reaches 100 on lines, branches, functions and
+      statements on its own, and every spec of a spec-required subject (a `*.service.ts`, a cli command) builds its subject with
+      Test.createTestingModule over the kit doubles.
+  security-lint:
+    schema: starci/lint@1
+    attach: lint.json
+    findings: starci/security-findings@1
+    purpose: >-
+      `starci app lint --format json` at the app root plus the op's security-findings.json (starci/security-findings@1, every finding
+      by rule): a lint that could not run is never a pass, and every finding of a securityCodes code or securityRules rule must
+      appear in the report's findings by rule and path. The verdict may carry findings (they go to a separate repair); it may
+      never drop one.
+  fe-lint:
+    schema: starci/lint@1
+    attach: lint.json
+    purpose: >-
+      `starci app lint --format json` at the app root (the FE canon, stylelint and the brand grammar): no finding under fe/ may stand
+      under a done interface audit, drawing or asset.
+  produced-lint:
+    schema: starci/lint@1
+    attach: lint.json
+    purpose: >-
+      `starci app lint --changed <every file the op produced> --format json` at the app root (the FE canon, stylelint, the brand
+      grammar and the app checks over .starciwork records and assets): no finding may stand under a done drawing or asset.
+  review-gate:
+    schema: starci/gate@1
+    attach: gate.json
+    script: scripts/cli/gate-run.mjs
+    purpose: >-
+      `starci gate run` read-only over the reviewed range (--base <first reviewed commit>^), merge guard included: a review cannot pass a
+      range the gate finds red or could not judge.
+  review-defects:
+    schema: starci/review-defects@1
+    attach: review-defects.json
+    purpose: >-
+      Every defect the review found, classified business or non-business. A non-business defect no check caught carries a
+      missingCheck for .claude (owner rule): the check that should have caught it.
+  release:
+    schema: starci/release-proof@1
+    attach: release-proof.json
+    script: scripts/gates/release-proof.mjs
+    purpose: >-
+      The release proof: release-app-installs (fresh installs, lint, typecheck, api boot, a skip is never a pass), check-canon-pins
+      with the canon content digest, the merge guard over the release range and a green npm run check. Every step is required.
+opProofs:
+  e2e.verify:
+    - {proof: test-world, projects: [e2e]}
+  integration.verify:
+    - {proof: test-world, projects: [integration, contract]}
+  unit.verify: [unit-kit]
+  security.verify: [security-lint]
+  review.verify:
+    - {proof: review-gate, modes: [select, delivery, workflow, api]}
+    - {proof: review-defects, modes: [select, delivery, business, workflow, visual, api]}
+  release.deliver:
+    - {proof: release, modes: [select, publish, deploy]}
+  docs.author: [read-knowledge, doc-gate]
+  knowledge.repair: [read-knowledge, doc-gate]
+  work.author: [read-knowledge, doc-gate]
+  interface.audit: [fe-lint]
+  interface.draw: [produced-lint]
+  interface.asset: [produced-lint]
+  architecture.decide: [read-knowledge]
+  scope.define: [read-knowledge]
+  scope.finish: [read-knowledge]
+  business.decide: [read-knowledge]
+  decision.prepare: [read-knowledge]
+  brand.decide: [read-knowledge]
+# The document checks `starci gate run --scope docs` runs, each from the runtime root. `tree: true` checks also take --tree <the Work
+# root the op wrote> when the gate is given one (else they judge the runtime's examples).
+docChecks:
+  - {id: doc-language, script: scripts/checks/check-doc-language.mjs}
+  - {id: check-work-surfaces, script: scripts/work/validate/check-work-surfaces.mjs, tree: true}
+  - {id: check-work-deep, script: scripts/work/validate/check-work-deep.mjs, tree: true}
+  - {id: check-example-work, script: scripts/work/validate/check-example-work.mjs}
+  - {id: check-contract-cites, script: scripts/checks/check-contract-cites.mjs}
+  - {id: check-json-exceptions, script: scripts/checks/check-json-exceptions.mjs}
+# The finding codes of the authentication and security canon (lane AUTHCHK and its neighbours) a security verdict is judged on.
+securityCodes:
+  - BE_DEFAULT_DENY       # R41 default deny, typed bodies, timing-safe secret compare (secret-compare-timing-safe)
+  - BE_INPUT_BOUNDED      # R42 bounded input, auth-door strict rate tier (auth-door-strict-rate-tier)
+  - BE_SECRET_DEFAULT     # R44 no secret default
+  - BE_LOG_SECRET         # R71 no secret in a log or an error (no-secret-in-error)
+  - BE_INFRA_OWNER        # R90 HttpClient only in integrations (http-client-only-in-integrations)
+  - FE_ENV_OWNER          # the FE environment owner (no secret read outside it)
+  - FE_COOKIE_ATTRIBUTES  # R107 FE response cookie attributes
+# The ESLint rules of the same canon, by rule name (a finding whose message carries no code is matched by its rule).
+securityRules:
+  - secret-compare-timing-safe
+  - public-needs-reason
+  - auth-door-strict-rate-tier
+  - input-bounded
+  - no-secret-in-error
+  - no-secret-in-log
+  - http-client-only-in-integrations
+  - response-cookie-attributes
+# The unit kit: a service spec must build its subject this way (packages/jest-preset README, knowledge/patterns/be/test.yaml).
+unitKit:
+  required: ['Test.createTestingModule']
+  forbidden: ['jest.mock(', 'overrideProvider(', 'Date.now()', 'process.env']
+# What a world spec may never hand-roll (packages/test-world README, Hard rule): the library is the only place for infrastructure.
+testWorld:
+  required: ['useTestWorld']
+  forbidden: ['testcontainers', 'dockerode', 'docker run', 'docker compose', 'new DataSource(', 'process.env', 'setTimeout(']
+  outage: ['.cut(', '.restore(', '.during(', '.latency(', 'interruptDatabase(']

@@ -1,0 +1,491 @@
+// Shared terminal-frame classifier for Kernel and Op supervision. Orca's connected/writable flags prove that a terminal
+// can receive input; they do not prove that an LLM turn is still running. Provider TUIs also keep their input row
+// visible while active, so current activity wins over readyPrompt.
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseYaml } from '../../engine/yaml.mjs';
+import { INPUT_GLYPH, INPUT_GLYPH_CLASS, AGENT_GLYPH_CLASS } from './input-glyph.mjs';
+import { squash } from './clip.mjs';
+import {
+  ACTIVE_MARKER, ELAPSED_HOURS, ELAPSED_MINUTES, FRAME_RAIL_PREFIX, FRAME_RAIL_SUFFIX, POSIX_PROMPT_PREFIX, POSIX_PROMPT_ROW, SPINNER_COMPANION, STATUS_WORD,
+} from './terminal-liveness-patterns.mjs';
+
+export { terminalIdentityOf } from './terminal-identity.mjs';
+
+// What a provider's frame looks like is declared on its card (modules/models/agents/<agent>.yaml
+// `liveness`), not guessed here:
+//   busyPatterns    rows that prove a running turn: a spinner, its elapsed timer, its interrupt hint.
+//                   Whatever the input row below shows, such a row above it (only chrome between)
+//                   reads `active`. Devin wraps a long spinner row ("⠀⠴ Writing .\\<path>" /
+//                   "  <path> · 113m 0s · (1291c ·" / "  ctrl+o for details · alt+t to toggle)"), so
+//                   the braille row carries no digit and the last row is no spinner at all; that frame
+//                   read turn-idle and nudge-ready (inc-1b82f657a6a8, inc-266976b75b25).
+//   chromePatterns  rows the provider draws between its spinner and its input row that are not a
+//                   finished answer: Claude's "◐ medium · /effort" (inc-fcd1c1c10d8a) and its
+//                   notice rows ("✘ Auto-update failed: claude.exe in use … · Run claude doctor",
+//                   "✔ Update installed · Restart to apply", IDE and MCP notices; sn-learn-content
+//                   term_2cd5a276 read turn-idle under a live spinner, 2026-09-25).
+// Every caller that has no provider at hand (the Kernel watchdog, the supervisor) classifies with
+// the union of all cards; each card pattern is specific to its provider's frame.
+const AGENTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'modules', 'models', 'agents');
+const compile = (source) => { try { return new RegExp(String(source), 'u'); } catch { return null; } };
+const compileAll = (list) => (Array.isArray(list) ? list : []).map(compile).filter(Boolean);
+let cardCache = null;
+/** Every agent card's compiled liveness patterns: Map<agent, {busy, chrome, liveness, stagedPattern}>.
+ * `liveness` is the card's own liveness block (its activeStaleMs/quietMs overrides); `stagedPattern` the raw
+ * submission.stagedPattern source - both cached here so the hot liveness path never re-reads the card file. */
+export function cardLivenessPatterns({ dir = AGENTS_DIR, refresh = false } = {}) {
+  if (cardCache && !refresh && dir === AGENTS_DIR) return cardCache;
+  const cards = new Map();
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((file) => file.endsWith('.yaml')); } catch { files = []; }
+  for (const file of files) {
+    let cardDoc = null;
+    try { cardDoc = parseYaml(fs.readFileSync(path.join(dir, file), 'utf8')) ?? null; } catch { cardDoc = null; }
+    const liveness = cardDoc?.liveness ?? null;
+    if (!liveness || typeof liveness !== 'object') continue;
+    cards.set(file.replace(/\.yaml$/, ''), {
+      busy: compileAll(liveness.busyPatterns),
+      chrome: compileAll(liveness.chromePatterns),
+      liveness,
+      stagedPattern: typeof cardDoc?.submission?.stagedPattern === 'string' && cardDoc.submission.stagedPattern.trim()
+        ? cardDoc.submission.stagedPattern : null,
+    });
+  }
+  if (dir === AGENTS_DIR) cardCache = cards;
+  return cards;
+}
+/** The card patterns one classification uses: a named provider's, else the union of every card's. */
+const patternsFor = (provider) => {
+  const cards = cardLivenessPatterns();
+  const chosen = provider && cards.has(String(provider).toLowerCase()) ? [cards.get(String(provider).toLowerCase())] : [...cards.values()];
+  return {
+    busy: chosen.flatMap((card) => card.busy),
+    chrome: chosen.flatMap((card) => card.chrome),
+  };
+};
+
+// Screens that wait for a human answer before any turn can run. The runtime
+// names the gate and stops; answering it (directory trust, first-run setup,
+// a tool approval) is the owner's decision. `remedy` is the exact one-time
+// action that clears the gate (<cwd> = the directory the refused terminal was
+// launched in); a refusal quotes it so the owner never guesses what to run.
+const INTERACTIVE_GATES = [
+  { gate: 'codex-directory-trust', pattern: /do you trust the contents of this directory/i,
+    remedy: "open a terminal in <cwd>, run `codex`, pick '1. Yes, continue' at the trust prompt, then type /quit" },
+  { gate: 'claude-first-run-onboarding', pattern: /let's get started|choose the text style/i,
+    remedy: 'open a terminal, run `claude`, finish the first-run setup (text style, sign-in, notices) until its input box shows, then type /exit; that writes hasCompletedOnboarding to ~/.claude.json' },
+  // Observed 2026-09-23 on a fresh worktree: "Quick safety check: Is this a
+  // project you created or one you trust? … ❯ No, exit" (before tool-approval,
+  // whose confirm pattern would otherwise claim it under the wrong name).
+  { gate: 'claude-workspace-trust', pattern: /is this a project you created or one you trust/i,
+    remedy: "open a terminal in <cwd>, run `claude`, pick 'Yes, I trust this folder', then type /exit" },
+  { gate: 'claude-bypass-permissions-consent', pattern: /bypass permissions mode[\s\S]*yes, i accept/i,
+    remedy: "open a terminal, run `claude --dangerously-skip-permissions`, pick 'Yes, I accept', then type /exit" },
+  // A new Codex release shows "Update available! … 1. Update now 2. Skip 3.
+  // Skip until next version … Press enter to continue" before the prompt; it
+  // stalled every fresh Codex op launch for three hours on 2026-09-23.
+  { gate: 'codex-update-prompt', pattern: /update available![\s\S]*skip until next version/i,
+    remedy: "start `codex` once and pick 'Skip until next version', or set check_for_update_on_startup = false in its config.toml" },
+  // Codex's own quota nudge near its weekly limit: "Approaching rate limits - Switch to <cheaper model>? 1. Switch
+  // 2. Keep current model 3. Keep current model (never show again)". Owner, 2026-09-24: always keep the current
+  // model, never show it again.
+  { gate: 'codex-rate-limit-model-nudge', pattern: /approaching rate limits[\s\S]*keep current model/i,
+    remedy: "pick 'Keep current model (never show again)', or set [notice] hide_rate_limit_model_nudge = true in its config.toml" },
+  { gate: 'workspace-trust', pattern: /trust the authors/i,
+    remedy: 'open a terminal in <cwd>, start the same agent CLI once, answer its workspace-trust prompt, then quit it' },
+  // An agent CLI's own multiple-choice question (Devin's ask dialog, Claude's
+  // AskUserQuestion). Its selection cursor looks like an input prompt, and a
+  // wake typed into it lands in the "Other" answer field.
+  { gate: 'agent-question-dialog', pattern: /(?:↑↓|arrow keys)(?: to)? navigate[^\n]*(?:↵|enter)(?: to)? select|(?:↵|enter) to select[^\n]*navigate|not ready to answer|type your own/i,
+    remedy: 'answer the question shown in that terminal' },
+  { gate: 'tool-approval', pattern: /approve once|permission (?:required|request)|allow `[^`]+` commands|confirm\s*[·•]/i,
+    remedy: 'answer the approval prompt in that terminal; a launch that still asks lost its card bypassArgs, so compare its command with the agent card' },
+];
+
+const FRAMED_GATE_ROWS = 24;
+
+// A dispatch paste that is still sitting in the provider's input row was never
+// submitted (Codex renders it as "› [Pasted Content 5012 chars]"). Only the
+// LAST prompt row counts: a transcript row that quotes an earlier paste is not
+// the input box. Returns the staged input row, or null.
+// Every classifier reads the frame's last TRAILING_ROWS non-empty rows.
+export const TRAILING_ROWS = 14;
+export const DEFAULT_STAGED_PATTERN = /Pasted Content|\[Pasted text/i;
+// The glyph set itself is scripts/lib/input-glyph.mjs INPUT_GLYPH.
+/** A draft as one row of at most DRAFT_CLIP_CHARS, for receipts and events. */
+const DRAFT_CLIP_CHARS = 200;
+export const clipDraft = (draft) => { const d = squash(draft); return d.length > DRAFT_CLIP_CHARS ? `${d.slice(0, DRAFT_CLIP_CHARS - 1)}…` : d; };
+// A row shorter than this is too generic to call an echo of the sent text.
+const MIN_ECHO_CHARS = 12;
+/** True when `row` (input glyph and rail stripped) is a verbatim piece of the text sent to the terminal. */
+export function echoesSentText(row, sentText) {
+  const content = squash(String(row ?? '').replace(INPUT_GLYPH, ''));
+  const sent = typeof sentText === 'string' ? squash(sentText) : '';
+  return content.length >= MIN_ECHO_CHARS && sent.length > 0 && sent.includes(content);
+}
+
+/**
+ * The unsubmitted input region of a provider frame, or null: {row, start, above, rows}. `start` indexes
+ * the rail-stripped last-14 `rows`; `above` is every row before it. Two shapes count:
+ *  - the LAST input-glyph row carries a staged marker (`stagedPattern`: "[Pasted Content N chars]") or a
+ *    verbatim piece of `sentText`, the text the runtime typed into this terminal;
+ *  - with no later glyph row, the frame tail is two or more rows of `sentText` (a TUI that shows the paste
+ *    itself in its input box, glyph row empty or scrolled away).
+ * A Devin command-terminal worker sat 13 minutes with its whole inline contract in the input box; the
+ * contract text says "Running", "Working", "esc to interrupt", so the frame read `active` and `starci kernel nudge`
+ * skipped it as worker-active (inc-06aeecf432f1). Knowing the sent text is what tells a paste from a turn.
+ */
+export function stagedInputRegion(screen, { stagedPattern = DEFAULT_STAGED_PATTERN, sentText = null } = {}) {
+  // A boxed input row (`│ > text │`) is still the input row: strip the rail.
+  const rows = String(screen ?? '').split(/\r?\n/).filter(Boolean).slice(-TRAILING_ROWS)
+    .map((line) => line.replace(/^\s*[│┃]\s?/u, ''));
+  const echo = (row) => Boolean(sentText) && echoesSentText(row, sentText);
+  let glyph = -1;
+  for (let i = rows.length - 1; i >= 0; i -= 1) if (INPUT_GLYPH.test(rows[i])) { glyph = i; break; }
+  if (glyph >= 0 && (stagedPattern.test(rows[glyph]) || echo(rows[glyph])))
+    return { row: rows[glyph].trim(), start: glyph, above: rows.slice(0, glyph), rows };
+  if (!sentText) return null;
+  const after = rows.map((row, i) => ({ row, i })).filter(({ i }) => i > glyph);
+  const echoes = after.filter(({ row }) => echo(row));
+  if (echoes.length < 2 || echoes.at(-1).i < rows.length - 3) return null;
+  const start = glyph >= 0 ? glyph : echoes[0].i;
+  return { row: rows[echoes[0].i].trim(), start, above: rows.slice(0, start), rows };
+}
+
+export function stagedInputRow(screen, stagedPattern = DEFAULT_STAGED_PATTERN, { sentText = null } = {}) {
+  return stagedInputRegion(screen, { stagedPattern, sentText })?.row ?? null;
+}
+
+// ---- the input-box draft -----------------------------------------------------------------------
+// Orca's `terminal read` lifts the text of an agent's input box (after its ❯ › » glyph) OUT of the
+// frame and answers it as `draft` (Orca out/shared/terminal-composer-draft.js). Every classifier
+// below read the frame alone, so a wake typed without Enter, or whose Enter was dropped, sat in the
+// input box unseen: the frame read turn-idle with an empty '❯', the next wake was typed onto it, and
+// the texts piled up (a collab Kernel, 2026-09-25). A reader puts the draft back where the agent
+// shows it before any classification.
+const DRAFT_GLYPH_ROW = new RegExp(String.raw`^(\s*(?:[│┃]\s?)?\s*${INPUT_GLYPH_CLASS})(?:\s|$)`, 'u');
+/**
+ * `screen` with `draft` written into its LAST input-glyph row (within the last 14 rows), or appended
+ * as a '› <draft>' row when the frame shows none. The draft is collapsed to one row: every classifier
+ * here reads the input row as one row. No draft: `screen` unchanged.
+ */
+export function frameWithDraft(screen, draft) {
+  const text = squash(draft);
+  if (!text) return screen;
+  const lines = String(screen ?? '').split(/\r?\n/);
+  let seen = 0;
+  for (let i = lines.length - 1; i >= 0 && seen < TRAILING_ROWS; i -= 1) {
+    if (!lines[i]) continue;
+    seen += 1;
+    const glyph = DRAFT_GLYPH_ROW.exec(lines[i]);
+    if (glyph) {
+      lines[i] = `${glyph[1]} ${text}`;
+      return lines.join('\n');
+    }
+  }
+  return [...lines, `› ${text}`].join('\n');
+}
+
+// The opening words of every text the runtime types into a Kernel or worker: the Kernel watchdog wake,
+// the transition and nudge wakes, the stall wake, the supervisor's notice and its watchdog wake.
+const RUNTIME_WAKE_OPENER = /Watchdog liveness wake for\b|Durable transition wake for workflow\b|Operation liveness wake for durable job\b|\[stall\] Stall self-heal wake for\b|\[supervisor\] |\[Supervisor watchdog\] /g;
+/**
+ * Who wrote the draft sitting in an input box. `texts` are what the runtime typed into this terminal
+ * (the wake about to be sent, the dispatched contract). Returns {kind, draft}:
+ *  - 'none'     no draft;
+ *  - 'own'      exactly one of `texts`, or a staged paste marker: one Enter submits it as sent;
+ *  - 'runtime'  only runtime text, but not one whole submission (a wake piled onto another, a wake
+ *               cut short, another path's wake): cleared, never submitted or appended to;
+ *  - 'foreign'  anything else - words the runtime never typed. Nothing is typed onto them.
+ */
+export function draftOwnership(draft, { texts = [], stagedPattern = DEFAULT_STAGED_PATTERN } = {}) {
+  const d = squash(draft);
+  if (!d) return { kind: 'none', draft: null };
+  const own = texts.filter((text) => typeof text === 'string').map((text) => squash(text)).filter(Boolean);
+  if (own.includes(d) || stagedPattern.test(d)) return { kind: 'own', draft: d };
+  let rest = d;
+  for (const text of own) rest = rest.split(text).join('\n');
+  const starts = [...rest.matchAll(RUNTIME_WAKE_OPENER)].map((m) => m.index);
+  const cuts = [0, ...starts.filter((i) => i > 0), rest.length];
+  const pieces = cuts.slice(0, -1).flatMap((from, i) => rest.slice(from, cuts[i + 1]).split('\n')).map((text) => squash(text)).filter(Boolean);
+  const runtimePiece = (piece) => new RegExp(`^(?:${RUNTIME_WAKE_OPENER.source})`).test(piece)
+    || (piece.length >= MIN_ECHO_CHARS && own.some((text) => text.includes(piece)));
+  return { kind: pieces.every(runtimePiece) ? 'runtime' : 'foreign', draft: d };
+}
+
+// A terminal whose agent process exited shows its host shell again: the frame ENDS in a bare prompt row.
+// A nudge typed there on 2026-09-24 02:23 (term_8a556567, a dead mm-work op) was run by PowerShell as a
+// command. Agents that run shell tools print "PS <drive>:\x> cmd" rows in their transcript too, but an agent TUI
+// always ends its frame with its own input box or footer, so only a bare prompt as the LAST non-empty row
+// counts - and only a bare one: "PS <drive>:\x> claude ..." is a launch still starting, not an exit.
+const SHELL_PROMPT_ROWS = [
+  /^PS(?:\s+\S[^>]*)?>$/,                    // PowerShell: "PS D:\Repositories\x>"
+  /^[A-Za-z]:\\[^<>|*?"\r\n]*>$/,           // cmd.exe: "D:\Repositories\x>"
+  POSIX_PROMPT_ROW,
+];
+// A shell prompt at the START of a row, whatever follows it on that row.
+const SHELL_PROMPT_PREFIXES = [
+  /^PS\s+(?:[A-Za-z]:|\\\\|[\w.]+::)[^>]*>(?=\s|$)/,                     // PowerShell: "PS D:\x> ..."
+  /^[A-Za-z]:\\[^<>|*?"\r\n]*>(?=\s|$)/,                                   // cmd.exe: "D:\x> ..."
+  POSIX_PROMPT_PREFIX,
+];
+/** The shell prompt a row starts with, or null. */
+function shellPromptPrefix(row) {
+  const text = String(row ?? '').trim();
+  for (const pattern of SHELL_PROMPT_PREFIXES) { const match = pattern.exec(text); if (match) return match[0]; }
+  return null;
+}
+// The rows an agent TUI draws at the foot of its frame: its input row (Codex "›", Claude "❯") and footers (Codex "gpt-6.1-sol high · 62% left", Claude "bypass permissions").
+const AGENT_FOOT_ROW = new RegExp(String.raw`^\s*${AGENT_GLYPH_CLASS}(?:\s|$)|\bAsk Codex\b|\bMessage Devin\b|bypass permissions|\d+% (?:context )?left\b|esc to (?:interrupt|cancel)`, 'iu');
+// An agent command typed after a prompt: a launch still starting, never an exit. The launch line may open
+// with shell statements before the agent (`$env:DISABLE_AUTOUPDATER='1'; & claude ...`, agents/claude.yaml
+// launchEnv): any `;`-separated statement that runs an agent makes it a launch.
+const AGENT_LAUNCH = /^(?:&\s*)?["']?[\w:\\/.~-]*?\b(?:claude|codex|devin)(?:\.exe|\.cmd|\.ps1)?["']?(?:\s|$)/i;
+const isAgentLaunch = (text) => String(text ?? '').split(';').some((statement) => AGENT_LAUNCH.test(statement.trim()));
+/**
+ * The shell prompt row a frame ends in because its agent exited, or null. Two shapes:
+ *  - the LAST non-empty row is a bare prompt ("PS <drive>:\x>");
+ *  - the LAST non-empty row STARTS with a prompt and the rows just above it are the agent's own input
+ *    row or footer. A Codex op killed mid-turn (a product's term_8f9e0611, 2026-09-24 03:56) froze its frame at
+ *    "• Working (10m 46s • esc to interrupt)" / "› Ask Codex to do anything", and PowerShell printed its
+ *    prompt over the footer row without clearing it: "PS <drive>:\x> <what is left of the footer>". No agent
+ *    draws a shell prompt BELOW its own input box, so that row is the host shell. The frame read
+ *    stale-active turn-idle, and the nudge typed into it was run by PowerShell (ParserError).
+ * A prompt followed by an agent command ("PS <drive>:\x> codex --model ...") is a launch, not an exit.
+ */
+export function exitedAgentPromptRow(screen) {
+  const rows = String(screen ?? '').split(/\r?\n/).map((row) => row.trim()).filter(Boolean);
+  const last = rows.at(-1);
+  if (!last) return null;
+  if (SHELL_PROMPT_ROWS.some((pattern) => pattern.test(last))) return last;
+  const prompt = shellPromptPrefix(last);
+  if (!prompt || isAgentLaunch(last.slice(prompt.length))) return null;
+  return rows.slice(-7, -1).some((row) => AGENT_FOOT_ROW.test(row) && !shellPromptPrefix(row)) ? last : null;
+}
+
+// What a shell prints when it tries to run prose as a command.
+const SHELL_ERROR = /FullyQualifiedErrorId\s*:|CategoryInfo\s*:\s*\w*Error|ParserError|is not recognized as (?:the name of a cmdlet|an internal or external command)|: command not found\b|syntax error near unexpected token/i;
+const squashAll = (text) => String(text ?? '').replace(/\s+/g, '');
+const WAKE_KEY_CHARS = 40;
+/**
+ * Proof from a frame read AFTER a send that the text went to a host shell, not an agent: the text
+ * follows a shell prompt on the screen (wrapped rows joined), or a shell error appeared that `before`
+ * did not show. Returns {row, evidence: 'shell-echo'|'shell-error'} or null.
+ */
+export function shellReceivedText(after, text, before = '') {
+  const rows = String(after ?? '').split(/\r?\n/).map((row) => row.trim()).filter(Boolean);
+  const key = squashAll(text).slice(0, WAKE_KEY_CHARS);
+  if (key.length >= MIN_ECHO_CHARS) {
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const prompt = shellPromptPrefix(rows[i]);
+      if (!prompt) continue;
+      const typed = squashAll([rows[i].slice(prompt.length), ...rows.slice(i + 1, i + 8)].join(''));
+      if (typed.startsWith(key)) return { row: rows[i], evidence: 'shell-echo' };
+    }
+  }
+  const errorRow = rows.find((row) => SHELL_ERROR.test(row));
+  if (errorRow && !SHELL_ERROR.test(String(before ?? ''))) return { row: errorRow, evidence: 'shell-error' };
+  return null;
+}
+
+export const WEDGE_MINUTES = 30;
+
+// A todo list of nine rows or more pushes a live Claude spinner out of the last 14 rows
+// (inc-a579fa590ed8). A spinner up to WIDE_ROWS back still counts when only companion or
+// wrapped rows sit between it and the input row below it.
+const WIDE_ROWS = 40;
+// A row the terminal wrapped is the tail of the row above it, not a new transcript entry: Claude's
+// "⎿  Tip: Use /btw ... without interrupting Claude's current" / "     work" (inc-1ba6ab0cf626,
+// inc-d0692581b618), Devin's "⠠⠤ Thinking · 5m 58s (esc twice to interrupt) · (457c · ctrl+o for
+// details · alt+t to" / "toggle)" and a Codex queued wake wrapped under its "↳" (inc-3b9864f5f3f8,
+// inc-07830ad93e97). The row above must be long enough to have wrapped, and the row itself must not
+// open an entry of its own: an answer starts with its bullet (Claude ●, Codex •, a prompt glyph).
+const TRANSCRIPT_ENTRY = /^\s*[●⏺•○◦✻✶✳✢✽✺·*›❯❭>─]/u;
+const WRAP_MIN_CHARS = 60;
+const wrapsFrom = (above, row) => String(above ?? '').trimEnd().length >= WRAP_MIN_CHARS && /\S/.test(row) && !TRANSCRIPT_ENTRY.test(row);
+// Claude Code shows this hint only while a running turn holds typed text as a
+// queued follow-up. A long Kernel wake fills the 14-row window and pushes the
+// spinner out of it, so below the input region the hint alone says `active`.
+const QUEUED_BEHIND_TURN = /press up to (?:edit|select) (?:a )?queued messages?/i;
+
+// A tool call that carries its own bound returns by itself, so "No output yet" under it is a tool
+// still running, never a stuck turn: Devin prints the bound of every shell call ("│ Timeout: 4m40s")
+// and polls a background shell with "Read shell"; Codex waits on a background terminal. A product
+// backend.implement worker polling its sonar-local slice scan (--wait) read wedged at 30 minutes of
+// turn time and the frontier pointed at a recovery that would have killed it (inc-d8f08b77ca8b).
+// The spinner's minutes are the whole turn's, not the command's, so only an unbounded command -
+// no bound anywhere in its tool block - can be proven stuck from one frame.
+const BOUNDED_TOOL = /\bTimeout:\s*\d|\btimeout\s+\d+\s*(?:ms|s|m)\b|\bRead(?:ing)? shell\b|\bBashOutput\b|waiting for background terminal/i;
+const TOOL_BLOCK_RAIL = /^\s*[│┃├└]/u;
+/** The rows of the tool block holding the frame's last "No output yet" row: its rail rows and their header. */
+const noOutputToolBlock = (lines) => {
+  const at = lines.findLastIndex((line) => /No output yet/i.test(line));
+  if (at < 0) return null;
+  let top = at;
+  while (top > 0 && TOOL_BLOCK_RAIL.test(lines[top - 1])) top -= 1;
+  return lines.slice(Math.max(0, top - 1), at + 1);
+};
+
+// A screen whose input row holds an unsubmitted paste: the rows above decide whether a turn runs, a gate or failure shows, or the paste is staged.
+function classifyStagedScreen(screen, staged, provider) {
+  const recent = String(screen ?? '').split(/\r?\n/).filter(Boolean).slice(-TRAILING_ROWS).join('\n');
+  if (staged.rows.slice(staged.start).some((row) => QUEUED_BEHIND_TURN.test(row))) return { state: 'active', recent };
+  // The input region stands in as the prompt row, so a spinner followed by
+  // a finished answer reads finished exactly as it would above an empty row.
+  const above = classifyAgentScreen([...staged.above, '> '].join('\n'), { stagedPattern: /(?!)/, provider });
+  if (['active', 'wedged', 'interactive-gate', 'failed'].includes(above.state)) return { ...above, recent };
+  return { state: 'staged-input', row: staged.row, recent };
+}
+
+// A turn whose spinner has run past WEDGE_MINUTES while its one shell
+// command still shows no output is stuck, not working: a Collab worker sat
+// 60 minutes on `... | xargs grep` reading stdin, and "active" hid it.
+// A command carrying its own bound is a tool still running (BOUNDED_TOOL above).
+function spinnerVerdict(topLevelRecent, recentLines, recent) {
+  const spinner = /(?:Working|Thinking|Running tools)\b[^\n]*/.exec(topLevelRecent)?.[0] ?? '';
+  const minutes = Number(ELAPSED_HOURS.exec(spinner)?.[1] ?? 0) * 60 + Number(ELAPSED_MINUTES.exec(spinner)?.[1] ?? 0);
+  const block = minutes >= WEDGE_MINUTES ? noOutputToolBlock(recentLines) : null;
+  if (block && !block.some((line) => BOUNDED_TOOL.test(line))) return { state: 'wedged', minutes, recent };
+  return { state: 'active', recent };
+}
+
+export function classifyAgentScreen(screen, { stagedPattern = DEFAULT_STAGED_PATTERN, sentText = null, provider = null, draft = null } = {}) {
+  // The input box's draft (Orca `terminal read` draft) is read where the agent shows it: a wake or a
+  // contract left unsubmitted there is staged input, not an empty prompt (frameWithDraft).
+  if (draft) return classifyAgentScreen(frameWithDraft(screen, draft), { stagedPattern, sentText, provider });
+  const card = patternsFor(provider);
+  // An unsubmitted paste in the input row is never a running turn, whatever
+  // words the pasted text holds (inc-06aeecf432f1). Only the rows ABOVE the
+  // input region decide: a live spinner there is a turn with a queued
+  // follow-up (active), a gate or failure there keeps its name, and anything
+  // else is `staged-input` - the one Enter-only send submits it.
+  const staged = stagedInputRegion(screen, { stagedPattern, sentText });
+  if (staged) return classifyStagedScreen(screen, staged, provider);
+  const lines = String(screen ?? '').split(/\r?\n/).filter(Boolean);
+  const recentLines = lines.slice(-TRAILING_ROWS);
+  const recent = recentLines.join('\n');
+  // Provider TUIs can render a child/managed-worker transcript inside the
+  // Kernel terminal.  Those quoted rows are prefixed with a box-drawing rail
+  // (for example ` │ • Working ...`) and describe the child, not the current
+  // Kernel turn.  Classifying them as top-level activity strands a filed
+  // report at a Kernel input prompt because both the event wake and watchdog
+  // incorrectly conclude that the Kernel is still active.
+  const topRows = recentLines.filter(line => !/^\s*[│┃┆┊]/u.test(line));
+  const topLevelRecent = topRows.join('\n');
+  const failure = /not logged in|authentication (?:failed|required)|session expired|fatal error|agent child exited|process exited/i;
+  // A status word counts only as a spinner/status line, never as the Kernel's
+  // own prose: a yield summary headed "Running now:" once read as activity,
+  // and both the watchdog and the report wake skipped a Kernel that sat at its
+  // prompt with a filed report.
+  // A card's busyPatterns and chromePatterns read one row at a time.
+  const active = { test: (text) => STATUS_WORD.test(text) || ACTIVE_MARKER.test(text) || card.busy.some((pattern) => pattern.test(text)) };
+  const companion = (line) => SPINNER_COMPANION.test(line) || card.chrome.some((pattern) => pattern.test(line));
+  // The prompt row may contain a provider message (for example Orca's
+  // "You have orchestration messages") rather than "Ask ...". Any non-empty
+  // prompt row is turn-idle unless a current activity marker above wins. This row set is the
+  // provider-agnostic floor (a card's readiness.screenPattern is the launcher's readiness check, scripts/agent/lib.mjs).
+  const readyPrompt = new RegExp(String.raw`(?:^|\n)\s*${INPUT_GLYPH_CLASS}\s*(?:\S|$)|(?:^|\n)\s*(?:Ask Codex|Ask Claude|Message Devin|Enter a prompt)\b`, 'im');
+  const promptAt = (rows, i) => readyPrompt.test(rows[i]);
+
+  // A boxed dialog (a `framed` gate) is drawn behind the same rail a quoted child transcript uses, so it is
+  // matched on the recent rows with the box's rails stripped. Its wrapped note rows can outnumber the
+  // 14-row window at a narrow width, so it is read over FRAMED_GATE_ROWS.
+  const framedRecent = lines.slice(-FRAMED_GATE_ROWS).map((line) => line.replace(FRAME_RAIL_PREFIX, '').replace(FRAME_RAIL_SUFFIX, '')).join('\n');
+  const gate = INTERACTIVE_GATES.find(({ pattern, framed }) => pattern.test(framed ? framedRecent : topLevelRecent));
+  if (gate) return { state: 'interactive-gate', gate: gate.gate, recent };
+  if (failure.test(topLevelRecent)) return { state: 'failed', recent };
+  // The queued-message hint under the input box exists only while a turn runs, whatever the rows
+  // above show: a queued wake's own text between the spinner and the input row read as a finished
+  // answer.
+  if (QUEUED_BEHIND_TURN.test(topLevelRecent)) return { state: 'active', recent };
+  // The LAST rows decide. A spinner row followed by the Kernel's finished
+  // answer and then its input row is scrollback of a turn that already ended:
+  // a Codex Kernel sat 3.7 hours at its prompt with an old "Working" row in
+  // the last lines and the watchdog kept calling it active. A live spinner sits
+  // directly above the input row (only chrome/todo/queued rows between).
+  // Both patterns anchor on (?:^|\n), so each reads one row as well as a frame.
+  // The last topRows.length rows of wideRows are topRows (the same filter over a longer tail).
+  const wideRows = lines.slice(-WIDE_ROWS).filter(line => !/^\s*[│┃┆┊]/u.test(line));
+  const lastIndex = (test) => { for (let i = wideRows.length - 1; i >= 0; i -= 1) { if (test(wideRows, i)) return i; } return -1; };
+  const lastActive = lastIndex((rows, i) => active.test(rows[i])), lastPrompt = lastIndex(promptAt);
+  const finishedAfterSpinner = lastActive >= 0 && lastPrompt > lastActive
+    && wideRows.slice(lastActive + 1, lastPrompt).some((line, i) => !companion(line) && !wrapsFrom(wideRows[lastActive + i], line));
+  const spinnerInWindow = lastActive >= wideRows.length - topRows.length;
+  if (lastActive >= 0 && !finishedAfterSpinner && (spinnerInWindow || lastPrompt > lastActive)) {
+    return spinnerVerdict(topLevelRecent, recentLines, recent);
+  }
+  // Devin queues a message sent while a turn runs; when the turn ends the
+  // idle prompt waits for Enter and nothing else happens. Only an idle screen
+  // qualifies: Enter during a running turn would cut into it.
+  if (/Press Enter to send queued messages/i.test(topLevelRecent)) return { state: 'queued-input', recent };
+  if (topRows.some((_, i) => promptAt(topRows, i))) return { state: 'turn-idle', recent };
+  return { state: 'unknown', recent };
+}
+
+/**
+ * The one reading of Orca's terminal.lastOutputAt: {lastOutputAt, outputAgeMs}, both null when the host
+ * does not know when the terminal last printed. An Orca that restarted re-attaches its panes with an
+ * empty lastOutputAt, and Number(null) or Number('') is 0: an age taken from that was measured from the
+ * epoch (outputAgeMs ~1.79e12) and read every active worker stale-active and nudge-ready
+ * (inc-5e126e55cef4, inc-32adb2f77bf5). An unknown output time is never an age.
+ */
+export function outputAgeOf(lastOutputAt, now = Date.now()) {
+  const at = lastOutputAt == null || lastOutputAt === '' ? Number.NaN : Number(lastOutputAt);
+  if (!Number.isFinite(at) || at <= 0) return { lastOutputAt: null, outputAgeMs: null };
+  return { lastOutputAt: at, outputAgeMs: Math.max(0, now - at) };
+}
+
+/**
+ * An `active` screen is trusted only while the terminal is still printing: a
+ * provider spinner re-renders its timer every second, so output older than
+ * `activeStaleMs` (modules/models/runtimes.yaml allocation.liveness.activeStaleMs)
+ * means the frame is frozen, and the terminal is treated as turn-idle with the
+ * reason `stale-active`. Every other state, and an unknown output age (null -
+ * see outputAgeOf), passes through unchanged. Returns {state, staleActive, reason}.
+ */
+export function staleAwareState(state, outputAgeMs, activeStaleMs) {
+  const age = Number(outputAgeMs), limit = Number(activeStaleMs);
+  const stale = state === 'active' && outputAgeMs != null && Number.isFinite(age) && Number.isFinite(limit) && limit > 0 && age > limit;
+  return stale ? { state: 'turn-idle', staleActive: true, reason: 'stale-active' } : { state, staleActive: false, reason: null };
+}
+
+// A provider that holds typed text behind a running turn says so: Claude Code
+// "Press up to edit queued messages" / "Press up to select a queued message",
+// Devin "Press Enter to send queued messages".
+const QUEUED_MESSAGE_MARKER = /press up to (?:edit|select) (?:a )?queued messages?|press enter to send queued messages|\bmessages? queued\b/i;
+// The wake is found by its opening words; a TUI wraps and indents the rest.
+const WAKE_PROBE_CHARS = 60;
+export const WAKE_PROOF_READS = 3; // a delivery proof reads the screen this many times,
+export const WAKE_PROOF_INTERVAL_MS = 1000; // this far apart (the kernel wake and the agent prompt alike)
+const screenProse = (screen) => squash(String(screen ?? '').split(/\r?\n/)
+  .map((row) => row.replace(/^[\s│┃┆┊>›❯❭⎿↳●•]*/u, '')).join(' '));
+const occurrences = (haystack, needle) => {
+  let n = 0;
+  for (let i = needle ? haystack.indexOf(needle) : -1; i >= 0; i = haystack.indexOf(needle, i + needle.length)) n += 1;
+  return n;
+};
+
+/**
+ * What the screen proves about a wake just typed into a provider terminal. Orca answers
+ * agent_prompt_stalled when the agent queued the text behind a running turn, which is not a
+ * terminal-send-failed: the wake sits on the worker's screen. `before`/`after` are the frames read around the send.
+ * Returns {delivery, wakeVisible, queuedMarker, screenState}; delivery is
+ *  - 'staged': the frame is staged-input (the wake sits unsubmitted in the input row);
+ *  - 'queued': a queued-message marker the frame before did not show, or one beside the wake text;
+ *  - 'delivered': the wake's opening words appear more often than before the send;
+ *  - 'unproven': the screen shows neither.
+ */
+export function wakeDeliveryOf({ before = '', after = '', text = '', stagedPattern = DEFAULT_STAGED_PATTERN } = {}) {
+  const probe = squash(text).slice(0, WAKE_PROBE_CHARS);
+  const wakeVisible = probe.length >= MIN_ECHO_CHARS
+    && occurrences(screenProse(after), probe) > occurrences(screenProse(before), probe);
+  const queuedMarker = QUEUED_MESSAGE_MARKER.test(String(after ?? ''));
+  const screenState = classifyAgentScreen(after, { stagedPattern, sentText: text || null }).state;
+  let delivery = 'unproven';
+  if (screenState === 'staged-input') delivery = 'staged';
+  else if (queuedMarker && (wakeVisible || !QUEUED_MESSAGE_MARKER.test(String(before ?? '')))) delivery = 'queued';
+  else if (wakeVisible) delivery = 'delivered';
+  return { delivery, wakeVisible, queuedMarker, screenState };
+}

@@ -1,0 +1,113 @@
+schema: starci/knowledge-source@1
+id: fe.transport
+title: Frontend data transport
+purpose: |-
+  Given a frontend read or write, which code calls the back end, what does it return and where do the wire types come
+  from? The browser calls the back end directly through the Apollo clients of modules/api/graphql (one file per operation)
+  and, for uploads, presigned URLs and auth endpoints only, the one axios instance of modules/api/rest; the wire types are
+  generated from be/contracts. The same in lite and full (R212; owner ruling 2026-10-14;
+  knowledge/hfs/fe-stack.yaml graphql and codegen).
+appliesTo:
+  - frontend
+family: fe
+# The slot ids this topic teaches (knowledge/hfs/slots.yaml); scripts/gates/read-digest.mjs inverts these
+# into the READ-step slot -> pattern-topic map (knowledge/op-gate.yaml kinds), each slot's topics in index.yaml order.
+slots: [fe.modules.api, fe.transport, fe.transport.client, fe.transport.outcome, fe.package.api]
+provenance:
+  reviewedAt: 2026-10-13
+  sources:
+    - knowledge/hfs/fe-stack.yaml
+    - knowledge/hfs/slots.yaml
+    - "starci-lab/starci-academy origin/main: src/modules/api/graphql/{clients,queries,mutations,types.ts}"
+    - https://www.apollographql.com/docs/react/api/link/introduction
+    - https://the-guild.dev/graphql/codegen
+  limitations: |-
+    Static checks prove where the back end is called, that failures are not collapsed and that wire types are generated.
+    They do not prove that the contract matches the running back end beyond the committed snapshot, or that the retry and
+    timeout budgets fit the product. starci-academy illustrates the layout; it hand-types its wire types, which this
+    standard replaces with codegen.
+rules:
+  - id: FE-API-GRAPHQL
+    title: The browser calls the back end through the Apollo clients, one file per operation
+    kind: mandatory
+    hfsRules: [R50, R51]
+    requirement: |-
+      `modules/api/graphql/clients/` holds the auth and the no-auth Apollo client (`clients/{auth,no-auth}.ts`) built from one
+      link chain (`links/`): retry, error, timeout, token refresh (`links/refresh-token/`), attach access token, attach
+      device fingerprint when the app uses one, and the terminal http link. The access token comes from `modules/auth` (lite:
+      the Supabase session token). Each operation is one file: `queries/query-<x>.ts` exporting `query<X>` and
+      `mutations/mutation-<x>.ts` exporting `mutate<X>`, each with its `gql` document map keyed by an enum and typed request
+      and response (`types/`). Every operation returns the one `GraphQLResponse<T>` envelope of `graphql/types.ts`
+      (`success`, `message`, `error`, `data`); UNAUTHENTICATED or FORBIDDEN becomes `refused` after one token refresh, and a
+      failure is never returned as empty data. Nothing else in the app calls `fetch`, another HTTP or GraphQL client, a
+      Server Action or a front-end route handler, and Supabase on the front end never reads data.
+    rationale: |-
+      One link chain makes timeout, retry, refresh and headers a single decision, and one file per operation keeps every call
+      the back end serves discoverable and replaceable.
+    cases:
+      - id: case-1
+        when: A query
+        write: >-
+          modules/api/graphql/queries/query-course-leaderboard.ts: const query1 = gql`query CourseLeaderboard($request:
+          LeaderboardRequest!) { courseLeaderboard(request: $request) { success message error data { ... } } }`; export const
+          queryCourseLeaderboard = async ({ query = QueryCourseLeaderboard.Query1, request, headers, signal }:
+          QueryParams<QueryCourseLeaderboard, CourseLeaderboardRequest>) => createAuthApolloClient({ headers, signal })
+          .query<QueryCourseLeaderboardResponse>({ query: queryMap[query], variables: { request } }) (starci-academy)
+      - id: case-2
+        when: The envelope
+        write: 'export interface GraphQLResponse<TData = undefined> { success: boolean; message: string; error?: string; data?: TData } in modules/api/graphql/types.ts'
+      - id: case-3
+        date: "2026-10-13"
+        source: owner
+        when: "Owner ruling 2026-10-13: a lite front end needs data (it used to read through a Supabase data layer, Server Actions or a route handler)"
+        write: >-
+          The back-end feature exposes a GraphQL resolver (be.transport.graphql) and the front end calls it through
+          query-<x>.ts or mutation-<x>.ts and an SWR hook, exactly as in full; Supabase on the front end stays auth only and
+          the front end serves no API (R243).
+    verification:
+      automated:
+        - FE_TRANSPORT_OWNER
+        - FE_EFFECT_FETCH
+        - FE_SWR_KEY_IDENTITY
+        - FE_SWR_MUTATION_RESOURCE_IDENTITY
+        - FE_HTTP_STATUS_COLLAPSE
+        - FE_OUTCOME_KIND_UNHANDLED
+      manual:
+        - Confirm every refused answer leads somewhere the user can act, such as sign-in.
+    relatedExamples: []
+  - id: FE-WIRE-GENERATED
+    title: Wire types are generated from be/contracts
+    kind: mandatory
+    hfsRules: [R52, R23, R113, R288]
+    requirement: |-
+      The back end commits `be/contracts/<app>/schema.graphql`, written by `starci app emit`. The front end reads it in
+      place (`hfs.json` `sides.fe.reads: [be/contracts/]`) and keeps no copy. graphql-codegen (the root `codegen` script)
+      writes the ignored `modules/api/graphql/__generated__/` from it; `lint`, `typecheck`, `build:fe` and the op gate run
+      `codegen` first. The request and response types under `queries/types/` and `mutations/types/` re-export or narrow the
+      generated types; a hand-written wire type, a cast of a response and an enum typed as `string` are forbidden.
+      Every GraphQL document, including a gql template embedded in TypeScript, validates against that back-end contract.
+    rationale: |-
+      Types written by hand drift from the back end without a signal; the committed snapshot makes the interface between the
+      sides a reviewable artifact in the same commit as the change that moved it.
+    cases:
+      - id: case-1
+        when: A new operation
+        write: Add the resolver on the back end, run starci app emit, run npm run codegen, then write mutation-<x>.ts with its gql document and the generated types.
+      - id: case-2
+        when: The back-end contract changed
+        write: Run starci app emit, review the diff of be/contracts/, then npm run codegen; HFS_CONTRACT_SNAPSHOT_DRIFT fails a stale or missing snapshot.
+      - id: case-3
+        date: "2026-10-13"
+        source: owner
+        when: "Owner ruling 2026-10-13: starci-academy types its responses by hand"
+        write: The layout follows starci-academy; the types come from graphql-codegen over be/contracts/<app>/schema.graphql instead.
+    verification:
+      automated:
+        - FE_WIRE_GENERATED
+        - HFS_CONTRACT_SNAPSHOT_DRIFT
+        - FE_GRAPHQL_CONTRACT
+        - FE_STACK_UNLISTED
+        - FE_STACK_CORE_MISSING
+      manual:
+        - Review contract diffs for breaking changes before regenerating.
+    relatedExamples: []

@@ -1,0 +1,173 @@
+schema: starci/op@1
+id: content.generate
+goal:
+  en: Create or revise one selected content unit with grounded claims and actual requested media/code
+    checks.
+nodeKinds: [implementation]
+completionProfile: implementation
+sideEffects:
+  - selected local content/assets/code edits
+  - scoped commits when authorized; no publication implied
+graphPolicy:
+  mode: read-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+reads:
+  - id: target
+    path: shared
+    purpose:
+      en: shared
+  - id: business
+    path: .starciwork/features/<feature>/{br,fr,nfr,data,journey,decision}/**/index.yaml
+    purpose:
+      en: Read accepted requirements, decisions, constraints and acceptance IDs declared as relevant
+        inputs in the selected .starciwork graph. Intent governs expected behavior; source is not a
+        replacement. Do not invent a mandatory BA predecessor for a scope that does not require one;
+        a needed missing input is a reported graph/scope gap, not a new dependency silently added
+        here.
+  - id: repo
+    path: <app>/<bound-paths>
+    purpose:
+      en: shared
+  - id: brief
+    path: selected curriculum/content brief + actual source material/style/rights
+    purpose:
+      en: Read audience, learning/use outcome, factual sources, language, format, approved claims and
+        requested assets/examples. Unprovided facts/testimonials/results are not creative license.
+  - id: profile
+    path: shared
+    purpose:
+      en: shared
+  - id: standard
+    path: knowledge/op-gate.yaml + knowledge/patterns/be/index.yaml + knowledge/patterns/be/folder.yaml + knowledge/patterns/be/naming.yaml + knowledge/patterns/be/imports.yaml + knowledge/patterns/be/typing.yaml + knowledge/patterns/be/function.yaml + knowledge/patterns/be/comment.yaml + knowledge/patterns/fe/index.yaml + knowledge/patterns/fe/folder.yaml + knowledge/patterns/fe/naming.yaml + knowledge/patterns/fe/imports.yaml + knowledge/patterns/fe/typing.yaml + knowledge/patterns/fe/function.yaml + knowledge/patterns/fe/comment.yaml + knowledge/patterns/fe/i18n.yaml + examples/index.yaml
+    purpose:
+      en: "The standard a content unit's code or product copy follows: the knowledge/patterns files of the code kinds a code sample or snippet shows, the actual source indexed by examples/index.yaml, and knowledge/patterns/fe/i18n.yaml for copy that lands in a catalog."
+      vi: "Chuẩn mà mã hoặc nội dung sản phẩm của một đơn vị nội dung theo: các tệp knowledge/patterns của loại mã mà ví dụ hay đoạn mã thể hiện, the actual source indexed by examples/index.yaml, và knowledge/patterns/fe/i18n.yaml cho nội dung đưa vào catalog."
+writes:
+  - id: node
+    path: N/index.yaml
+    fields: [state, blocker, completion.inputDigest, completion.evidence, completion.codeRefs]
+    content:
+      en: Read the existing selected scope, expected assertions and .starciwork graph unchanged. Write
+        only state/blocker/completion here; actual observations, findings, commit mappings and
+        remaining cleanup belong to the evidence result, not semantic node prose. Missing
+        refs/dependencies/acceptance require a reported gap or separately selected scope update;
+        never add/remove them to obtain pass.
+  - id: source
+    path: <app>/<write-ceiling>
+    content:
+      en: shared
+  - id: evidence
+    path: evidence/**
+    fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+    artifacts:
+      - manifest.yaml
+      - content-review.md
+      - source-map.json
+      - example-tests.json when executable
+      - media-review.md when generated
+      - result.md
+    content:
+      en: "Record factual source checks, edition completeness and actual requested build/example
+        execution. Keep generated media actual tool provenance and inspected visual quality.
+        Operator-specific observed result in evidence/result.md: Link actual authored content paths and
+        source/rights provenance; content-complete is not learning outcomes observed in production
+        or publication."
+  - id: read-digest
+    path: STARCI_JOB_SCRATCH/read-digest.json
+    schema: starci/read-digest@1
+    content:
+      en: "The READ digest of a content unit that carries code or product copy: the pattern and example files its code follows, each with its sha256."
+      vi: "Bản tóm tắt ĐỌC của một đơn vị nội dung có mã hoặc nội dung sản phẩm: các tệp pattern và ví dụ mà mã của nó theo, kèm sha256."
+steps:
+  - reads: [standard, brief]
+    writes: [read-digest]
+    action:
+      en: "When the content unit carries code (a sample, a snippet, an exercise) or product copy, READ the standard first: starci gate read --root <app> [--touch <the files it writes>] --knowledge <the knowledge/patterns files of the code kinds it shows, knowledge/patterns/fe/i18n.yaml for catalog copy> --out $STARCI_JOB_SCRATCH/read-digest.json, and write code the way the patterns and examples write it - a sample that teaches against the canon is a defect. Pure prose with no code and no catalog copy needs no READ digest."
+      vi: "Khi đơn vị nội dung có mã (ví dụ, đoạn mã, bài tập) hoặc nội dung sản phẩm, ĐỌC chuẩn trước: starci gate read --root <app> [--touch <các tệp nó viết>] --knowledge <các tệp knowledge/patterns của loại mã nó thể hiện, knowledge/patterns/fe/i18n.yaml cho nội dung catalog> --out $STARCI_JOB_SCRATCH/read-digest.json, rồi viết mã đúng như pattern và ví dụ viết - ví dụ dạy trái canon là một lỗi. Văn xuôi thuần không có mã và không có nội dung catalog thì không cần bản tóm tắt ĐỌC."
+  - reads:
+      - target
+      - business
+      - brief
+      - repo
+      - profile
+    writes: [node]
+    action:
+      en: Resolve requested audience/outcomes, edition/locale, factual constraints and source-owned paths.
+        A new content-only workspace can use explicitly selected deliverable paths, not a fabricated
+        product repository. Resolve the execution profile and actual tool availability before
+        selecting instruments; this does not switch the model/runtime or spawn workers.
+  - reads:
+      - brief
+      - business
+      - repo
+    writes: [source]
+    action:
+      en: Write or revise only selected content and examples, preserving correct existing material and
+        linking nontrivial factual claims to actual sources. Label illustrative examples.
+  - reads:
+      - brief
+      - repo
+    writes: [source, evidence]
+    action:
+      en: Generate requested assets with available appropriate skill/tools and inspect them; run
+        executable examples and declared builds when selected, retain actual outputs. Unrequested
+        media/language variants are not mandatory.
+  - reads:
+      - target
+      - brief
+      - business
+    writes: [evidence]
+    action:
+      en: Review outcome coverage, clarity, factuality, source rights and locale consistency. Independent
+        review requires actual authorized reviewer; self-review is labelled honestly.
+  - reads:
+      - target
+      - repo
+      - brief
+    writes: [node, evidence]
+    action:
+      en: Commit selected tracked content when authorized or report local deliverables/uncommitted result
+        accurately. Stop without publishing or changing curriculum outside scope. This handoff is
+        conditional and does not change standalone or named frontend response contracts.
+proofs:
+  - id: binding
+    requirement:
+      en: Run the record-class validator `starci runtime validate` and, on every record directory it writes, `starci runtime validate --strict`; every cited ID/path exists or is explicitly
+        proposed, required assertions are covered, input bindings are current, and an honest
+        not-run/fail cannot earn done.
+  - id: commit
+    requirement:
+      en: Inspect exact staged diff and actual tests; bind full real source commit(s), per repository, and
+        separately retain integration/tested mappings. Report uncommitted or no-change honestly.
+  - id: content
+    requirement:
+      en: Declared outcomes/claims are covered and supported; executable claims have actual executed
+        proof, generated images are inspected, and unrun examples stay unverified.
+judge:
+  - by: machine
+    measures: [declared-checks]
+    proofs: [binding]
+    why: "the settler re-runs the record validator and every other check it can run itself; the examples and images the op ran or inspected are its own evidence (registry entry op-judge-substance-unjudged)"
+blockers:
+  - code: CONTENT_AUTHORITY_MISSING
+    condition:
+      en: Required source, factual claim, rights or intended audience/outcome is unresolved.
+  - code: DECLARED_DEPENDENCY_UNMET
+    condition:
+      en: A declared prerequisite is not effectively done, or a required declared input/scope is missing.
+        Report node/resource IDs and propose a separately selected graph update when needed; never
+        run predecessors or weaken dependsOn/refs/required to proceed.
+placeholders:
+  feature: Feature folder of the selected records, inside the operation allowlist
+  app: shared
+  bound-paths: shared
+  write-ceiling: shared
+layoutPolicy:
+  checks: [starci-validate]
+route:
+  nodeKinds: [implementation]
+  phase: [implement, implementation]
+  intent: [content, copy, write]
+  prerequisites: [decided records/behavior exist]

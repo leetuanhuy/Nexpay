@@ -1,0 +1,134 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: starci://schemas/profile-registry.schema.json
+title: StarCi profile registry
+type: object
+required: [schema, runtimes, aliases, executionModel, targets, fallback]
+properties:
+  schema: {const: starci/profile-registry@1}
+  purpose: {type: string}
+  glossary:
+    type: object
+    additionalProperties: {type: string, minLength: 1}
+  pricing:
+    type: object
+    additionalProperties: false
+    required: [currency, unit, asOf]
+    properties:
+      currency: {type: string, minLength: 1}
+      unit: {const: per-million-tokens}
+      asOf: {type: string, minLength: 1}
+      source: {type: string}
+      matching: {type: string}
+  models:
+    type: object
+    minProperties: 1
+    additionalProperties: {$ref: "#/$defs/model"}
+  pools:
+    type: object
+    minProperties: 1
+    additionalProperties: {$ref: "#/$defs/pool"}
+  runtimes:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items: {type: string, minLength: 1}
+  aliases:
+    type: object
+    additionalProperties: {type: string, minLength: 1}
+  executionModel:
+    type: object
+    additionalProperties: false
+    required: [levels, host, chat, workflowKernel, kernelAuthority, operationAgent, operationMapping, isolationBoundary, worktree, scheduling, fanOutWithinOperation, concreteAgentBinding, concurrency]
+    properties:
+      levels:
+        const: [workflow-kernel, operation-agent]
+      host: {const: orca}
+      chat: {const: trigger-and-monitor-only}
+      workflowKernel: {const: one-long-lived-agent-per-workflow}
+      kernelAuthority: {const: sole-workflow-state-writer-through-scripts/kernel/cli.mjs}
+      operationAgent: {const: one-ephemeral-agent-per-job}
+      operationMapping: {const: one-operation-instance-one-agent}
+      isolationBoundary: {const: operation}
+      worktree: {const: isolated-child-per-job}
+      scheduling: {const: dependency-dag}
+      fanOutWithinOperation: {const: forbidden}
+      concreteAgentBinding: {const: provider-profile-model}
+      # A pointer, never a number: the slot counts live in this registry's
+      # `pools`, the only file scripts/kernel/cli.mjs and scripts/agent/models.mjs
+      # read for capacity.
+      concurrency: {type: string, minLength: 1}
+  targets:
+    type: object
+    minProperties: 1
+    additionalProperties: {$ref: "#/$defs/target"}
+  fallback:
+    type: object
+    additionalProperties: false
+    required: [allowedReasons, requiredEffectState, blockedReasons]
+    properties:
+      allowedReasons:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {type: string, minLength: 1}
+      requiredEffectState: {const: none}
+      blockedReasons:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {type: string, minLength: 1}
+$defs:
+  model:
+    type: object
+    additionalProperties: false
+    required: [provider, tier, price]
+    properties:
+      provider: {type: string, minLength: 1}
+      tier: {type: string, minLength: 1}
+      price:
+        type: object
+        additionalProperties: false
+        required: [input, output, cacheRead, cacheWrite]
+        properties:
+          input: {type: [number, "null"]}
+          output: {type: [number, "null"]}
+          cacheRead: {type: [number, "null"]}
+          cacheWrite: {type: [number, "null"]}
+          source: {type: string, minLength: 1}
+  pool:
+    type: object
+    additionalProperties: false
+    required: [target, provider, roles, maxParallel, defaultModel]
+    properties:
+      target: {type: string, minLength: 1}
+      provider: {type: string, minLength: 1}
+      roles:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {type: string, minLength: 1}
+      maxParallel: {type: integer, minimum: 1}
+      capacityAuthority: {type: string, minLength: 1}
+      quotaTelemetry: {type: string, minLength: 1}
+      defaultModel: {type: string, minLength: 1}
+  target:
+    type: object
+    additionalProperties: false
+    required: [runtime, orcaLaunch]
+    properties:
+      runtime: {type: string, minLength: 1}
+      defaultModel: {type: string, minLength: 1}
+      executionHosts:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          enum: [orca]
+      orcaLaunch:
+        # The one launch (modules/kernel/start-workflow.yaml):
+        # orca orchestration worker-start --agent <agent>.
+        type: object
+        additionalProperties: false
+        required: [agent]
+        properties:
+          agent: {type: string, minLength: 1}

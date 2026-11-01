@@ -1,0 +1,181 @@
+// check-host-boundary.mjs — CONTRIBUTING.md rule 5, executable.
+//
+// Host calls go through scripts/api/orca/. Two ways that breaks, both red here:
+//   code   — a .mjs outside scripts/api/orca/ imports the raw runner (ORCA,
+//            orcaRun, orcaCall) from the wrapper lib instead of calling a
+//            wrapper, or (e2e/ and packages/ only) spawns orca. A spawn of orca
+//            in the runtime's source roots is RT_EXTERNAL_OWNER's finding (scripts/hfs/runtime-check.mjs).
+//   prose  — agent-facing text tells an agent to run `orca <verb>`, to run a
+//            node path that is not a scripts/api/orca/<verb>.mjs wrapper, or to
+//            load/read modules/host/orca/*.
+//
+// modules/host/orca/** is the contract itself. The owner-chat host tool references under
+// skills/starci/references name Orca commands and are outside Kernel/Op agent-facing prose.
+import {skillRoot} from '../../engine/runtime-root.mjs';
+import {parseYaml} from '../../engine/yaml.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { isMain } from '../lib/is-main.mjs';
+import { walkFiles } from '../lib/walk.mjs';
+import {spawnCalls} from '../lib/spawn-calls.mjs';
+import {RUNTIME_MANIFEST_FILE,loadSlotManifest,ruleParams} from '../hfs/slots.mjs';
+
+const WRAPPER_DIR='scripts/api/orca';
+
+// Agent-facing prose: what a kernel, op, chat or supervisor agent is told to do.
+const PROSE_ROOTS=['CONTEXT.md','modules/kernel','modules/ops','modules/supervisor',
+  'skills/starci/SKILL.md','skills/starci/references/define-goal.md',
+  'skills/starci/references/start-workflow.md','skills/starci/references/workflow-chat.md',
+  'skills/starci/references/assisted-uat.md','skills/starci/references/release.md','skills/starci/references/host-startup.md','init'];
+const PROSE_EXT=new Set(['.md','.yaml','.yml','.txt']);
+const CODE_ROOTS=['engine','scripts','modules','bin','init','e2e','packages'];
+
+const rel=(root,file)=>path.relative(root,file).replaceAll('\\','/');
+
+function walk(dir,keep,out=[]){
+  if(fs.existsSync(dir)&&fs.statSync(dir).isFile()){
+    if(keep(dir))out.push(dir);
+    return out;
+  }
+  out.push(...walkFiles(dir,{filter:(_,full)=>keep(full),exclude:name=>name==='node_modules'||name.startsWith('.'),ignoreReadErrors:true}));
+  return out;
+}
+
+/** The first word of every command the Orca API inventory publishes. */
+function orcaVerbs(root){
+  try{
+    const api=parseYaml(fs.readFileSync(path.join(root,'modules','host','orca','api.yaml'),'utf8'));
+    const verbs=new Set((api?.publicCommands??[]).map(c=>String(c).split(/\s+/)[0]).filter(Boolean));
+    return verbs.size?verbs:null;
+  }catch{return null;}
+}
+
+// `orca <verb>` in command position: line start, a code fence, a backtick, a
+// quote, a shell prompt or a pipe/chain operator. 'the kernel never runs the
+// orca call itself' is prose about orca, not a command, and its next word is
+// not a published verb either.
+const COMMAND_POSITION=/(?:^|[`'"($]|\|\||&&|;|\|)\s*orca\s+([a-z][a-z-]*)/;
+const NODE_PATH=/node\s+(\S*orca\S*)/g;
+const LOADS_HOST=/\b(load|loads|loading|read|reads|reading)\b[^.\n]{0,100}modules\/host\/orca/i;
+// (d) agent-cli-spawn: an agent never runs as a child process of a runtime script - the PreToolUse hook cannot see it
+// and Orca cannot supervise it (modules/host/orca/calls.yaml). Read structurally with
+// the TypeScript AST: a call whose callee is bound to node:child_process (spawn, spawnSync, exec, execSync, execFile,
+// execFileSync, fork) and whose command - a literal, a const resolving to one, either branch of a conditional, or the
+// first program word of a shell string / a cmd|sh|powershell argv - names an agent CLI (or its .cmd/.exe shim).
+// Prose, comments and messages that mention `claude -p` are not calls; git, node and npm spawns pass.
+export const AGENT_CLI_SPAWN='AGENT_CLI_SPAWN';
+const AGENT_CLIS=Object.freeze(['codex','claude','cursor-agent','devin','gemini','opencode']);
+const AGENT_SPAWN_ROOTS=['scripts','engine','modules','bin'];
+const AGENT_SPAWN_EXT=/\.(?:mjs|cjs|js|ts)$/;
+/** The agent-CLI spawns in one source text: [{line, callee, program}]. Pure. */
+function agentCliSpawns(text,file='x.mjs'){
+  return spawnCalls(text,file).calls.flatMap(call=>{
+    const program=call.programs.find(p=>AGENT_CLIS.includes(p));
+    return program?[{line:call.line,callee:call.callee,program}]:[];
+  });
+}
+
+/** ruleParams.runtime.sourceRoots of the runtime manifest under `root`, or [] when the tree has none. */
+function runtimeSourceRoots(root){
+  const file=path.join(root,RUNTIME_MANIFEST_FILE);
+  if(!fs.existsSync(file))return [];
+  return ruleParams(loadSlotManifest({root,file}),'runtime').sourceRoots;
+}
+
+const IMPORTS_RUNNER=/import\s*\{[^}]*\b(?:ORCA|orcaRun|orcaCall)\b[^}]*\}\s*from\s*['"][^'"]*orca\/lib\.mjs['"]/;
+
+// (a) code: one place builds orca's argv. Who may spawn orca in the runtime's production source is RT_EXTERNAL_OWNER's
+// rule (ruleParams.runtime.sourceRoots of knowledge/hfs/runtime-slots.yaml); the roots it does not read (e2e/, packages/,
+// modules/, init/) are read here with the same AST reading. A tree without a runtime manifest is read whole.
+const spawnFileScan = (root, file, layerScan, flag) => {
+  const relative = rel(root, file);
+  if (relative.startsWith(`${WRAPPER_DIR}/`)) return;
+  const text = fs.readFileSync(file, 'utf8');
+  if (!layerScan.some((dir) => relative === dir || relative.startsWith(`${dir}/`))) {
+    for (const call of spawnCalls(text, file).calls) {
+      if (call.programs.includes('orca')) flag(file, call.line, 'spawns-orca', `spawns orca outside ${WRAPPER_DIR}/ — call the verb's wrapper`);
+    }
+  }
+  const lines = text.split(/\r?\n/);
+  lines.forEach((line, i) => {
+    if (IMPORTS_RUNNER.test(line)) flag(file, i + 1, 'imports-runner', `imports the Orca runner outside ${WRAPPER_DIR}/ — call the verb's wrapper`);
+  });
+};
+
+const spawnScan=(root,layerScan,flag)=>{
+  for(const dir of CODE_ROOTS){
+    for(const file of walk(path.join(root,dir),f=>f.endsWith('.mjs'))){
+      spawnFileScan(root,file,layerScan,flag);
+    }
+  }
+};
+
+
+// (d) agent-cli-spawn: no runtime script runs an agent CLI as its child process. The one exemption is the headless call api
+// (scripts/api/codex/, owner decision 2026-10-07): a one-shot `codex exec` for the imagegen call, reached only through
+// `starci work imagegen`, which holds a provider slot, meters it and refuses every other caller (command-policy.yaml calls).
+const HEADLESS_CALL_DIR='scripts/api/codex';
+const agentSpawnScan=(root,flag)=>{
+  for(const dir of AGENT_SPAWN_ROOTS){
+    for(const file of walk(path.join(root,dir),f=>AGENT_SPAWN_EXT.test(f))){
+      if(rel(root,file).startsWith(`${HEADLESS_CALL_DIR}/`))continue;
+      for(const hit of agentCliSpawns(fs.readFileSync(file,'utf8'),file))
+        flag(file,hit.line,'agent-cli-spawn',`${AGENT_CLI_SPAWN}: ${hit.callee}() runs the agent CLI ${hit.program} as a child process — launch it through ${WRAPPER_DIR}/worker-start.mjs (scripts/agent/lib.mjs startAgent) and supervise it with worker-show / worker-stop / worker-release`,AGENT_CLI_SPAWN);
+    }
+  }
+};
+
+// (b) prose: no agent is told to run orca or to read the host contract.
+const proseScan=(root,verbs,flag)=>{
+  for(const entry of PROSE_ROOTS){
+    const target=path.join(root,entry);
+    if(!fs.existsSync(target))continue;
+    const files=fs.statSync(target).isDirectory()
+      ?walk(target,f=>PROSE_EXT.has(path.extname(f)))
+      :[target];
+    for(const file of files){
+      const lines=fs.readFileSync(file,'utf8').split(/\r?\n/);
+      lines.forEach((line,i)=>{
+        const command=line.match(COMMAND_POSITION);
+        if(command&&(!verbs||verbs.has(command[1])))
+          flag(file,i+1,'orca-command',`tells the reader to run \`orca ${command[1]}\` — use \`starci orca <verb>\` instead`);
+        for(const m of line.matchAll(NODE_PATH)){
+          if(!/(?:^|\/)scripts\/api\/orca\/[a-z][a-z-]*\.mjs$/.test(m[1].replace(/^[^a-zA-Z]*/,'')))
+            flag(file,i+1,'node-orca-path',`names \`node ${m[1]}\`, which is not a ${WRAPPER_DIR}/<verb>.mjs wrapper`);
+        }
+        if(LOADS_HOST.test(line))
+          flag(file,i+1,'reads-host-contract','tells the reader to load modules/host/orca/ — the host contract is data for scripts/api/orca/lib.mjs, not reading for an agent');
+      });
+    }
+  }
+};
+
+/** Every host-boundary violation in `root`. */
+function findHostBoundaryViolations({root=skillRoot}={}){
+  const verbs=orcaVerbs(root);
+  const found=[];
+  const flag=(file,lineNo,rule,detail,code=null)=>{
+    const key=`${rel(root,file)}:${lineNo}`;
+    found.push({where:key,rule,...(code?{code}:{}),detail});
+  };
+
+  const layerScan=runtimeSourceRoots(root);
+  spawnScan(root,layerScan,flag);
+  agentSpawnScan(root,flag);
+  proseScan(root,verbs,flag);
+  return {ok:found.length===0,violations:found};
+}
+
+function hostBoundaryMain(argv=[]){
+  if(argv.includes('--help')||argv.includes('-h'))return {exitCode:0,report:{schema:'starci/host-boundary-check-help@1',help:`Usage: starci runtime check --only host-boundary -- [--root <dir>]\n\nFails when a .mjs outside ${WRAPPER_DIR}/ spawns orca or imports its runner, when runtime code (${AGENT_SPAWN_ROOTS.join(', ')}) spawns an agent CLI (${AGENT_CLIS.join(', ')}) as a child process (${AGENT_CLI_SPAWN}), or when agent-facing prose (${PROSE_ROOTS.join(', ')}) tells an agent to run an orca command, to run a node path that is not a ${WRAPPER_DIR}/<verb>.mjs wrapper, or to load modules/host/orca/. Exit 0 is clean, 1 lists the violations.`}};
+  const rootIndex=argv.indexOf('--root');
+  const root=rootIndex>=0?argv[rootIndex+1]:skillRoot;
+  const result=findHostBoundaryViolations({root});
+  return {exitCode:result.ok?0:1,report:{schema:'starci/host-boundary-check-report@1',...result}};
+}
+
+if(isMain(import.meta.url)){
+  const result=hostBoundaryMain(process.argv.slice(2));
+  process.stdout.write(result.report.help?`${result.report.help}\n`:`${JSON.stringify(result.report,null,2)}\n`);
+  process.exitCode=result.exitCode;
+}

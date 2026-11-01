@@ -1,0 +1,163 @@
+# ============================================================================
+# modules/schemas/ — schema relationship map
+# ============================================================================
+# Edges between schemas (who references/governs-whom) and between schemas and
+# subsystems (which engine part a schema binds). Companion to index.yaml.
+# Edge `type` vocabulary:
+#   pairs-with    — two halves of one contract (tree vs content, request vs receipt)
+#   delegates     — the file names another schema as the record kind for a slot
+#   governs       — schema file -> the record/document instance it constrains
+#   emits         — engine/check produces documents of this schema
+#   consumes      — engine/check reads/validates documents of this schema
+#   supersedes    — newer record generation beside a still-valid older one
+#   mirrors       — documentation twin of an executable contract (drift = bug)
+# Every edge cites the source the claim was read from.
+
+schemaToSchema:
+
+  # --- stacks: one contract, two halves -------------------------------------
+  - {from: stacks-layout, to: application-stacks, type: pairs-with,
+     note: "layout governs the .starcistacks TREE; application-stacks.schema governs the manifest CONTENT — 'the machine form of the layout's content half'",
+     source: "modules/schemas/stacks-layout.yaml purpose; modules/schemas/application-stacks.schema.yaml description"}
+  - {from: application-stacks, to: stacks-layout, type: consumes,
+     note: "docs/application-stacks.md: checker reads layout's read-only structural findings plus manifest content; manifest fields are a strict subset of what the layout names",
+     source: "docs/application-stacks.md"}
+
+  # --- work tree: layout delegates each family to its record schema ---------
+  - {from: work-layout, to: work-business-rule, type: delegates, note: "shape.br -> schema work/business-rule@1", source: "modules/schemas/work-layout.yaml"}
+  - {from: work-layout, to: work-acceptance-criterion, type: delegates, note: "shape.ac -> work/acceptance-criterion, nested under its br", source: "modules/schemas/work-layout.yaml"}
+  - {from: work-layout, to: work-functional-requirement, type: delegates, note: "shape.fr", source: "modules/schemas/work-layout.yaml"}
+  - {from: work-layout, to: work-non-functional-requirement, type: delegates, note: "shape.nfr", source: "modules/schemas/work-layout.yaml"}
+  - {from: work-layout, to: work-data, type: delegates, note: "shape.data", source: "modules/schemas/work-layout.yaml"}
+  - {from: work-layout, to: work-customer-journey, type: delegates, note: "shape.journey", source: "modules/schemas/work-layout.yaml"}
+  - {from: work-layout, to: work-policy-decision, type: delegates, note: "shape.decision", source: "modules/schemas/work-layout.yaml"}
+  - {from: work-layout, to: work-sds-component, type: delegates, note: "shape.sds + owners module-root rule", source: "modules/schemas/work-layout.yaml"}
+  - {from: work-layout, to: work-ui-screen, type: delegates, note: "shape.ui + assets; feeds IMPL_BEFORE_DIRECTION", source: "modules/schemas/work-layout.yaml"}
+  - {from: work-layout, to: work-implementation, type: delegates, note: "shape.impl, impl/<repository>/<name>", source: "modules/schemas/work-layout.yaml"}
+  - {from: work-layout, to: work-uat-flow, type: delegates, note: "shape.uat", source: "modules/schemas/work-layout.yaml"}
+  - {from: work-layout, to: work-disposable-accounts, type: delegates, note: "accounts.yaml carries schema work/disposable-accounts@1 (example tree convention)", source: "modules/schemas/work-layout.yaml:244"}
+  - {from: work-layout, to: "work-{contract,integration,gap,event}", type: delegates, note: "shape.contract/integration/gap/event",
+     source: "modules/schemas/work-layout.yaml"}
+
+  # --- work tree: record-to-record edges ------------------------------------
+  - {from: work-acceptance-criterion, to: work-business-rule, type: consumes,
+     note: "ac nests under its rule and authors `rule:` (owning br id); has no identity apart from it",
+     source: "modules/schemas/work-layout.yaml shape.ac; modules/schemas/work-acceptance-criterion.schema.yaml"}
+  - {from: work-uat-flow, to: work-disposable-accounts, type: consumes,
+     note: "uat-flow's accounts resolve to the collocated accounts.yaml fixture (const accounts.yaml in the flow schema)",
+     source: "modules/schemas/work-uat-flow.schema.yaml:36; scripts/work/validate/check-work-artifacts.mjs:451"}
+  - {from: work-catalog, to: work-feature, type: delegates,
+     note: "catalog lists which features exist and where their records live; both are stateless parents",
+     source: "work-catalog/work-feature schema descriptions; scripts/work/validate/check-work-artifacts.mjs:503,521"}
+  - {from: work-implementation, to: "work/{fr,nfr,sds,ui,business-rule,...}", type: consumes,
+     note: "impl `proves` is the outbound edge to records it realises; proof-direction exempt from requiresProof",
+     source: "modules/schemas/work-implementation.schema.yaml; scripts/work/validate/check-work-consistency.mjs comment"}
+  - {from: work-uat-flow, to: "work/{fr,journey,...}", type: consumes,
+     note: "uat `proves` — authored forward edge to demonstrated records",
+     source: "modules/schemas/work-uat-flow.schema.yaml"}
+  - {from: work-evidence, to: "(any work record)", type: consumes,
+     note: "evidence binds record+source version via recordDigest; expiry computed from it",
+     source: "modules/schemas/work-evidence.schema.yaml"}
+
+  # --- kernel chain (the goal is a sqlite row; the plan file is
+  #     the only schema'd artifact) ------------------------------------------
+  - {from: "goals.json.opChain (ledger row)", to: goal-plan, type: delegates,
+     note: "the approved opChain legs are the shape starci kernel plan diffs the derived {legs:[{op,paths?,notes?}]} file against",
+     source: "scripts/kernel/cli.mjs cmdPlan; modules/schemas/goal-plan.yaml"}
+  - {from: goal-plan, to: "modules/ops/ops/<op>.yaml", type: delegates,
+     note: "each leg's `op` names a catalog op; enqueue refuses unknown-op",
+     source: "modules/schemas/goal-plan.yaml rules; modules/kernel/api.yaml enqueue"}
+
+  # --- providers -------------------------------------------------------------
+  - {from: orca-call, to: "modules/host/orca/calls.yaml", type: governs,
+     note: "calls.yaml carries schema: starci/orca-calls@1; envelope must emit starci/orca-call-result@1",
+     source: "modules/host/orca/calls.yaml; scripts/checks/check-providers.mjs"}
+  - {from: profile-registry, to: "modules/models/registry.yaml", type: governs,
+     note: "registry.yaml carries schema: starci/profile-registry@1",
+     source: "modules/models/registry.yaml:1"}
+  - {from: model-tiers, to: "modules/models/tiers.yaml", type: governs,
+     note: "tiers.yaml carries schema: starci/model-tiers@1",
+     source: "modules/models/tiers.yaml:1"}
+
+  # --- assisted UAT ----------------------------------------------------------
+  - {from: assisted-uat-request, to: assisted-uat-session-manifest, type: prepares,
+     note: "the frozen request selects the exact digest-bound session manifest",
+     source: "modules/ops/ops/uat.assisted.prepare.yaml"}
+  - {from: assisted-uat-session-manifest, to: assisted-uat-receipt, type: emits,
+     note: "the controlled runner writes one immutable receipt at the manifest's exact template",
+     source: "scripts/uat/assisted-runner.mjs"}
+  - {from: assisted-uat-request, to: assisted-uat-cleanup, type: consumes,
+     note: "cleanup actions and read-back probes are frozen before execution",
+     source: "modules/ops/ops/uat.assisted.prepare.yaml"}
+  - {from: assisted-uat-request, to: assisted-uat-redaction, type: consumes,
+     note: "redaction rules and inspections are frozen before evidence capture",
+     source: "modules/ops/ops/uat.assisted.prepare.yaml"}
+  - {from: assisted-uat-verification, to: assisted-uat-receipt, type: verifies,
+     note: "verification selects one exact receipt and derives pass independently; human ok is completion only",
+     source: "modules/ops/ops/uat.assisted.verify.yaml"}
+
+  # --- knowledge --------------------------------------------------------------
+  - {from: knowledge-source, to: knowledge-rule, type: delegates,
+     note: "topics contain rule entries — contracts of the shipped knowledge/ tree",
+     source: "modules/schemas/knowledge-source.schema.yaml; modules/schemas/knowledge-rule.schema.yaml"}
+
+  # --- code-pattern pipeline --------------------------------------------------
+
+# ----------------------------------------------------------------------------
+# Schema -> subsystem binding: which engine part each schema constrains.
+# Use this when asking "which schemas does subsystem X obey?".
+# ----------------------------------------------------------------------------
+schemaToSubsystem:
+
+  work-tree:        # the .starciwork product record tree
+    schemas: [work-layout, work-workspace, work-catalog, work-feature, work-brand,
+              work-business-rule, work-acceptance-criterion, work-functional-requirement,
+              work-non-functional-requirement, work-customer-journey, work-policy-decision,
+              work-data, work-sds-component, work-ui-screen, work-implementation,
+              work-uat-flow, work-disposable-accounts, work-evidence]
+    note: "18 files — the largest subsystem. per-record families + layout."
+
+  kernel:           # workflow kernel boundaries
+    schemas: [goal-plan]
+    note: "the api plan-file contract is the only kernel record schema — the goal itself is a sqlite row + modules/goal/define-goal.yaml."
+
+  gate:             # executable checks / verification reports
+    schemas: [code-pattern-profile, code-pattern-check,
+              assisted-uat-request, assisted-uat-session-manifest, assisted-uat-cleanup,
+              assisted-uat-redaction, assisted-uat-receipt, assisted-uat-verification]
+    note: "report shapes + the per-kind proof ceiling + immutable assisted-UAT package; nonzero findings never authorize writes."
+
+  routing:          # host/workspace/source resolution
+    schemas: [workspace-routing]
+    note: "the rules list in workspace-routing.yaml is the whole routing contract."
+
+  stacks:           # .starcistacks deployment knowledge
+    schemas: [stacks-layout, application-stacks]
+    note: "tree half + content half of one stack contract."
+
+  host:             # host call contracts
+    schemas: [orca-call]
+    note: "the contract document itself lives at modules/host/orca/calls.yaml and carries the schema const."
+
+  model:            # model/runtime registry
+    schemas: [profile-registry, model-tiers]
+    note: "governs modules/models/registry.yaml; the model-side detail lives in modules/models/."
+
+  knowledge:        # authored guidance
+    schemas: [knowledge-source, knowledge-rule]
+    note: "read directly as authored sources — contracts of the shipped knowledge/ tree."
+
+  examples:         # actual executable app references
+    schemas: [code-example-catalog]
+    note: "indexes app-owned source, compiler configuration and tests; no copied code payload."
+
+  build:            # build helpers
+    schemas: [allowlist]
+    note: "source-only by design — the one allowlist no consumer projects."
+
+# ----------------------------------------------------------------------------
+# Reading order for an agent that must WRITE a governed document:
+#   1. find the subsystem above -> 2. open the schema file named in index.yaml
+#   -> 3. satisfy the authored YAML directly — there is no compiled projection
+#   -> 4. never satisfy a schema by copying a generated artifact back as a source.
+# ----------------------------------------------------------------------------

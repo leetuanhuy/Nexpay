@@ -1,0 +1,61 @@
+schema: starci/knowledge-source@1
+id: repo.formatter
+title: Repository formatter
+purpose: |
+  Given how source text is laid out (indentation, quotes, semicolons, wrapping), who decides? Prettier decides, with one
+  shared configuration. ESLint does not judge layout.
+appliesTo:
+  - backend
+  - frontend
+family: repo
+# The slot ids this topic teaches (knowledge/hfs/slots.yaml); scripts/gates/read-digest.mjs inverts these
+# into the READ-step slot -> pattern-topic map (knowledge/op-gate.yaml kinds), each slot's topics in index.yaml order.
+slots: [app.format-config, app.quality-config]
+provenance:
+  reviewedAt: 2026-09-29
+  sources:
+    - knowledge/hfs/README.md
+    - packages/prettier-config
+    - https://prettier.io/docs/options
+  limitations: |
+    Prettier fixes layout only. It does not decide naming, structure or comments; those remain lint and review rules.
+rules:
+  - id: REPO-FORMAT-1
+    title: Prettier is the only formatter
+    kind: mandatory
+    hfsRules: [R19]
+    requirement: |
+      `@starci/prettier-config` is `{ printWidth: 120, tabWidth: 4, semi: false, singleQuote: false, trailingComma: "all" }` for
+      both sides, referenced by the app root's managed `.prettierrc` (the string `"@starci/prettier-config"`); a `prettier` key in
+      a `package.json` is a local tool configuration (HFS_TOOL_CONFIG_LOCAL). Pre-commit runs `prettier --check` on the staged
+      files, while pre-push and CI enter the whole-app format check through `starci gate run --root <app>`. `.prettierignore` is generated. No
+      other formatter, and no EditorConfig setting that contradicts these values.
+    rationale: |
+      One formatter with one configuration ends style debate, and the values follow the largest codebase so a reformat diff
+      stays small.
+    cases:
+      - id: case-1
+        when: An app adopts the standard
+        write: One reformat commit (npm run format at the app root) in a quiet window, with nothing else in it.
+    verification:
+      automated:
+        - HFS_FORMAT
+      manual: []
+    relatedExamples: []
+  - id: REPO-FORMAT-2
+    title: No formatting rules in ESLint
+    kind: mandatory
+    hfsRules: [R19, R16]
+    requirement: |
+      The ESLint factories contain no layout rule: not `indent`, `quotes`, `semi`, `object-curly-newline`,
+      `array-element-newline`, `function-call-argument-newline`, and no rule that forces one import binding per line. Code is
+      not stretched to satisfy a formatter that a line-break rule fights.
+    rationale: |
+      A linter that argues with the formatter produces churn and inflates code, one token per line.
+    cases: []
+    verification:
+      automated:
+        - HFS_FORMAT
+        - HFS_TOOL_CONFIG_LOCAL
+      manual: []
+    relatedExamples: []

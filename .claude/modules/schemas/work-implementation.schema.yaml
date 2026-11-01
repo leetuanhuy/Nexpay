@@ -1,0 +1,175 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:work:implementation:1
+type: object
+additionalProperties: false
+description: "A module of real code, named where it actually lives, and the records it claims to realise. It
+  is the only family that reaches out of the tree into a repository, so it names that repository and pins
+  the revision the rest of the record is true at. What it names are `owners`, plural - each entry a path and
+  the role that path plays - because one screen or one flow routinely spans more than one owned artifact: a
+  route adapter, a feature entry, a connected block and its pure twin. A single directory-and-files pair
+  cannot name more than one shape at a time, which is why work-layout.yaml refuses `directory` and `files`
+  here and the gate refuses them too."
+required:
+  - repository
+  - owners
+  - proves
+properties:
+  schema:
+    const: work/implementation@1
+    $ref: "urn:work:common:1#/$defs/familyDiscriminator"
+  id:
+    type: string
+    pattern: ^impl(?:\.[a-z0-9]+(?:-[a-z0-9]+)*){3,}$
+    description: "The module's stable id, a lowercase dot-path under the impl family:
+      impl.<feature>.<repository>.<module...>; example impl.task.be.ownership (<repository> is the app side, be
+      or fe). The repository is part of the id because the same feature is implemented on more than one side, and two
+      modules that differ only by which side of the product they are on must not collide."
+  title:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: What this module is, in the product's terms rather than the directory's. It is what a
+      reader sees before deciding whether to open the code.
+  state:
+    $ref: "urn:work:common:1#/$defs/state"
+  activity:
+    $ref: "urn:work:common:1#/$defs/activity"
+  repository:
+    $ref: "urn:work:common:1#/$defs/slug"
+    description: The side this module is delivered on (be or fe), by the name the workspace record gives it -
+      where its proof commands run. It is named rather than pathed so the record stays valid on any machine;
+      the `owners[].path` below are app-relative and carry their side themselves.
+  owners:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    description: "The artifacts this record owns, each with the role it plays. There is more than one
+      because one unit of delivered behaviour routinely spans several: a route adapter, a feature entry, a
+      connected block. Every path is a module-root directory a reader would call the module's root -
+      be/src/modules/domain/task, never be/src/modules/domain/task/ownership.guard.ts - so a file moving inside
+      it during a refactor is not, by itself, a broken reference."
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - role
+        - path
+      properties:
+        role:
+          $ref: "urn:work:common:1#/$defs/slug"
+          description: What kind of unit this path is - module, route, entry, block, feature, or another
+            short word naming the kind. It is open rather than a closed enum because the shapes a stack
+            produces are the stack's business, and a role nobody can name gets written as a comment instead.
+        path:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: "The module-root directory, app-relative - be/<path>, fe/<path> or a directory of the
+            app root - the one form a job's owned_paths, gate.mjs and every finding use; a
+            `repository:<id>/` prefix or a side-relative path is refused (OWNER_PATH_NOT_APP_RELATIVE). A done
+            record's every owner directory must exist on disk, which the gate refuses otherwise
+            (OWNER_PATH_MISSING); a todo one is warned, because the module a todo record targets may not
+            have been built yet."
+  revision:
+    type: string
+    pattern: ^[a-f0-9]{7,64}$
+    description: "The commit the rest of this record is true at, as a hex sha. It is what
+      scripts/work/validate/check-evidence-binding.mjs reads to decide that a commit touching this record's owned
+      files is drift by the tree's own definition rather than a matter of timestamps - so a record that
+      pins one is making a stronger claim than one that does not, and a record without it describes source
+      that moves with nothing said about when it was read."
+  proves:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/recordId"
+    description: "The records this module realises, by id - the rules it enforces, the design components it
+      implements, the screens it builds. This is the authored forward edge of the graph; a record on the
+      other end does not restate it in reverse, because two copies of one edge is two things that can
+      disagree with no way to settle which is right. A done record whose `proves` names a record that is not
+      itself done is refused (PROVES_TARGET_NOT_DONE): proof cannot outrun what it proves."
+  verification:
+    type: array
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/prose"
+    description: What was done to check this module, one line each, concrete enough to repeat - the command
+      and its result, or an honest statement that only the source was read. It may be empty on a record
+      whose whole proof lives in its sibling evidence.yaml, and an empty list is then the honest statement
+      that this file adds nothing to it.
+  verificationSource:
+    $ref: "urn:work:common:1#/$defs/verificationSource"
+  because:
+    $ref: "urn:work:common:1#/$defs/because"
+  observations:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/prose"
+    description: What was noticed about the code while proving it that the record itself does not claim - a
+      limit of the capture, a behaviour the design did not ask for. It is kept apart from `verification`
+      because a note about what was seen is not a statement that anything was checked.
+  assets:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    description: "Real running-page captures, cited - each a blob of the interface.implement attempt that took it
+      (filed from STARCI_JOB_SCRATCH/captures with starci kernel report), never a file under this record's assets/ (agent data,
+      docs/ledger-db.md). A capture's markup is cited under the same stem (<stem>.html). An implementation asset
+      never carries a `generation` record - that is what tells a capture and a designed direction apart regardless of
+      prose provenance, and a generation-bearing asset here is refused."
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - role
+        - sha256
+      properties:
+        artifact:
+          type: integer
+          minimum: 1
+          description: The job_artifacts id starci kernel report returned for the file (optional; the sha256 is the citation).
+        name:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: The artifact name starci kernel report returned (attachments/captures/<file>), whose extension says what
+            the file is.
+        role:
+          $ref: "urn:work:common:1#/$defs/slug"
+          description: What the file is - a capture, the markup kept beside it, the script that produced
+            them. It is what lets a checker pair a screenshot with its own serialized DOM rather than
+            guessing by filename.
+        sha256:
+          $ref: "urn:work:common:1#/$defs/sha256"
+          description: The blob's digest - the citation itself (engine/db/blob.mjs resolves it).
+        provenance:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: How the capture was taken - which route, served by which build, at which viewport.
+            It is the sentence that distinguishes a screenshot of the running product from a screenshot of
+            a development server showing a stub.
+  evidence:
+    $ref: "urn:work:common:1#/$defs/slug"
+    description: The single evidence directory under this record's evidence/ folder that carries the proof
+      it was observed working. It is optional because a module can honestly be at todo with no run behind it
+      yet, and at most one, because a module has one current answer to whether its checks pass.
+  requiresProof:
+    $ref: "urn:work:common:1#/$defs/requiresProof"
+  provenBy:
+    $ref: "urn:work:common:1#/$defs/provenBy"
+  refs:
+    $ref: "urn:work:common:1#/$defs/refs"
+  dependsOn:
+    $ref: "urn:work:common:1#/$defs/dependsOn"
+  subscribes:
+    $ref: "urn:work:common:1#/$defs/subscribes"
+  blockedBy:
+    $ref: "urn:work:common:1#/$defs/blockedBy"
+  conflictsWith:
+    $ref: "urn:work:common:1#/$defs/conflictsWith"
+  blockers:
+    $ref: "urn:work:common:1#/$defs/blockers"
+  change:
+    $ref: "urn:work:common:1#/$defs/change"
+  extensions:
+    $ref: "urn:work:common:1#/$defs/extensions"
+allOf:
+  - $ref: "urn:work:common:1#/$defs/leafIdentity"
+  - $ref: "urn:work:common:1#/$defs/authoredClaimMustSayWhy"

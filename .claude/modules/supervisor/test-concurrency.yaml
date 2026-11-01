@@ -1,0 +1,3 @@
+sampleMs: 500
+minimumReserveGiB: 4
+reserveRamPct: 10

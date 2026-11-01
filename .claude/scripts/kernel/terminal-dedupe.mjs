@@ -1,0 +1,179 @@
+// terminal-dedupe.mjs — close the StarCi terminals Orca restored that no ledger owns.
+//
+// After the 2026-09-24 reboot Orca 1.4.209 restored its previous tabs: four
+// old Claude kernel sessions of a product with their conversation history (idle
+// prompts, one still showing the old AUTH kernel's last message) and six bare
+// PowerShell tabs (old op tabs). The watchdogs found the ledger's kernel
+// terminals gone and started eight new kernels, so every workflow had two
+// kernel sessions, and a restored one would have acted as a duplicate kernel
+// the moment anything woke it. The supervisor closed ten terminals by hand.
+//
+// A terminal is closed only when ALL of these hold:
+//   - it sits in a worktree of one of the resumed repos (the repo or one of
+//     its `git worktree list` paths);
+//   - no ledger binds it: not a kernel signal terminal, not the worker_id of a
+//     running kernel job, not the worker of a running/answering job;
+//   - it is not the caller's own terminal (ORCA_TERMINAL_HANDLE);
+//   - its repo has no launch in flight (a kernel signal still 'starting' or a
+//     leased job: a terminal being created is unbound for a moment);
+//   - and it is either a bare shell prompt (the agent exited:
+//     terminal-liveness.mjs exitedAgentPromptRow) or an agent session carrying
+//     a StarCi marker: a [Kernel]/[Op] tab or pane title, "kernel" in its
+//     title, an op-<kind>-<hex> job id.
+// An agent session with no StarCi marker is the owner's own and is never
+// touched; an unreadable frame is left alone. Explicit supported provider metadata
+// permits its CLI's quit input; the existing tab-close owner still decides closure.
+import fs from 'node:fs';
+import path from 'node:path';
+import { terminalList } from '../api/orca/terminal-list.mjs';
+import { worktreeListQuery } from '../api/git/worktree-list-query.mjs';
+import { terminalRead } from '../api/orca/terminal-read.mjs';
+import { exitedAgentPromptRow } from '../lib/terminal-liveness.mjs';
+import { quitAgent, agentOfTerminal } from './quit-agent.mjs';
+import { closeOperationTerminal } from './close-op-terminal.mjs';
+import { withLedgerRead } from '../connectors/lib.mjs';
+import { kernelSignalRows, ledgerJobs, jobTerminalHandles, pathUnder, WORKER_HOLDING_STATUSES } from '../machine/terminal-ledger.mjs';
+
+// A StarCi title or frame: [Kernel]/[Op] names, an operation job id
+// (op-backend.implement-ed43628b07).
+export const STARCI_MARKER = /\[(?:Kernel|Op)\]|\bop-[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+-[0-9a-f]{6,}\b/i;
+// "kernel" counts in a title only: a Claude kernel's pane title reads
+// "✳ Acme app auth kernel workflow"; a frame may mention the word anywhere.
+const KERNEL_TITLE = /\bkernel\b/i;
+
+/** handle -> tab title, from a `terminal list --include-visual-layouts` visualLayouts array. */
+export function tabTitlesOf(visualLayouts, terminals = []) {
+  const byTab = new Map();
+  const walk = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (typeof node.tabId === 'string' && 'panes' in node && typeof node.title === 'string') byTab.set(node.tabId, node.title);
+    for (const value of Object.values(node)) if (value && typeof value === 'object') walk(value);
+  };
+  walk(visualLayouts);
+  return new Map(terminals.filter((t) => t?.handle).map((t) => [t.handle, byTab.get(t.tabId) ?? null]));
+}
+
+/**
+ * One unbound terminal's verdict: {action:'close'|'keep', kind, reason, marker?}.
+ * `titles` are the tab and pane titles; `screen` the frame (null when unreadable).
+ */
+function classifyStrayTerminal({ titles = [], screen }) {
+  if (screen == null) return { action: 'keep', kind: null, reason: 'unreadable' };
+  const shellPrompt = exitedAgentPromptRow(screen);
+  if (shellPrompt) return { action: 'close', kind: 'shell', reason: 'bare-shell', shellPrompt };
+  const titleText = titles.filter(Boolean).join(' | ');
+  const marker = STARCI_MARKER.exec(titleText)?.[0] ?? (KERNEL_TITLE.test(titleText) ? 'kernel' : null)
+    ?? STARCI_MARKER.exec(String(screen).split(/\r?\n/).slice(-60).join('\n'))?.[0] ?? null;
+  if (marker) return { action: 'close', kind: 'agent', reason: 'starci-agent-session', marker };
+  return { action: 'keep', kind: 'agent', reason: 'no-starci-marker' };
+}
+
+/** The handles a ledger binds, and whether a launch is in flight there. Read-only. */
+function ledgerBindings(repo, { now = Date.now() } = {}) {
+  return withLedgerRead(repo, (db) => {
+    const bound = new Set();
+    let busy = null;
+    for (const s of kernelSignalRows(db)) {
+      if (s.value.terminal) bound.add(s.value.terminal);
+      if (!s.value.terminal && (s.expiresAt == null || s.expiresAt > now)) busy = busy ?? `kernel of ${s.key} is starting`;
+    }
+    for (const j of ledgerJobs(db)) {
+      if (j.status === 'leased') busy = busy ?? `job ${j.job_id} is being dispatched`;
+      if (!WORKER_HOLDING_STATUSES.includes(j.status)) continue;
+      for (const h of jobTerminalHandles(j, j.payload)) bound.add(h);
+    }
+    return { bound, busy };
+  }, { bound: new Set(), busy: 'ledger unreadable' });
+}
+
+/** The repo and its linked worktrees (`git worktree list --porcelain`), best effort. */
+export function worktreesOf(repo, { run = worktreeListQuery } = {}) {
+  const paths = new Set([path.resolve(repo)]);
+  try {
+    const r = run(['--porcelain'], { dir: repo, timeout: 20_000 });
+    if (r.status === 0) for (const line of String(r.stdout ?? '').split(/\r?\n/)) if (line.startsWith('worktree ')) paths.add(path.resolve(line.slice(9).trim()));
+  } catch { /* the repo alone */ }
+  return [...paths];
+}
+
+/**
+ * The dedupe plan over one listing. `scopes`: [{repo, worktrees, bound:Set, busy}].
+ * Returns {close:[entry], keep:[entry], deferred:[entry]}; each entry names
+ * {handle, repo, tabTitle, paneTitle, agent, kind?, reason, marker?}.
+ */
+function planTerminalDedupe({ terminals = [], tabTitles = new Map(), scopes = [], protectedHandles = new Set(), readScreen }) {
+  const plan = { close: [], keep: [], deferred: [] };
+  const boundAnywhere = new Set(scopes.flatMap((s) => [...(s.bound ?? [])]));
+  for (const t of terminals) {
+    if (!t?.handle || t.connected === false) continue;
+    const scope = scopes.find((s) => (s.worktrees ?? [s.repo]).some((w) => pathUnder(t.worktreePath ?? t.cwd, w)));
+    if (!scope) continue;
+    const entry = { handle: t.handle, repo: scope.repo, tabTitle: tabTitles.get(t.handle) ?? null, paneTitle: t.title ?? null, agent: t.agentIdentity ?? null };
+    if (boundAnywhere.has(t.handle)) continue;
+    if (protectedHandles.has(t.handle)) { plan.keep.push({ ...entry, reason: 'caller-terminal' }); continue; }
+    if (scope.busy) { plan.deferred.push({ ...entry, reason: scope.busy }); continue; }
+    let screen = null;
+    try { screen = readScreen(t.handle); } catch { screen = null; }
+    const verdict = classifyStrayTerminal({ titles: [entry.tabTitle, entry.paneTitle], screen });
+    (verdict.action === 'close' ? plan.close : plan.keep).push({ ...entry, ...verdict });
+  }
+  return plan;
+}
+
+/**
+ * Close one planned stray terminal (quit input for an agent session, then the tab close) and return {row, ok}.
+ * In dryRun nothing is closed and the row only marks wouldClose.
+ */
+function closePlannedEntry(terminals, entry, { dryRun, quit, close }) {
+  if (dryRun) return { row: { ...entry, wouldClose: true }, ok: true };
+  let quitResult = null;
+  if (entry.kind === 'agent') {
+    try { quitResult = quit({ handle: entry.handle, agent: agentOfTerminal(terminals.find((t) => t?.handle === entry.handle) ?? entry) }); }
+    catch (error) { quitResult = { error: String(error?.message ?? error) }; }
+  }
+  let closed;
+  try { closed = close(entry.handle); } catch (error) { closed = { ok: false, error: String(error?.message ?? error) }; }
+  // An agent that quit on its own may have taken its terminal with it: a refused close of a gone terminal is still closed.
+  const ok = closed?.ok === true || quitResult?.exited === true;
+  return { ok, row: { ...entry, ok, ...(quitResult ? { quit: quitResult } : {}), ...(closed?.tab ? { tab: closed.tab } : {}),
+    ...(closed?.ok ? {} : { error: String(closed?.error ?? 'close refused') }) } };
+}
+
+function applyTerminalDedupe({ repos, env, listed, read, quit, close, bindings, worktrees, dryRun, result }) {
+  const terminals = listed.terminals ?? [];
+  result.listed = terminals.length;
+  const scopes = repos.filter((repo) => fs.existsSync(repo)).map((repo) => ({ repo, worktrees: worktrees(repo), ...bindings(repo) }));
+  const plan = planTerminalDedupe({ terminals, tabTitles: tabTitlesOf(listed.visualLayouts ?? [], terminals), scopes,
+    protectedHandles: new Set([env.ORCA_TERMINAL_HANDLE].filter(Boolean)), readScreen: read });
+  result.kept = plan.keep;
+  result.deferred = plan.deferred;
+  for (const entry of plan.close) {
+    const { row, ok } = closePlannedEntry(terminals, entry, { dryRun, quit, close });
+    if (!ok) result.ok = false;
+    result.closed.push(row);
+  }
+}
+
+/**
+ * List Orca's terminals, plan, and (unless dryRun) close every stray: an agent
+ * session gets quit input only for explicit supported metadata, then the existing tab close. Never throws.
+ * Returns {ok, dryRun, listed, closed:[...], kept:[...], deferred:[...], skipped?, error?}.
+ */
+export function dedupeTerminals({ repos = [], dryRun = false, env = process.env, deps = {} } = {}) {
+  const list = deps.list ?? (() => terminalList({ includeVisualLayouts: true }));
+  const read = deps.read ?? ((handle) => { const r = terminalRead({ terminal: handle, screen: true }); return r?.ok ? String(r.screen ?? '') : null; });
+  const quit = deps.quit ?? quitAgent;
+  const close = deps.close ?? ((handle) => closeOperationTerminal(handle));
+  const bindings = deps.bindings ?? ledgerBindings;
+  const worktrees = deps.worktrees ?? worktreesOf;
+  const result = { ok: true, dryRun, listed: 0, closed: [], kept: [], deferred: [] };
+  try {
+    const listed = list();
+    if (!listed?.ok) return { ...result, ok: false, skipped: listed?.hostUnavailable ? 'orca-unavailable' : 'terminal-list-failed', error: listed?.error ?? null };
+    applyTerminalDedupe({ repos, env, listed, read, quit, close, bindings, worktrees, dryRun, result });
+  } catch (error) {
+    return { ...result, ok: false, error: String(error?.message ?? error) };
+  }
+  return result;
+}

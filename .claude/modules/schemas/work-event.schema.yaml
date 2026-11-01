@@ -1,0 +1,117 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:work:event:1
+type: object
+additionalProperties: false
+description: "One fire-and-forget signal the product raises, named once so that every consumer subscribes to
+  the same thing. It is a family of its own rather than a `work/contract@1` with a note, because a
+  request/response surface and a broadcast fail in different ways: a contract's consumer learns
+  immediately that the provider refused, while an event's consumer learns nothing at all, so the delivery
+  guarantee and the ordering are part of what is promised and are written on the record."
+required:
+  - producer
+  - payload
+  - delivery
+properties:
+  schema:
+    const: work/event@1
+    $ref: "urn:work:common:1#/$defs/familyDiscriminator"
+  id:
+    type: string
+    pattern: ^event(?:\.[a-z0-9]+(?:-[a-z0-9]+)*){2,}$
+    description: "The event's stable id, a lowercase dot-path under the event family: event.<feature>.<name>;
+      example event.login.signed-in. A consumer names this string in its own `subscribes`, so the id is the
+      whole of the coupling between the two sides."
+  title:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: What happened, in the past tense and in the product's own words. An event is a statement
+      about something that already occurred, and a title written as an instruction is describing a command.
+  state:
+    $ref: "urn:work:common:1#/$defs/state"
+  activity:
+    $ref: "urn:work:common:1#/$defs/activity"
+  producer:
+    $ref: "urn:work:common:1#/$defs/recordId"
+    description: The record whose flow raises this event, by id - usually the functional requirement that
+      performs the action. It is required because an event nobody raises is a name, and naming the producer
+      is what lets a reader follow the signal back to the behaviour that emits it.
+  payload:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    description: The fields a subscriber receives, one entry each. At least one is required because an
+      event with no payload tells a consumer that something happened without telling it what to, which
+      forces every consumer to go and ask - which is the coupling the event was meant to avoid.
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - type
+      properties:
+        name:
+          $ref: "urn:work:common:1#/$defs/fieldName"
+          description: The field's name as a subscriber reads it. It is the wire name, so renaming it is a
+            breaking change to every consumer and the record's own `change.kind` must say so.
+        type:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: The field's type in the product's vocabulary - text, timestamp, integer. It is
+            deliberately not a language type, because the same event crosses services written in different
+            ones and a type nobody outside one runtime can read is not a shared promise.
+        note:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: What a consumer must understand about this field beyond its type - that it is stable
+            per device, that it is unique per sign-in. It is where the meaning that a name and a type cannot
+            carry is written down once instead of rediscovered per consumer.
+  delivery:
+    type: object
+    additionalProperties: false
+    required:
+      - guarantee
+      - ordering
+    description: What the transport promises. Both halves are required because a consumer that assumes
+      exactly-once when the bus is at-least-once writes a duplicate, and one that assumes ordering when
+      there is none reorders a lifecycle - neither is visible in the payload.
+    properties:
+      guarantee:
+        enum:
+          - at-least-once
+          - at-most-once
+          - exactly-once
+        description: How many times a subscriber may see one raised event. The set is closed because these
+          three are the only honest answers, and a fourth word would be one of them with the consequence
+          left out.
+      ordering:
+        enum:
+          - none
+          - per-key
+          - total
+        description: Whether two events arrive in the order they were raised, and if so within what. `none`
+          is a real answer and is stated rather than omitted, because a consumer reading no ordering field
+          assumes the ordering it needs.
+  subscribes:
+    $ref: "urn:work:common:1#/$defs/subscribes"
+  refs:
+    $ref: "urn:work:common:1#/$defs/refs"
+  dependsOn:
+    $ref: "urn:work:common:1#/$defs/dependsOn"
+  blockedBy:
+    $ref: "urn:work:common:1#/$defs/blockedBy"
+  conflictsWith:
+    $ref: "urn:work:common:1#/$defs/conflictsWith"
+  blockers:
+    $ref: "urn:work:common:1#/$defs/blockers"
+  requiresProof:
+    $ref: "urn:work:common:1#/$defs/requiresProof"
+  provenBy:
+    $ref: "urn:work:common:1#/$defs/provenBy"
+  verificationSource:
+    $ref: "urn:work:common:1#/$defs/verificationSource"
+  because:
+    $ref: "urn:work:common:1#/$defs/because"
+  change:
+    $ref: "urn:work:common:1#/$defs/change"
+  extensions:
+    $ref: "urn:work:common:1#/$defs/extensions"
+allOf:
+  - $ref: "urn:work:common:1#/$defs/leafIdentity"
+  - $ref: "urn:work:common:1#/$defs/authoredClaimMustSayWhy"

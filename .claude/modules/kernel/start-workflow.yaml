@@ -1,0 +1,269 @@
+schema: starci/module-kernel-start@1
+id: kernel.start-workflow
+
+# ============================================================================
+# START-WORKFLOW <goal-id> — claims a queued goal from the ledger inbox and
+# spawns ONE long-lived [Kernel] agent bound to that workflow_id. The kernel
+# then runs modules/kernel/driver-loop.yaml until the workflow finishes. On
+# finish the queue entry is consumed and the workflow closes; a finished
+# goal never re-enters the queue.
+# ============================================================================
+
+about:
+  en: >-
+    Complement of goal.define. define-goal queues; start-workflow claims and
+    launches. The spawned kernel receives only {workflow_id, goal_revision} —
+    everything else it re-reads from the ledger. Kernel death → re-run
+    start-workflow with the same goal id spawns a REPLACEMENT kernel
+    (kernel attempt+1, same workflow generation), never a duplicate. Durable
+    plan/jobs/events survive agent churn.
+
+watchdog:
+  executable: scripts/kernel/kernel-watchdog.mjs
+  cadence: modules/models/runtimes.yaml allocation.watchdogCadenceMs
+  resume: >-
+    The reconciler Host controller (concern host.kernel-seat) runs the --repair pass for every running,
+    unarchived workflow of the managed ledgers (scripts/kernel/managed-repos.mjs), also after a host
+    reboot once Orca answers; it replaces a dead Kernel through start-workflow. A kernel handle a running
+    Orca answers terminal_handle_stale for is gone, so nothing is closed and no incident is opened for it.
+    The reconciler is the only loop that keeps a Kernel seat and resumes workflows.
+  boundary: >-
+    It never plans, enqueues, routes, dispatches, settles a verdict or finishes
+    a workflow. It reads canonical status/survey and the attested Kernel
+    terminal. A turn-idle Kernel with an actionable frontier receives a
+    continuation wake; exact death proof re-enters start-workflow for the same
+    approved goal. Its only op transitions are the api's own recoveries: a dead
+    worker through `starci kernel reconcile --dead-worker --settle-failed` and a held
+    worker through `starci kernel reconcile --release-worker` - the Job controller's
+    reconciles while it is active (the watchdog's run yields, reconciler-owned).
+    It also runs the ledger's quota-circuit probe and the host footprint scan
+    (scripts/kernel/kernel-watchdog.mjs header; the footprint scan is the Host
+    controller's while it is active). A loop always runs --repair. It owns the
+    waiting cadence: the
+    Kernel yields when no durable transition is immediately executable and
+    never keeps a model turn alive with sleep or an internal polling loop.
+
+actor: >-
+  launcher — a human Codex, Claude or Devin chat surface
+  (codex-chat | claude-chat | devin-chat). The launcher is ingress only; it
+  does not become the workflow's execution host or Kernel agent.
+host: orca
+executable: scripts/kernel/start-workflow.mjs
+
+hostStartup:
+  executable: scripts/kernel/workflow-startup.mjs
+  rule: >-
+    A current persisted owner-approved goal in queued or running phase precedes host or maintenance effects.
+    The shared reconciler startup checks the configured public harness and required host services without
+    Kernel watchdog recursion. A cold harness UI installs its real local toolchain through the native npm ci
+    call owner under the shared host lock before build; this runtime-owned bootstrap supports non-Git
+    installed runtimes without changing product npmCi custody. debug true ensures the native maintenance seat on its declared caller route,
+    independent of the Kernel agent override. A refusal or unknown effect prevents the inbox claim.
+    Each new Kernel launch installs its exact owned workflow tree through the native npmCi owner before
+    worker creation, then rereads the current accepted goal immediately before launch. A changed identity,
+    revision, approval or phase refuses that launch and releases its unused reservation while retaining the
+    installation receipt and tree. Installation failure retains the tree. An already-live Kernel is neither reinstalled nor duplicated.
+    Final seat publication rechecks the original accepted identity, goal revision, workflow generation and
+    startable phase together with the exact unexpired starting token and launcher holder under the ledger
+    write transaction. A changed authority publishes no running job or boot/revision acknowledgement.
+    The newly spawned exact worker is closed through the existing verified worker-closure owner. Unknown
+    cleanup retains original dispatch and admission custody; it never overwrites a newer singleton and
+    instead records the unresolved custody as a failure and open runtime incident. After workflow retirement,
+    the machine records the exact dispatch, admission and cleanup evidence in a Supervisor event and unresolved
+    custody Decision Item without writing the archived product. A refused machine write remains visible and
+    never releases provider capacity or proves worker closure.
+  receipt: >-
+    Boot and already-live results retain startup authority, host and maintenance receipts; a new launch
+    retains its actual workflow installation receipt. Running proves launch, not product completion.
+
+usage: start-workflow.mjs --repo <path> --goal <workflow_id> [--agent <name>] [--launched-by watchdog|supervisor]
+# --repo is the project repository that owns .starciwork/runtime.sqlite, not Source
+# without --goal: claims the oldest pending inbox goal
+# --agent pins an explicit Kernel agent override (routedBy: override)
+# --launched-by names who ran the launch (default supervisor; watchdog --repair passes watchdog)
+
+launchAuthority: >-
+  A replacement prompt opens with the rule (resume now as Kernel attempt N, ask no one to confirm), then
+  the owner approval (goal revision and identity, first boot time), the launcher and the previous
+  attempt's terminal and death reason, and the proof: starci kernel status kernel.attempt, kernel.launchedBy and
+  kernel.you (scripts/kernel/start-workflow.mjs launchAuthorityText). Every Kernel wake ends with the
+  seat's attempt (scripts/kernel/wake-delivery.mjs wakeIdentity), checked the same way.
+
+claim:
+  transaction: >-
+    UPDATE inbox SET status='claimed' WHERE workflow_id=<goal> AND status='pending'
+    inside BEGIN IMMEDIATE — two starts never claim the same goal.
+  onDeadKernel: >-
+    inbox 'claimed' with no signal, an expired startup reservation, or a signal
+    whose Dispatch worker-show reports ended (stopped, failed, exited, released,
+    abandoned) → the old Dispatch is stopped and released, the stale binding
+    cleared, and a replacement kernel starts for the same workflow (kernel
+    attempt+1; workflow generation is unchanged).
+  onSeatWithoutWorker: >-
+    A seat naming a terminal without a Dispatch retains the singleton. Start refuses with
+    kernel-terminal-unverified until the exact worker identity and definitive
+    closure are reconciled; that seat's missing Dispatch alone never authorizes replacement.
+  onUnsettledLaunch: >-
+    A partial or unknown launch effect keeps an identity-bound launch-unknown signal and provider reservation.
+    A later boot closes the exact recorded Dispatch and terminal through scripts/machine/worker-close.mjs,
+    releases the original provider fence, then clears only its unchanged signal and accepted-goal transaction.
+    Missing identity, incomplete closure or release, changed authority and retired workflows retain custody.
+    A request-only unknown launch remains held; elapsed time never proves no effect. The one exception has no terminal
+    and no Dispatch: its recorded run-create failure carries a typed Orca refusal named in modules/host/orca/calls.yaml
+    envelope.preEffectCodes, request-show answers absent for that run-create request id (stored on the signal as
+    hostRequestId, else derived from the attempt), and no Kernel Run of the workflow was created since the admission
+    (run-list). Then the provider reservation is released as failed-before-launch and the signal is cleared; any other
+    answer keeps the launch held with its precise reason.
+  senderTerminal: >-
+    A Kernel launch is the worker of an entry Run whose coordinator is the launching terminal, so start refuses with
+    step workflow-sender-terminal-missing, before any host startup effect, when ORCA_TERMINAL_HANDLE is not set. --plan
+    reports the sender. Only the unattended watchdog launch (--launched-by watchdog, run by the Host controller outside
+    any terminal) stands in a runtime-owned terminal: a plain terminal of the runtime's own worktree (the entry Run's
+    current coordinator when it is one), else the live Supervisor seat. A foreign terminal never coordinates a Run; with
+    none open the watchdog answers restart-blocked and the Host controller retries once per seats.kernel.blockedRetryMs.
+  onHostOutage: >-
+    Orca not answering - runtime_unavailable, orca.exe ENOENT while an update
+    replaces it, a timed-out call - says nothing about any terminal. It is
+    host-unavailable: start-workflow refuses (step host-unavailable, exit 75)
+    before touching the signal, the job or any terminal, and the watchdog waits
+    with backoff, re-probes once Orca answers and confirms a death with a
+    second probe before it asks for a replacement (2026-09-24 Orca
+    auto-update: six kernel seats lost, one kernel duplicated).
+  onLostSeat: >-
+    A kernel job whose own Dispatch (payload.managed.dispatchId) worker-show
+    reports live while its signal is gone (a restart that failed mid-outage) is
+    never replaced: start-workflow refuses (step kernel-worker-alive, exit 3)
+    and the watchdog reads that as already-live. No terminal is ever adopted.
+  onFinished: >-
+    workflows.phase='finished' or workflows.archived_at refuses a new kernel —
+    a completed or archived goal is gone from the queue for good.
+
+spawn:
+  title: '[Kernel] <workflow_id>'
+  routing: >-
+    Orca is always the execution host. The Kernel takes the members of the `high` tier of modules/models/tiers.yaml
+    (scripts/agent/tiers.mjs tierMembers, seats.kernel) as one ordered chain; config.yaml kernel.agent / kernel.model or
+    the --agent launcher override pin it as the bias `only` over that chain and keep the tier's model of that agent. A pin
+    is an explicit Kernel identity and fails closed when unavailable; it is never silently replaced by Devin or another
+    agent, and a pin naming no member of the tier is refused (kernel-pin-unavailable). The members are admitted by
+    modules/models/selection.yaml newAgentAdmission through scripts/agent/admission.mjs, whose common picker
+    (scripts/lib/tier-pick.mjs) applies the hard filter, the owner bias, the balance step and the token step, and prints
+    its pick record in --plan. Operation jobs resolve their own tier.
+  fallThrough:
+    rule: >-
+      A group boot selects among its admitted members within one boot and one
+      startup reservation. A member whose start
+      left no effect (effectState none: worker-start refused before a Dispatch
+      existed, or its Dispatch was proven ended and released) is recorded as one
+      kernel-start-failed event (fellThroughTo names the next member) and the next
+      admitted member launches with its own fenced provider reservation. A start with partial or unknown effect never falls through,
+      so a boot never leaves a worker beside a new kernel. The last member's
+      refusal, a single pin and an --agent override end the boot as before.
+      Success records kernel-booted/kernel-restarted with fellThrough and the
+      attested provider reservation receipt. Existing live workers keep their admission.
+  launch: >-
+    Every Kernel is an Orca worker (modules/kernel/start-workflow.yaml;
+    scripts/agent/lib.mjs startAgent). The launching terminal (ORCA_TERMINAL_HANDLE:
+    the owner's chat, the Supervisor, the watchdog run) creates the Kernel's entry
+    Run ("[Kernel] <Workflow> — <workflow_id>", that terminal its coordinator) and
+    files the Kernel Task whose spec is the kernel prompt; scripts/agent/prompt-file.mjs
+    owns the terminal bound, file placement and cleanup;
+    worker-start --agent <agent> [--model <id> --effort <level>] starts it on the
+    workflow's repository. A restart reuses the entry Run while Orca still knows it
+    and accepts the new Task, else creates a fresh one. worker-start blocks until
+    the agent is ready; the startup reservation is stretched past its timeout first.
+    The seat records {terminal, dispatch, runId} and the kernel job payload.managed
+    {runId, taskId, dispatchId, agentTerminalHandle}. The Kernel's own workflow Run
+    is created later from its own terminal (cli.mjs ensureWorkflowRun).
+  command: >-
+    No caller composes a Kernel command: Orca launches the agent with the owner's
+    per-agent default args (agentDefaultArgs), and the runtime passes only
+    --agent, --model and --effort. A card with start.modelArgument false (devin)
+    takes no model flag and starts on its CLI default.
+  prompt: >-
+    kernel packet: rendered from modules/kernel/kernel-prompt.md (contract
+    data — the template lives in modules/, not scripts/): resolved Source
+    host, project binding, BE/FE roots, ledger and
+    absolute API path + {workflow_id, goal_revision} + mandatory load order —
+    Source CONTEXT.md → modules/kernel/{driver-loop,api,dispatch,verdict-contract}.yaml →
+    read goal from .starciwork/runtime.sqlite → run the loop. Every state
+    mutation goes through starci kernel <cmd>
+    (the verb surface is modules/kernel/api.yaml `commands` — that file is the
+    only list, and two of its verbs are worker-side op IPC) — never
+    direct sqlite writes, never self-spawned op workers, never direct
+    orca/git/agent-CLI calls (report/contract/check truth is the ledger
+    rows via the api verbs); `starci kernel route` persists the model decision before
+    every dispatch; dispatch goes through starci kernel dispatch; findings/plans
+    persist via starci kernel plan|incident before dispatch (driver-loop.yaml boundary).
+  attestation: >-
+    worker-start --spec (ready; the agent terminal from its receipt, else worker-show) →
+    terminal rename "[Kernel] <Workflow>" → worker-show: the worker's EFFECTIVE
+    agent and model must equal the route (a card that takes no model flag is
+    attested on its agent alone). A mismatch fails with step=attestation, the
+    Dispatch is stopped and released, the startup reservation cleared, and the
+    Kernel job is never recorded as running.
+
+# ============================================================================
+# The Orca tree (Run -> Task -> terminal) beside the ledger hierarchy. The
+# ledger is the relationship source; this is the rule that keeps what Orca
+# renders equal to it, continuously and not only at creation. Cited by
+# modules/kernel/dispatch.yaml and modules/kernel/api.yaml; stated here once.
+# ============================================================================
+orcaTree:
+  rule: >-
+    A workflow has exactly one live kernel terminal; its Orca Run is created
+    once and survives kernel restarts; every operation Task is created in that
+    Run - the Run that kernel terminal created and coordinates (the nested Run rule, modules/host/orca/calls.yaml
+    worker-start --spec: no --parent) - with the CURRENT kernel terminal as `from`; a job that
+    ends (settle, reject, finish) leaves no live terminal, worker or open Task;
+    a kernel restart closes the previous kernel terminal before the new one is
+    recorded.
+  enforcedBy:
+    - scripts/kernel/start-workflow.mjs — the restart merges the new seat over the previous kernel payload, so orca.runId and hierarchy.runtime.runId survive, and terminal-closes the previous kernel terminal before the replacement is recorded; a refused close is a kernel-stale-terminal-unclosed event plus an open incident.
+    - scripts/kernel/cli.mjs — ensureWorkflowRun creates the Run once per workflow; the `worker-start --spec` of starci kernel dispatch passes the current kernel terminal as `from`; rejectDispatch closes the terminal or worker the refused attempt created and records terminalClosed; an op settles its own Dispatch and Task with worker_done after starci kernel report, and settle only releases the worker (worker-stop first only for a Dispatch that did not settle itself); finish closes the kernel terminal.
+    - modules/host/orca/calls.yaml — the typed calls those steps issue (terminal-close, worker-start --spec --from, worker-show, worker-stop, worker-release).
+  titles:
+    kernelTerminal: '[Kernel] <workflow_id>'
+    managedOperationTerminal: '[Op] <op>'
+    operationTask: '{displayName: [Op] <op>, taskTitle: <op> #<attempt>}'
+    note: >-
+      A worker-start op's terminal is renamed to managedOperationTerminal once
+      its assignee is attested.
+  check:
+    executable: scripts/checks/check-orca-tree.mjs
+    usage: check-orca-tree.mjs --repo <ledger owner> (--terminals <terminal-list --json receipt> | --live) [--json]
+    findings:
+      DUPLICATE_KERNEL: a workflow with more than one live kernel terminal, or a kernel signal terminal that is not the kernel job's worker_id
+      ORPHAN_TERMINAL: a live StarCi terminal bound to no running/answering job and not the kernel signal of a non-finished workflow
+      DEAD_KERNEL: a non-finished workflow whose signal terminal is not in the listing
+      TASK_OUTSIDE_RUN: a job holding an open Task in a Run that is not the workflow's current Run
+    exit: 0 clean, 1 findings, 2 usage
+    scope: >-
+      Only StarCi's own terminals — a handle the ledger names, or a title the
+      kernel wrote. An owner's own terminals are never findings.
+    notInNpmCheck: >-
+      It reads a ledger, which `starci runtime check` does not have. It runs against a
+      project's .starciwork, and scripts/supervisor/poll.mjs prints the same
+      findings every cycle.
+
+records:
+  jobs_row: {kind: 'kernel', workflow_id, status: 'running', worker_id: <terminal handle>, payload: {route: {host: orca, agent, model}, hierarchy: {schema: starci/agent-hierarchy@1, nodeId: 'agent:kernel:<workflow_id>', parentNodeId: 'workflow:<workflow_id>', role: kernel, runtime: {host: orca, agent, provider, model, profile, runtimePool, terminalHandle}}}}
+  signals_row: {scope: 'kernel', key: workflow_id, token, value: {terminal: <terminal handle>, modelAttested: true}}
+
+rules:
+  - 'one kernel per workflow — signals singleton enforces it'
+  - 'startup reserves the singleton with a bounded TTL before terminal creation'
+  - 'boot never calls orchestration run-create/worker-start; those are operation lifecycle APIs'
+  - 'prompt delivery is successful only after readiness, exact requested-model attestation and visible TUI activity'
+  - 'kernel outlives ops; ops are ephemeral, kernel is not'
+  - 'claim first, spawn second — never spawn for an unclaimed goal'
+  - 'workflow finish closes the goal: workflows.phase=finished, inbox closed (status done)'
+
+returns:
+  kernel_terminal: handle
+  workflow_id: bound
+  host: orca
+  agent: codex|claude|devin
+  model: concrete model id
+  model_attested: true
+  replaced: true|false

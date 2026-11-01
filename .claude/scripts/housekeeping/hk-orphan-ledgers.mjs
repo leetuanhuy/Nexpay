@@ -1,0 +1,193 @@
+// hk-orphan-ledgers.mjs — the housekeeping area `orphanledgers`: the ledger-hygiene finding the retention sweep
+// (hk-ledger.mjs, which only prunes debug logs and purges long-ended workflows of ledgers ALREADY known good) and
+// the `/start` preflight (scripts/reconciler/start.mjs ledgerFindings, which only catches a ledger FILE under a
+// temp-looking path or missing) do not catch in full (docs/ledger-db.md §1):
+//
+//   orphan ledgers   EVERY directory under <stateRoot>/projects/, not only the registered ones:
+//                      - registered (any state) and its directory is gone: 'registered-dir-missing'.
+//                      - registered, non-retired: every bound source root (machine.sqlite `repositories` rows for
+//                        it, falling back to the ledger's own `repo_root`) is under the OS temp dir, gone, or none
+//                        at all: 'source-roots-unreachable' / 'no-source-roots'.
+//                      - NOT registered at all (the machine.sqlite row is gone but the directory is not — exactly
+//                        unregistered ledger directories): the same two reasons, but the source roots come from
+//                        the orphaned runtime.sqlite's own workflows.source_roots_json (engine/db/ledger.mjs
+//                        inspectLedger, read-only), the only place left to ask once the registry has forgotten it.
+//                    A debug probe or throwaway repo that registered a ledger (or never even got that far) and
+//                    never cleaned it up. LEDGER_ORPHAN_STATE_ROOT is the Vietnamese-catalogued finding
+//                    (modules/kernel/failure-codes.yaml); --apply MOVES the ledger's whole directory (never
+//                    deletes) to <stateRoot>/archive/orphan-ledgers/<YYYYMMDD>/<ledgerId>/ and retires its row
+//                    through engine/db/machine.mjs setLedgerState when one exists — the one writer; nothing here
+//                    opens machine.sqlite for write itself.
+//
+//   starci runtime housekeeping --only orphanledgers [--apply] --json
+//   starci runtime ledger-hygiene [--apply] [--json]                  the standalone report
+import fs from 'node:fs';
+import path from 'node:path';
+import { inspectLedger, projectsRootFor } from '../../engine/db/ledger.mjs';
+import { isUnderTempDir, machineFileFor, readMachine, starciLocalRoot, withMachine } from '../../engine/db/machine.mjs';
+import { safeRemove } from '../api/fs/safe-remove.mjs';
+import { pathKey } from '../lib/path-key.mjs';
+import { artifactHoldReason } from '../machine/artifact-hold.mjs';
+
+export const ORPHAN_LEDGER_CODE = 'LEDGER_ORPHAN_STATE_ROOT';
+/** A registered (any state) ledger whose directory is gone entirely — registry drift, distinct from an unreachable source root. */
+const REGISTERED_DIR_MISSING_REASON = 'registered-dir-missing';
+
+const exists = (p) => { try { return fs.existsSync(p); } catch { return false; } };
+/** Case-insensitive, separator-normalized directory identity, for comparing a disk path against a DB-recorded one. */
+const dirKey = (p) => pathKey(p, { fold: true });
+/** YYYYMMDD, the same stamp scripts/housekeeping/blob-gc.mjs and scripts/work/purge-workflow.mjs archive folders use. */
+export const dateStamp = (now = Date.now()) => new Date(now).toISOString().slice(0, 10).replaceAll('-', '');
+
+
+/** The total bytes under `dir` (files only; missing/unreadable entries count as 0). Pure I/O, no seam needed in specs (tmp fixtures). */
+function dirBytes(dir) {
+  let total = 0;
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return 0; }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += dirBytes(full);
+    else { try { total += fs.statSync(full).size; } catch { /* vanished */ } }
+  }
+  return total;
+}
+
+/** Every source root a ledger is bound to: machine.sqlite `repositories` rows for it, falling back to its own `repo_root`. Deduped, non-empty. */
+export function sourceRootsOf(db, ledger) {
+  const rows = db.prepare('SELECT repo_root FROM repositories WHERE ledger_id=?').all(ledger.ledgerId).map((r) => r.repo_root);
+  return [...new Set([...rows, ledger.repoRoot].filter(Boolean))];
+}
+
+// The source roots one workflow row names: [] for an absent, unparsable or non-list column.
+const rootsOfRow = (row) => {
+  if (!row.source_roots_json) return [];
+  let parsed;
+  try { parsed = JSON.parse(row.source_roots_json); } catch { return []; }
+  return Array.isArray(parsed) ? parsed.filter((root) => typeof root === 'string' && root.trim()) : [];
+};
+
+/**
+ * The source roots an ORPHANED ledger directory's own runtime.sqlite still names — the only place left to ask once
+ * machine.sqlite no longer has a `ledgers` row for it at all (the registry forgot it, but the directory and its
+ * workflows did not). Reads every workflow's source_roots_json (engine/db/ledger.mjs inspectLedger, read-only) and
+ * unions them, deduped. A missing file, an unreadable/foreign-schema ledger, or workflows with no source roots at
+ * all yields []; never throws.
+ */
+function sourceRootsFromLedgerFile(file) {
+  if (!exists(file)) return [];
+  let handle;
+  try { handle = inspectLedger({ file }); } catch { return []; }
+  try {
+    const roots = new Set();
+    for (const row of handle.db.prepare('SELECT source_roots_json FROM workflows').all()) {
+      for (const root of rootsOfRow(row)) roots.add(root);
+    }
+    return [...roots];
+  } catch { return []; }
+  finally { try { handle.close(); } catch { /* closed */ } }
+}
+
+/**
+ * null | 'no-source-roots' | 'source-roots-unreachable' for a list of source roots. Pure given `unreachable`
+ * (a spec seam; production default is the real isUnderTempDir/fs.existsSync check against `env`).
+ */
+function orphanReason(roots, { env = process.env, unreachable = (root) => isUnderTempDir(root, { env }) || !exists(root) } = {}) {
+  if (!roots || roots.length === 0) return 'no-source-roots';
+  return roots.every((root) => unreachable(root)) ? 'source-roots-unreachable' : null;
+}
+
+function registeredLedgerFindings(machine, ledgers, env) {
+  const findings = [];
+  for (const ledger of ledgers) {
+    if (ledger.state === 'retired') continue;
+    const dir = path.dirname(ledger.file);
+    if (!exists(dir)) { findings.push({ code: ORPHAN_LEDGER_CODE, ledgerId: ledger.ledgerId, name: ledger.name, file: ledger.file, sourceRoots: [], reason: REGISTERED_DIR_MISSING_REASON, registered: true }); continue; }
+    const roots = sourceRootsOf(machine.db, ledger);
+    const reason = orphanReason(roots, { env });
+    if (reason) findings.push({ code: ORPHAN_LEDGER_CODE, ledgerId: ledger.ledgerId, name: ledger.name, file: ledger.file, sourceRoots: roots, reason, registered: true });
+  }
+  return findings;
+}
+
+function unregisteredLedgerFindings(projectsDir, knownDirs, env) {
+  let dirNames = [];
+  try { dirNames = fs.readdirSync(projectsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name); } catch { /* no projects/ yet */ }
+  const findings = [];
+  for (const name of dirNames) {
+    const dir = path.join(projectsDir, name);
+    if (knownDirs.has(dirKey(dir))) continue; // registered under some state already handled (or intentionally retired) above
+    const ledgerFile = path.join(dir, 'runtime.sqlite');
+    const roots = sourceRootsFromLedgerFile(ledgerFile);
+    const reason = orphanReason(roots, { env });
+    if (reason) findings.push({ code: ORPHAN_LEDGER_CODE, ledgerId: name, name: null, file: ledgerFile, sourceRoots: roots, reason, registered: false });
+  }
+  return findings;
+}
+
+/**
+ * Orphan findings over EVERY directory under <stateRoot>/projects/, registered or not (follow-up fix 2026-09-30: a
+ * ledger the registry no longer names at all — 6 of the incident's directories — was invisible to a registry-only
+ * scan). [{code, ledgerId, name, file, sourceRoots, reason, registered}]:
+ *   registered:true,  reason 'registered-dir-missing'      the ledger's directory is gone entirely (registry drift)
+ *   registered:true,  reason 'no-source-roots' | 'source-roots-unreachable'   sourceRootsOf (registry-based)
+ *   registered:false, reason 'no-source-roots' | 'source-roots-unreachable'   sourceRootsFromLedgerFile (the
+ *                     orphaned directory's own runtime.sqlite — nothing else still names it)
+ * A directory registered under ANY state (including retired) is never treated as unregistered.
+ */
+export function orphanLedgerFindings({ env = process.env, machineFile = null } = {}) {
+  const file = machineFile ?? machineFileFor(env);
+  // Everything that needs the open handle (listing ledgers, and each one's `repositories` rows) happens inside this
+  // one readMachine call; `registered` itself is plain data and outlives the (closed) handle for the directory walk below.
+  const { findings: registeredFindings, registered } = readMachine((m) => {
+    const list = m.listLedgers({ includeRetired: true });
+    return { findings: registeredLedgerFindings(m, list, env), registered: list };
+  }, { findings: [], registered: [] }, { file, env });
+
+  const knownDirs = new Set(registered.map((l) => dirKey(path.dirname(l.file))));
+  const projectsDir = projectsRootFor(env);
+  return [...registeredFindings, ...unregisteredLedgerFindings(projectsDir, knownDirs, env)];
+}
+
+/**
+ * Moves one orphan ledger's whole directory (never deletes) to <stateRoot>/archive/orphan-ledgers/<date>/<id>/,
+ * then retires its row (engine/db/machine.mjs setLedgerState — the one writer). Returns {moved:true, from, to}.
+ */
+function archiveOrphanLedger(finding, { env = process.env, now = Date.now() } = {}) {
+  const from = path.dirname(finding.file);
+  if (!exists(from)) throw new Error(`orphan ledger directory missing: ${from}`);
+  const to = path.join(starciLocalRoot(env), 'archive', 'orphan-ledgers', dateStamp(now), finding.ledgerId);
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  try { fs.renameSync(from, to); } catch (error) {
+    if (error?.code !== 'EXDEV') throw error;
+    // A cross-device move copies first; the source goes only after the copy is verified to hold the same top-level
+    // entries (moves, never deletes), and removal goes through safeRemove — the one runtime tree delete, which
+    // unlinks links and never descends into one.
+    fs.cpSync(from, to, { recursive: true });
+    const wanted = fs.readdirSync(from).sort();
+    const copied = fs.readdirSync(to).sort();
+    if (wanted.length !== copied.length || wanted.some((name, i) => name !== copied[i]))
+      throw new Error(`orphan ledger archive copy did not verify: ${to} holds [${copied.join(', ')}], expected [${wanted.join(', ')}]`);
+    const removed = safeRemove(from, { hold: artifactHoldReason });
+    if (!removed.ok) throw new Error(`orphan ledger source was not fully removed after a verified copy (${from}): ${removed.errors.map((e) => e.code + ' ' + e.message).join('; ')}`);
+  }
+  withMachine((m) => m.setLedgerState(finding.ledgerId, 'retired', { reason: `orphan ledger archived (${finding.reason})` }), { env });
+  return { moved: true, from, to };
+}
+
+/** The housekeeping sweep contract: sweep({apply, now, env, allocation}) -> {ok, movedBytes, moved, skipped, errors, report}. */
+export async function sweepOrphanLedgers({ apply = false, now = Date.now(), env = process.env } = {}) {
+  const out = { ok: true, movedBytes: 0, moved: [], skipped: [], errors: [], report: [] };
+  const findings = orphanLedgerFindings({ env });
+  for (const finding of findings) {
+    if (!apply) { out.report.push(finding); continue; }
+    const before = dirBytes(path.dirname(finding.file));
+    try {
+      const r = archiveOrphanLedger(finding, { env, now });
+      out.moved.push({ ...finding, ...r });
+      out.movedBytes += before;
+    } catch (error) { out.errors.push({ ledgerId: finding.ledgerId, error: String(error?.message ?? error) }); }
+  }
+  out.ok = out.errors.length === 0;
+  return out;
+}

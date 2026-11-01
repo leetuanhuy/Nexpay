@@ -1,0 +1,71 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:work:gap:1
+type: object
+additionalProperties: false
+description: "A known absence, written down once as a record instead of restated as prose in every place
+  that trips over it - an event nobody emits yet, a field no data record declares, a module that has not
+  been written under the stack the project is moving to. It exists so that `blockedBy` and `conflictsWith`
+  have something real to point at: a wait explained by a sentence goes out of date silently, while a wait
+  that names a gap id goes stale the moment that gap reaches done, which the gate can see."
+required:
+  - statement
+properties:
+  schema:
+    const: work/gap@1
+    $ref: "urn:work:common:1#/$defs/familyDiscriminator"
+  id:
+    type: string
+    pattern: ^gap(?:\.[a-z0-9]+(?:-[a-z0-9]+)*){2,}$
+    description: "The gap's stable id, a lowercase dot-path under the gap family: gap.<feature>.<name>;
+      example gap.audit.live-proof. The feature segment is part of the id because an absence is owned by
+      the feature that would close it, and two features missing the same kind of thing are missing two
+      different things."
+  title:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: The absence in one line, named as a fact about the world rather than as a task. A reader
+      who sees this id cited in a blocker learns from this line alone what is not there.
+  state:
+    $ref: "urn:work:common:1#/$defs/state"
+  activity:
+    $ref: "urn:work:common:1#/$defs/activity"
+  statement:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: What exactly is missing, specifically enough that somebody could tell whether it is still
+      missing. It is required because a gap whose statement is vague can never be honestly closed - every
+      reader would be entitled to a different opinion about whether the thing arrived.
+  closedBy:
+    oneOf:
+      - $ref: "urn:work:common:1#/$defs/recordId"
+      - type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "urn:work:common:1#/$defs/recordId"
+    description: "The records whose completion actually closes this gap. A bare string is accepted and read
+      as a one-element list, for the many gaps that only ever needed one closer. A gap reaches done only
+      once every id here is itself done: a statement that named two missing things is not honestly closed
+      by building one of them, and scripts/work/validate/check-example-work.mjs refuses the claim that it was."
+  verificationSource:
+    $ref: "urn:work:common:1#/$defs/verificationSource"
+  because:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: "Why no run proves this record, required whenever `verificationSource: authored-claim` is
+      what carries its done. A gap's closure is usually a derived fact about another record reaching done
+      rather than something with a command of its own, and this is where that is said out loud."
+  refs:
+    $ref: "urn:work:common:1#/$defs/refs"
+  dependsOn:
+    $ref: "urn:work:common:1#/$defs/dependsOn"
+  blockedBy:
+    $ref: "urn:work:common:1#/$defs/blockedBy"
+  conflictsWith:
+    $ref: "urn:work:common:1#/$defs/conflictsWith"
+  blockers:
+    $ref: "urn:work:common:1#/$defs/blockers"
+  change:
+    $ref: "urn:work:common:1#/$defs/change"
+  extensions:
+    $ref: "urn:work:common:1#/$defs/extensions"
+allOf:
+  - $ref: "urn:work:common:1#/$defs/leafIdentity"
+  - $ref: "urn:work:common:1#/$defs/authoredClaimMustSayWhy"

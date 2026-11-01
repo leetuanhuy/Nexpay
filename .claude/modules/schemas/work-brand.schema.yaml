@@ -1,0 +1,727 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:work:brand:1
+type: object
+additionalProperties: false
+description: "The product's brand, as one record at brand/index.yaml beside features/. At most one exists
+  per tree, and it is the only place colour tokens, typography, mascot, logo, iconography, imagery, voice,
+  motion and the product-wide don'ts are authored - every design operation reads it instead of restating
+  it. It is a decision rather than a discovery, so it is done only through a review that names who settled
+  which revision and on what authority. Frontend-facing records bind it implicitly by folding its digest
+  into their own, which is why the revision is a number other records cite rather than a copy of the tokens
+  they would then have to keep in step."
+required:
+  - schema
+  - id
+  - kind
+  - state
+  - rev
+  - brand
+properties:
+  schema:
+    const: work/brand@1
+    $ref: "urn:work:common:1#/$defs/familyDiscriminator"
+  id:
+    const: brand
+    description: The record's id, which is the word brand and nothing else. There is one brand per tree, so
+      it needs no feature segment and no name to tell it apart from a sibling it does not have.
+  kind:
+    const: brand
+    description: The node kind scripts/work/brand/brand.mjs resolves this record by. It is authored as well as
+      implied by the schema const because that check reads the kind before it reads anything else, and a
+      record it cannot recognise is one whose contrast and mascot rules never run.
+  state:
+    $ref: "urn:work:common:1#/$defs/state"
+  activity:
+    $ref: "urn:work:common:1#/$defs/activity"
+  rev:
+    type: integer
+    minimum: 1
+    description: The brand's revision. Every frontend-facing record cites this number rather than copying
+      the tokens, so a bump here suspends their completions in one edit instead of leaving each of them
+      quietly describing an older palette.
+  brand:
+    type: object
+    additionalProperties: false
+    minProperties: 1
+    description: "The specification itself. Its sub-blocks are the vocabulary work-layout.yaml names, and
+      each one is open inside: what a product has to say about its own typography or its own motion is the
+      product's business, and closing those would make this file the authority for decisions it does not
+      own. What is closed is the list of sub-blocks, so a tenth kind of brand rule cannot appear without
+      somebody deciding it is one."
+    properties:
+      identity:
+        $ref: "#/$defs/openBlock"
+        description: Who the product is - its name, the token family it draws from, and the owner rulings
+          the rest of this record implements, quoted rather than paraphrased so a later reader can see what
+          was actually said.
+      color:
+        type: object
+        $ref: "#/$defs/openBlock"
+        propertyNames:
+          $ref: "#/$defs/openKey"
+        description: The palette, as tokens traced to the files that define them rather than as hex values
+          invented here. A colour with no token behind it is a value every surface will redefine locally.
+          The block stays open; only policy.contrastExceptions, the one per-pair override the brand checks
+          honour, has a closed shape. The open objects here carry `type` and `propertyNames` beside their
+          `properties` so ajv strict mode compiles them (strictTypes cannot see a type through a $ref).
+        properties:
+          tokens:
+            type: array
+            items:
+              type: object
+              propertyNames:
+                $ref: "#/$defs/openKey"
+              properties:
+                valueSource:
+                  $ref: "#/$defs/valueSource"
+            description: The colour tokens. Each entry stays open except valueSource, the one field the brand
+              checks read to bind a token the app has not written yet.
+          policy:
+            type: object
+            propertyNames:
+              $ref: "#/$defs/openKey"
+            properties:
+              softMinContrast:
+                type: number
+                minimum: 1
+                description: The floor for a HeroUI status soft pair (a token with role success-soft,
+                  warning-soft, info-soft or danger-soft and its foreground) and for that soft foreground as
+                  a bare glyph on a declared surface. 3 when absent; policy.minContrast (4.5) still holds
+                  body and interactive text.
+              contrastExceptions:
+                type: array
+                minItems: 1
+                items:
+                  $ref: "#/$defs/contrastException"
+                description: The colour pairs the owner accepted below the contrast floor, one entry each.
+                  scripts/work/brand/brand.mjs contrast-aa passes a pair under its floor only through an entry
+                  here; every unlisted pair is still held to policy.minContrast, so the floor never drops to
+                  the lowest accepted ratio.
+      typography:
+        $ref: "#/$defs/openBlock"
+        description: The type the product uses, and honestly whether it is loaded - an intended typeface and
+          a shipped one are different facts and the block carries both.
+      mascot:
+        $ref: "#/$defs/openBlock"
+        description: The mascot, where it may appear and where it may never. The prohibition is the part
+          that matters - a mascot in a danger context undercuts the message the surface exists to carry.
+      logo:
+        $ref: "#/$defs/openBlock"
+        description: The logo and how it is used, including the honest answer when there is none and the
+          product name in plain text is the mark.
+      iconography:
+        $ref: "#/$defs/openBlock"
+        description: The icon set and what is forbidden, including the answer that no set has been chosen -
+          which is a decision a designer needs before inventing one.
+      imagery:
+        $ref: "#/$defs/openBlock"
+        description: How pictures are made and composed - the style, the prompt rules, what photography is
+          allowed, where the illustration sits on an auth screen.
+      voice:
+        $ref: "#/$defs/openBlock"
+        description: How the product talks, stated as a rule rather than as examples, so a new surface can
+          be written to it rather than by imitation.
+      motion:
+        $ref: "#/$defs/openBlock"
+        description: What moves and how, including the answer that nothing bespoke has been chosen and the
+          published component states stand.
+      artworkSlots:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/openBlock"
+        description: The named places brand artwork may sit, each with its master, its purpose and the
+          surfaces it belongs on. A screen naming a slot is saying where the bytes go rather than copying
+          them.
+      forbidden:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "urn:work:common:1#/$defs/prose"
+        description: The product-wide don'ts, one each. They are the half of a brand that a new surface
+          breaks first, and they are written as prohibitions rather than left to be inferred from the
+          permissions above.
+      limitations:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "urn:work:common:1#/$defs/prose"
+        description: What this record does not settle, named so that a designer knows which question is
+          still theirs rather than discovering it by guessing and being corrected.
+      grammar:
+        $ref: "#/$defs/openBlock"
+        description: The component library this brand is expressed through, pinned by version and by the
+          digests of the files that were actually inspected - so a library upgrade is a visible input change
+          rather than a silent restyle.
+      sources:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/openBlock"
+        description: The real files the tokens were traced from, each with its digest. It is what turns a
+          palette from an assertion into something a machine check can compare against the product.
+          A non-reference CSS entry carries path and optional repository; every such path resolves in that
+          repository. The family CSS comes from those entries or the installed grammar family export.
+          The runtime brand-consumable measure in modules/kernel/op-judges.yaml checks this at settle.
+      direction:
+        $ref: "#/$defs/direction"
+        description: "The product's composition taste - how its pages are arranged, which DNA recipes they use,
+          how a render is judged - written by brand.decide in its direction mode (param directionArchetype) and
+          accepted by the owner one archetype at a time. interface.draw reads it: an archetype under
+          `archetypes` whose status is `accepted` is ready to draw from; its rubric is `rubric.checks` and its
+          reference renders are `golden`. It never overrides knowledge/ui or the grammar DNA."
+  assets:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    description: The brand's own masters under brand/assets/**, each with the role it plays. Consumers refer
+      to this record and its declared path rather than duplicating the bytes.
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - path
+        - role
+      properties:
+        path:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: The file's path relative to this record's directory.
+        role:
+          $ref: "urn:work:common:1#/$defs/slug"
+          description: What the file is - a master, the prompt that produced it.
+        sha256:
+          $ref: "urn:work:common:1#/$defs/sha256"
+          description: The file's digest, so the record is a statement about specific bytes.
+  review:
+    $ref: "#/$defs/review"
+    description: The review that settled this revision, where the record carries it directly.
+  completion:
+    type: object
+    additionalProperties: false
+    required:
+      - review
+    description: The completion record for this revision, where the review is carried inside it rather than
+      at the top level. A brand is done only through a review, so this block and `review` are the two places
+      that review is found and a record carries one of them.
+    properties:
+      review:
+        $ref: "#/$defs/review"
+  refs:
+    $ref: "urn:work:common:1#/$defs/refs"
+  blockers:
+    $ref: "urn:work:common:1#/$defs/blockers"
+  verificationSource:
+    $ref: "urn:work:common:1#/$defs/verificationSource"
+  because:
+    $ref: "urn:work:common:1#/$defs/because"
+  change:
+    $ref: "urn:work:common:1#/$defs/change"
+  extensions:
+    $ref: "urn:work:common:1#/$defs/extensions"
+anyOf:
+  - required:
+      - review
+    properties:
+      review: true
+  - required:
+      - completion
+    properties:
+      completion: true
+allOf:
+  - $ref: "urn:work:common:1#/$defs/authoredClaimMustSayWhy"
+$defs:
+  contrastException:
+    type: object
+    additionalProperties: false
+    required:
+      - foreground
+      - background
+      - ratio
+      - reason
+      - acceptedBy
+    description: "One colour pair the owner accepted below the brand's contrast floor. It names the pair by
+      its two declared color.tokens names, not by values, and binds the ratio measured when the owner
+      accepted it: contrast-aa re-measures the pair and refuses the exception when the ratio has moved by
+      more than 0.05, when either token is undeclared, or when no starci/ask-answer@1 receipt answered by
+      the owner exists for acceptedBy. A refused exception fails the check."
+    properties:
+      foreground:
+        type: string
+        pattern: ^--
+        description: The declared token painted as the ink - text, icon or the indicator.
+      background:
+        type: string
+        pattern: ^--
+        description: The declared token it is painted on.
+      ratio:
+        type: number
+        minimum: 1
+        description: The WCAG 2.x contrast ratio of the pair as the owner accepted it, to two decimals.
+      reason:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: Why the owner accepted this pair below the floor, for example the ruling it follows.
+      acceptedBy:
+        type: string
+        pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]*$
+        description: The dispatch id of the owner ask whose answer accepted the pair (serve-ask's receipt
+          dispatchId, for example ctx_eb5a945a39ea).
+      receipt:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: The stored answer, blob:<sha256> (the receipt serve-ask stores as a blob and a decisions row,
+          scripts/machine/ask-receipts.mjs), or a path inside the repository. Without it the check finds the
+          newest receipt answering acceptedBy in the project ledger.
+  valueSource:
+    type: object
+    additionalProperties: false
+    oneOf:
+      - properties: {path: true, value: true, ruling: false}
+        required: [path, value]
+      - properties: {ruling: true, token: true, value: true, path: false, line: false, sha256: false}
+        required: [ruling, token, value]
+    description: "Two forms. {path, value, ...}: the external reference render a colour token's value was read from. {ruling, token, value}: the answered ask that ruled the value, when no file declares it. Either is for a token the app's
+      own theme has not written yet (interface.implement writes it later). scripts/work/brand/brand.mjs
+      tokens-match-source reads the reference - never writes it - and, at the decide stage, passes the token
+      as planned-from-reference when the reference declares `token` in its default scope with exactly
+      `value`, the value is the brand value and a declared sha256 still names the file. Once a declared
+      sources[] file (other than this reference) carries the token, the normal source match applies; at the
+      verify stage (review.verify) a planned token still absent from the app source is refused
+      (planned-source-missing). A ruling form is traced to the ledger's recorded answer instead of a file: scripts/work/brand/brand-value-source.mjs
+      finds the answer of dispatch `ruling` (given by the owner, the owner's autopilot ruling or the config's auto-accept), requires its
+      words to carry `value`, requires `token` to be this brand token and `value` to be the brand value, and passes it as planned-from-ruling
+      with the declaration owed to interface.implement."
+    properties:
+      ruling:
+        type: string
+        minLength: 1
+        description: The dispatch id of the answered ask that ruled the value (the `[dispatchId, ...]` of the op's owner_answers line).
+      path:
+        type: string
+        pattern: ^(?![A-Za-z]:)(?!/)(?!.*(?:^|/)\.\.(?:/|$)).+$
+        description: The reference file, relative to the same --source root as sources[] (for example
+          examples/full-app/fe/apps/app/src/app/globals.css). Read-only.
+      token:
+        type: string
+        pattern: ^--[A-Za-z0-9_-]+$
+        description: The custom property the reference declares, when it is not the brand token's own name
+          (for example --surface-tertiary for the brand token --starci-surface-tertiary).
+      value:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: The exact value the reference declares, for example oklch(93.73% 0.0012 354.13).
+      line:
+        type: integer
+        minimum: 1
+        description: The line of the declaration, for a reader; the check finds it by name.
+      sha256:
+        $ref: "urn:work:common:1#/$defs/sha256"
+        description: The digest of the reference file as read; a changed file is refused until re-read.
+      note:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: Why the value comes from this reference.
+  direction:
+    type: object
+    additionalProperties: false
+    required:
+      - rev
+      - status
+      - principles
+      - archetypes
+      - rubric
+    description: "brand.direction - the composition taste this product's pages are drawn to. Authority runs
+      knowledge/ui, then the grammar DNA, then the brand record, then this block: where it contradicts one of
+      them, the direction is wrong. It is a proposal until the owner accepts it in a brand-direction-review
+      ask (scripts/work/brand-direction.mjs question/apply); an acceptance is the owner's only - an
+      auto-recommended answer never accepts it. scripts/work/brand/brand.mjs `direction` re-checks the shape, the
+      DNA mapping of every recipe, the owner receipt of every accepted archetype and the golden bytes."
+    properties:
+      rev:
+        type: integer
+        minimum: 1
+        description: The direction's own revision, bumped once per accepted change. An acceptance names the
+          rev it saw; a later rev is unaccepted until the owner reviews it again.
+      status:
+        enum: [proposed, accepted]
+        description: proposed until the owner accepts the direction (its principles, rubric and at least one
+          archetype); accepted only with `acceptance`.
+      acceptance:
+        $ref: "#/$defs/directionAcceptance"
+      surfaceClass:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: The coverage surface class the product's pages are judged in (COVERAGE-1, TASTE-9).
+      referenceClass:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: The reference products the rubric sorts a render against, by class (TASTE-12 case-1).
+      authority:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: The authority order this direction sits under, stated for the reader.
+      principles:
+        type: array
+        minItems: 1
+        items:
+          type: object
+          additionalProperties: false
+          required: [id, name, rule, cites]
+          properties:
+            id:
+              type: string
+              pattern: ^[A-Za-z][A-Za-z0-9_-]*$
+            name:
+              $ref: "urn:work:common:1#/$defs/prose"
+            rule:
+              $ref: "urn:work:common:1#/$defs/prose"
+            cites:
+              type: array
+              minItems: 1
+              items:
+                $ref: "urn:work:common:1#/$defs/prose"
+        description: The few rules every page of the product follows, each citing the knowledge/ui rule or
+          grammar DNA it applies.
+      geometry:
+        $ref: "#/$defs/openBlock"
+        description: The spacing, card and type values the drawings use, each citing its knowledge/ui or DNA
+          source. Values the grammar owns are copied from it, never chosen here.
+      archetypes:
+        type: object
+        minProperties: 1
+        propertyNames:
+          enum: [dashboard, list, detail, form, wizard, empty]
+        additionalProperties:
+          $ref: "#/$defs/directionArchetype"
+        description: One entry per page archetype. `archetypes.<name>.status` accepted means interface.draw
+          may draw pages of that archetype from it; an absent or proposed archetype is not ready.
+      vocabulary:
+        type: object
+        minProperties: 1
+        propertyNames:
+          $ref: "#/$defs/openKey"
+        additionalProperties:
+          $ref: "#/$defs/directionRecipe"
+        description: The named recipes pages are built from, each mapped onto the DNA components that render
+          it. A recipe the DNA cannot render names its grammar proposal instead of inventing an element.
+      voice:
+        $ref: "#/$defs/openBlock"
+        description: How the product's pages speak - labels, times, sentences, claims.
+      antiPatterns:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [id, bad, fix]
+          properties:
+            id:
+              type: string
+              pattern: ^[A-Za-z][A-Za-z0-9_-]*$
+            seen:
+              $ref: "urn:work:common:1#/$defs/prose"
+            bad:
+              $ref: "urn:work:common:1#/$defs/prose"
+            fix:
+              $ref: "urn:work:common:1#/$defs/prose"
+            cites:
+              type: array
+              items:
+                $ref: "urn:work:common:1#/$defs/prose"
+        description: What earlier drawings got wrong, and the fix, so a later drawing is judged against it.
+      rubric:
+        type: object
+        additionalProperties: false
+        required: [checks, beautyAnchors]
+        properties:
+          checks:
+            type: array
+            minItems: 1
+            items:
+              type: object
+              additionalProperties: false
+              required: [id, group, test, cites]
+              properties:
+                id:
+                  type: string
+                  pattern: ^[A-Za-z][A-Za-z0-9_-]*$
+                group:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                test:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                cites:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: "urn:work:common:1#/$defs/prose"
+                gate:
+                  type: boolean
+                  description: A failing gate check caps the render's beauty score (gateCap).
+            description: Pass/fail checks a reviewer runs on one render (desktop and mobile PNG plus its HTML).
+          gateCap:
+            type: integer
+            minimum: 1
+            maximum: 10
+            description: The highest beauty score a render with a failing gate check may take.
+          beautyAnchors:
+            type: array
+            minItems: 1
+            items:
+              type: object
+              additionalProperties: false
+              required: [score, anchor]
+              properties:
+                score:
+                  type: string
+                  pattern: ^\d{1,2}(?:-\d{1,2})?$
+                anchor:
+                  $ref: "urn:work:common:1#/$defs/prose"
+            description: The 1-10 beauty scale, each band anchored to a render a reviewer can picture.
+        description: How a render of this product is judged, after the knowledge/ui proof rules.
+      golden:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [archetype, html, png, sha256]
+          properties:
+            archetype:
+              enum: [dashboard, list, detail, form, wizard, empty]
+            html:
+              $ref: "urn:work:common:1#/$defs/prose"
+              description: The reference render's HTML, relative to the brand record's directory.
+            png:
+              $ref: "urn:work:common:1#/$defs/prose"
+              description: Its capture, relative to the brand record's directory.
+            sha256:
+              $ref: "urn:work:common:1#/$defs/sha256"
+              description: The digest of the PNG bytes the owner saw.
+            htmlSha256:
+              $ref: "urn:work:common:1#/$defs/sha256"
+            breakpoint:
+              enum: [desktop, mobile]
+        description: The owner-seen reference renders per archetype. An accepted archetype carries at least one.
+      pendingRulings:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [id, question, status]
+          properties:
+            id:
+              type: string
+              pattern: ^[A-Za-z][A-Za-z0-9_-]*$
+            question:
+              $ref: "urn:work:common:1#/$defs/prose"
+            options:
+              type: array
+              items:
+                $ref: "urn:work:common:1#/$defs/prose"
+            status:
+              enum: [open, ruled]
+            ruling:
+              $ref: "urn:work:common:1#/$defs/prose"
+            receipt:
+              $ref: "urn:work:common:1#/$defs/prose"
+            ownerStated:
+              $ref: "urn:work:common:1#/$defs/prose"
+              description: What the owner has said they choose, recorded before the ruling is formal. It is
+                not a ruling - status stays open, and nothing applies it, until the owner's ask receipt
+                records it (status ruled with ruling and receipt).
+        description: Owner questions the direction depends on but does not apply until ruled.
+      learned:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [id, kind, status, text, source]
+          properties:
+            id:
+              type: string
+              pattern: ^[A-Za-z][A-Za-z0-9_-]*$
+              description: The owner note id (draw-feedback.mjs noteIdOf, ON-<hex>); the critic's rubric check id.
+            kind:
+              enum: [antiPattern, vocabulary, rubric]
+            status:
+              enum: [proposed, accepted]
+              description: proposed until the owner next accepts the direction (brand-direction.mjs apply lists it
+                in the question and accepts it with the answer); accepted only with `acceptance`.
+            text:
+              $ref: "urn:work:common:1#/$defs/prose"
+              description: The owner's own words.
+            source:
+              type: object
+              additionalProperties: false
+              required: [dispatchId]
+              properties:
+                record:
+                  type: [string, "null"]
+                shape:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                dispatchId:
+                  type: [string, "null"]
+                receipt:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                at:
+                  $ref: "urn:work:common:1#/$defs/prose"
+            acceptance:
+              $ref: "#/$defs/directionAcceptance"
+        description: "Rulings learned from the owner's draw feedback (scripts/work/draw-feedback.mjs): a note the
+          owner left on a drawing that is classified product-direction is appended here, status proposed, by
+          draw-review.mjs apply. Every later draw of the product reads every entry - its brief carries it and the
+          independent critic's rubric gates it (draw-critic.mjs rubricFor) - so the same mistake never returns.
+          The rev is not bumped; each entry carries its own status."
+      conflicts:
+        type: array
+        items:
+          $ref: "#/$defs/openBlock"
+        description: Named tensions between knowledge rules and how this direction resolves them.
+  directionAcceptance:
+    type: object
+    additionalProperties: false
+    required: [acceptedBy, receipt, acceptedAt, rev]
+    description: The owner answer that accepted a direction or one archetype of it.
+    properties:
+      acceptedBy:
+        type: string
+        pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]*$
+        description: The dispatch id of the brand-direction-review ask the owner answered.
+      receipt:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: The starci/ask-answer@1 receipt path, relative to the repository root.
+      acceptedAt:
+        $ref: "urn:work:common:1#/$defs/timestamp"
+      rev:
+        type: integer
+        minimum: 1
+        description: The direction rev the owner saw.
+  directionArchetype:
+    type: object
+    additionalProperties: false
+    required: [status, regionOrder, grid1184, grid390, emphasis, primaryActionPlacement, never, whenNotToUse]
+    properties:
+      status:
+        enum: [proposed, accepted]
+      acceptance:
+        $ref: "#/$defs/directionAcceptance"
+      provisional:
+        type: object
+        additionalProperties: false
+        required: [by, acceptedBy, receipt, acceptedAt, rev]
+        description: "Autopilot's provisional acceptance (owner ruling 2026-09-28 autopilot-run-to-finish,
+          scripts/kernel/autopilot-run.mjs): every machine gate passed and a starci/ask-answer@1 receipt answeredBy
+          autopilot, provisional:true, backs it. interface.draw may draw from the archetype; the status stays
+          proposed and the owner reviews it once at handover. Never an owner acceptance, never golden."
+        properties:
+          by:
+            const: autopilot
+          acceptedBy:
+            $ref: "urn:work:common:1#/$defs/prose"
+          receipt:
+            $ref: "urn:work:common:1#/$defs/prose"
+          acceptedAt:
+            $ref: "urn:work:common:1#/$defs/prose"
+          rev:
+            type: integer
+            minimum: 1
+      regionOrder:
+        type: array
+        minItems: 1
+        items:
+          $ref: "urn:work:common:1#/$defs/prose"
+        description: The page's regions in DOM order, identical at every width.
+      grid1184:
+        $ref: "urn:work:common:1#/$defs/prose"
+      grid390:
+        $ref: "urn:work:common:1#/$defs/prose"
+      emphasis:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: The one primary focal point and its secondaries (HIERARCHY-6).
+      primaryActionPlacement:
+        $ref: "urn:work:common:1#/$defs/prose"
+      never:
+        type: array
+        minItems: 1
+        items:
+          $ref: "urn:work:common:1#/$defs/prose"
+      whenNotToUse:
+        $ref: "urn:work:common:1#/$defs/prose"
+      components:
+        type: array
+        items:
+          type: string
+          pattern: ^[A-Z][A-Za-z0-9]*$
+        description: The DNA components the archetype is built from.
+      notes:
+        type: array
+        items:
+          $ref: "urn:work:common:1#/$defs/prose"
+  directionRecipe:
+    type: object
+    required: [dna]
+    propertyNames:
+      $ref: "#/$defs/openKey"
+    description: One named recipe. `dna` lists the DNA components that render it; every other key is the
+      product's own recipe detail.
+    properties:
+      dna:
+        type: array
+        minItems: 1
+        items:
+          type: string
+          pattern: ^[A-Z][A-Za-z0-9]*$
+      proposals:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [component, summary, status]
+          properties:
+            component:
+              type: string
+              pattern: ^[A-Z][A-Za-z0-9]*$
+            variant:
+              $ref: "urn:work:common:1#/$defs/prose"
+            summary:
+              $ref: "urn:work:common:1#/$defs/prose"
+            status:
+              enum: [pending, accepted, declined]
+        description: Grammar proposals this recipe waits on; never rendered inline in their place.
+  openKey:
+    type: string
+    pattern: ^[A-Za-z][A-Za-z0-9]*$
+    description: The name shape of a key inside an open block - camelCase, no separators - so an open block
+      is extensible without accepting a key of any shape.
+  openBlock:
+    type: object
+    minProperties: 1
+    propertyNames:
+      $ref: "#/$defs/openKey"
+    description: "A block whose contents are the product's own decision rather than this schema's. What a
+      product has to say about its typography, its motion or the files its palette was traced from differs
+      per product, so the keys are constrained to a name shape rather than listed: enumerating them would
+      make this file the authority for decisions it does not own, and a closed list would refuse the next
+      thing a brand legitimately has to settle."
+  review:
+    type: object
+    additionalProperties: false
+    required:
+      - reviewer
+      - authority
+      - reviewedAt
+    description: Who settled this revision, on what authority, and when. All three are required because a
+      brand is done through a review and not through a run, so the review is the whole of the proof - an
+      unsigned, undated one is a claim that somebody agreed with nothing to check it against.
+    properties:
+      reviewer:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: Who settled it. A role is enough where the role is the authority; a name where it is
+          not.
+      authority:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: What they settled and on whose say-so, quoted closely enough that a later reader can
+          tell an owner's ruling from a designer's preference.
+      reviewedAt:
+        $ref: "urn:work:common:1#/$defs/timestamp"
+        description: When, UTC.
+      rev:
+        type: integer
+        minimum: 1
+        description: The revision this review settled, where the block is nested under a completion that
+          could outlive it. At the top level it is the record's own `rev` and is not repeated.

@@ -1,0 +1,1138 @@
+# StarCi HFS - the one source and storage standard
+
+HFS is the single standard for the tree, the source ownership, the storage and the shared tooling of every StarCi app,
+of `.claude` itself and of every example under `examples/`. This file is the canonical statement. Where another runtime
+document disagrees with it, this file wins and the other document is wrong; where this file disagrees with an enforcer
+(`slots.yaml`, `rules.yaml`, a check, a canon rule), the enforcer wins and this file is fixed.
+
+A product is ONE app repository, `<app>/`, and it is ALWAYS a monorepo, even with one service, so every app has the same
+shape (R143 to R146). Its root holds the one `package.json`, the one `package-lock.json`, the one `node_modules`, the
+managed `turbo.json`, the one `hfs.json` (kind `app`), the CI, the hooks, the formatter, the Sonar configuration,
+`scripts/` and the edition's `app.starciwork` content. The root `package.json` declares the npm workspaces `fe/apps/*` and `fe/packages/*`: each fe app
+(`@<project>/<app>`) and each fe package is a workspace with its own `package.json` and dependencies, and turbo runs their
+build, dev, lint and typecheck (a workspace lints with `starci app lint --workspace .`, the one lint scoped to it). The back end has
+no `package.json`: it is a Nest monorepo of `be/apps/<app>` (nest-cli `projects`), even for one service. Its two sides are `be/` (the back end) and `fe/` (the front end); each side holds everything a standalone
+back-end or front-end repository root holds, except `package.json`, the lockfile and the other files the root
+owns. Every path in this file is relative to the app root: a back-end path starts with `be/`, a front-end path with
+`fe/`. The only cross-side reach is the front end reading `be/contracts/` (its codegen input), declared in `hfs.json`
+`sides.fe.reads`. `starci app lint`, `starci app sync` and `starci app scaffold` run at the app root.
+
+The machine-readable parts live next to this file and are read by every check, lint factory, template and message:
+
+| File | Owns |
+| --- | --- |
+| `slots.yaml` | Every kind of content allowed to exist in an app: path, presence, tracking, tier, required files, tests, budget, managed template, the two sides and their allowed cross-side reads. Versioned `MAJOR.MINOR.PATCH`. |
+| `rules.yaml` | The rule catalog (ids are unique and increase) with finding code, the law, gates, failure codes and enforcers (catalog below). |
+| `canon-pins.yaml` | The exact versions of every `@starci/*` package and framework this major supports. |
+
+The pattern cases in `knowledge/patterns/{be,fe,repo}/` explain how to write code and structure files inside these
+slots. Each case cites the rule id it implements (`hfsRules`) and the finding code that judges it. A code-writing op
+READs the pattern files of the slots it touches before it codes (`knowledge/op-gate.yaml`).
+
+## 1. Principles
+
+1. **One source of law.** The slot manifest and the rule catalog in `.claude` are the only rules. An app carries no rule
+   of its own, no allowlist, no baseline, no suppression file and no local copy of a canon config.
+2. **Growth is addition.** A new kind of content is a new slot. A slot is never edited in place inside a major.
+3. **One machine at every gate.** Pre-commit, the op gate (`starci gate run`), the Kernel's landing
+   and CI run the same `@starci/hfs` at the pinned version. There is no rule only agents can run.
+4. **Zero findings is necessary, not sufficient.** An app is done only when the behavioural conditions in section 11
+   also hold: the real application boots, every feature is composed, every owner is mounted, the contracts match, the
+   logger exists.
+5. **No backward compatibility.** The day a major lands the previous major stops being valid. An app without a current
+   `hfs.json` accepts migration goals only. There is no compatibility window, alias or dual path.
+
+## 2. Slots, presence and tracking
+
+A slot has an `id`, the `profiles` it exists in, a `path` pattern, a `presence`, a `tracked` state and optionally a
+`tier`, `requires`, `allows`, `forbids`, `tests`, `budget`, `managedBy`, `rules` and lifecycle fields.
+
+- `profiles`: `app` (a slot of the app root, `app.*`) or `be`, `fe` or both (a slot of a side: `be.*`, `fe.*`,
+  `repo.*`). A side slot's path is relative to its side folder: `src/features/api/<feature>/` of profile `be` is
+  `be/src/features/api/<feature>/` of the app. `starci app check` judges the root slots once and each side's slots under its folder
+  (the side view of `scripts/hfs/slots.mjs`); every finding path is app-relative.
+- `presence`: `required`, `optional`, `opt-in` (legal only when `hfs.json` lists the slot or declares an app of its
+  kind) or `forbidden`.
+- `tracked`: `tracked` (committed), `ignored` (may exist, must be gitignored, because a tool needs it in place) or
+  `external` (must not exist in the working tree at all; `goesTo` names where it lives).
+- Every tracked path matches exactly one slot (`HFS_SLOT_UNDECLARED`). A directory that matches a slot with
+  `owner: true` is an owner, the unit that imports and cycles are judged on. There is no hand-written owner list.
+- A file with `managedBy` is rendered from a template by `starci app sync`; any difference is `HFS_MANAGED_FILE_DRIFT`.
+- `sides` names the two sides and the only paths of the other side each may read (`fe: [be/contracts/]`); a side
+  imports nothing of the app outside itself (`ARCH_INTERNAL_IMPORT_OUTSIDE`).
+
+### 2.1 Versioning
+
+- **Patch**: wording, why text, examples. No check result changes.
+- **Minor**: add a slot (always `optional` or `opt-in`), an app kind, a protocol, a rule at severity `warn`, or tighten
+  a budget that no pinned app exceeds. Every app on the same major stays green without edits.
+- **Major**: change or remove a slot, make an optional slot required, raise a rule from `warn` to `error`, change the
+  direction matrix. It needs owner approval and one migration lane per app.
+- An app pins only the major (`"hfs": 3`) and always runs the newest minor of that major.
+
+### 2.2 Adding something without breaking HFS
+
+| To add | Do | Bump |
+| --- | --- | --- |
+| Helper or type used by one feature only | `be/src/features/api/<feature>/application/support/<name>.<role>.ts` (`be.feature.application.support`, optional); another feature cannot import it, a second user moves it to a `domain` capability | minor |
+| One-off action (migrate, seed, sync, backup, operator command) | a sub-command `be/src/features/cli/<group>/subs/<name>.cli.ts` with its `<name>.cli.spec.ts` in the cli feature root (`be.cli`), compiled into the one app `be/apps/cli` (`be.app.cli`, kind `cli`), run as `cli <group> <command>` | none |
+| Event consumer | `transport/message/<event>.consumer.ts` in the api feature, composed by the api app that owns it (or a `worker` app scaled apart); declares the pattern `event-bus` | none, declared in `hfs.json` |
+| Background job, sweep, recurring task | `features/jobs/<job>/transport/queue/<job>.processor.ts` plus a typed queue `modules/queues/<queue>/<queue>.queue.ts` with a BullMQ job scheduler; declares the patterns `queue` and `fenced-job` | none, declared in `hfs.json` |
+| Another api app, or a worker app to scale background work apart | `be/apps/<name>` plus its kind in `hfs.json` `sides.be.apps` | none |
+| Another Next app | `fe/apps/<name>` plus kind `next` in `hfs.json` `sides.fe.apps` | none |
+| New app kind or protocol | new slot `be.app.<kind>` or `be.transport.<protocol>` | minor |
+| Integration (payment, LLM) | `be/src/modules/integrations/<provider>/` | none |
+| Model code | client in `integrations`, training code in a new slot, weights in an object store | minor |
+| Human documentation | slot `repo.docs` (opt-in) | none |
+| Infrastructure | slot `app.starcistacks`: full infrastructure, or Lite's Swarm runtime with managed Supabase backing | none |
+| Mobile app | a new app-kind slot (an Expo app) | minor |
+| Shared package | `be/packages/<pkg>` or `fe/packages/<pkg>` (`repo.packages`, opt-in, built to `dist`, an npm workspace of the root `package.json`) | none |
+
+## 3. The app declaration: `hfs.json`
+
+The only declaration an app adds, at its root (shape `modules/schemas/hfs-repo.schema.yaml`). It declares the manifest
+major, the kind `app`, the project binding and, per side, the apps with their kinds, the opt-in slots, the cross-side
+reads and (back end only) the database connections.
+
+```json
+{
+  "hfs": 3,
+  "kind": "app",
+  "project": "nivo",
+  "sides": {
+    "be": {
+      "apps": [
+        { "name": "core", "kind": "api" },
+        { "name": "cli", "kind": "cli" }
+      ],
+      "optionalSlots": ["be.transport.message", "be.contract.graphql", "repo.docs"],
+      "connections": [
+        { "name": "primary", "envPrefix": "PRIMARY_DB", "owner": "core", "isolation": "database" },
+        { "name": "agentos", "envPrefix": "AGENTOS_DB", "owner": "core", "isolation": "database" }
+      ]
+    },
+    "fe": {
+      "apps": [{ "name": "landing", "kind": "next" }, { "name": "app", "kind": "next" }],
+      "optionalSlots": ["fe.package.ui", "fe.package.i18n"],
+      "reads": ["be/contracts/"]
+    }
+  }
+}
+```
+
+`sides.be.apps` lists every `be/apps/<name>` with its kind (`api`, `worker`, `cli`; at most one cli app, named `cli`, required once a connection is declared, R147); `sides.fe.apps` every
+`fe/apps/<name>` (`next`). App names are unique across both sides. `connections` (back end only) lists every physical
+database or schema as `{ name, envPrefix, owner, isolation }`: the logical name (never the engine; the connection IS the bounded
+context), the prefix of its `<PREFIX>_*` environment keys, the one api or worker app that owns it (only that app composes it)
+and whether the context is its own `database` or its own `schema` of a shared database (`<PREFIX>_SCHEMA`; splitting a schema
+out into a database is an env change only). `reads` is a subset of the manifest's `sides.<side>.reads`. A missing `hfs.json`, or a machine run that analysed
+zero files for a side, is a failure (`HFS_ARCH_CONFIG_UNREAD`), never "unavailable". Owners are derived from slots;
+`hfs.json` holds no owner list, path or disabled rule. `starci app scaffold <name>` writes a new app with its declaration.
+
+**Editions.** `edition` (`full` when absent, or `lite`) is the one optional field that picks the size of the standard; it is never a profile (a
+profile is a side: app, be, fe). Lite is the SAME manifest, rules and engine filtered: slots that name `editions` or `litePresence` and rules that
+name `editions` in the catalog are the whole difference, so an app cannot opt out of a rule, it can only pick an edition (R16, R17). The complete
+edition-aware slot vocabulary is `editions`, `litePresence`, `lite`, `liteManagedBy`, `entries` and `outcomeHome`; rules R212 to R220 are the
+complete lite-specific law. Owner ruling 2026-10-13 of R212: a lite app keeps the full code structure and swaps only
+the backing infrastructure for managed Supabase. Its api and sidecars run on docker-swarm on a VPS. It keeps the code slots, patterns and back-end unit specs of full and the one front end of knowledge/hfs/fe-stack.yaml,
+runs each pattern port on a Supabase adapter (Supabase Queues/pgmq, Postgres locks, pg_cron; knowledge/patterns/be/supabase-queues.yaml) and
+the socket.io gateway inside the api process, runs optional integration specs only on the local Supabase stack, and holds no e2e or contract world, browser journey or UAT record (R212), keeps the
+whole lint, grammar, security and Docker canon, and keeps its schema in `supabase/migrations` (R213 to R216: shape, row level security as static
+code, safe definer functions and buckets, a checked config and generated types) behind one door per side with the front end auth only (R217),
+a verified principal (R219) and no credential in the tree or the front end (R220). An optional Supabase block of `hfs.json` declares the auth
+posture R216 compares with `supabase/config.toml`. `starci app scaffold <name> --edition lite` writes the lite shape; `starci app upgrade --edition full`
+(`--plan` first) only adds what full has (never edits product code), and `starci app check --edition full` shows what that upgrade would leave to do;
+downgrade is not supported.
+
+Under lite, slot `app.starciwork` is optional when the app has no brand records and holds only `.gitignore`, optional
+`workspace.yaml` metadata and `brand/**` (R212, owner amendment 2026-10-14). Workspace metadata supplies the project id and
+repo roles used for app-root detection and front-end role mapping. Brand drawing records, references and assets keep the
+layout that the brand tooling reads; lite readers read workspace metadata normally and skip catalog, shell and feature
+records. Any other content fails with `HFS_STARCIWORK_LITE_FORBIDDEN`: "lite .starciwork holds only workspace.yaml and brand/"
+(plus `.gitignore`). Full keeps its complete Work tree.
+
+## 4. App map: where everything lives
+
+<!-- hfs:generated app-map -->
+| Path | State | Slot |
+| --- | --- | --- |
+| `hfs.json` | required, tracked | `app.declaration` |
+| `README.md` | required, tracked | `app.readme` |
+| `package.json` | required, tracked, generated by starci app sync (package-scripts) | `app.package-manifest` |
+| `turbo.json` | required, tracked, generated by starci app sync (task-graph) | `app.task-graph` |
+| `package-lock.json` | required, tracked | `app.lockfile` |
+| `.gitignore` | required, tracked | `app.git-meta` |
+| `.gitattributes` | required, tracked, generated by starci app sync (skeleton) | `app.gitattributes` |
+| `{.editorconfig,.nvmrc}` | required, tracked, generated by starci app sync (skeleton) | `app.tool-config` |
+| `{.prettierrc,.prettierignore}` | required, tracked, generated by starci app sync (tool-config) | `app.format-config` |
+| `{.npmrc,.npmignore}` | optional, tracked | `app.tool-config-optional` |
+| `{tsconfig.json,.eslintrc,.eslintrc.*,.eslintignore,eslint.config.*,.stylelintrc,.stylelintrc.*,.stylelintignore,stylelint.config.*,.prettierrc.*,prettier.config.*,jest.config.*,lint-staged.config.*,.lintstagedrc*}` | forbidden, external; nowhere at the app root: each side holds exactly its managed tool configuration (be.tool-config, fe.tool-config) and the root only the formatter (app.format-config) | `app.tool-config-local` |
+| `{sonar-project.properties,codecov.yml}` | required, tracked, generated by starci app sync (quality-config) | `app.quality-config` |
+| `.husky/{pre-commit,pre-push}` | required, tracked, generated by starci app sync (hooks) | `app.hooks` |
+| `.github/workflows/ci.yml` | required, tracked, generated by starci app sync (ci-workflows) | `app.ci` |
+| `.github/workflows/e2e.yml` | optional, tracked, generated by starci app sync (ci-workflows); the full edition: a lite app has no e2e world; its unit specs and wiring proof run in .github/workflows/ci.yml; contract specs use test:contract | `app.ci-e2e` |
+| `.github/workflows/images.yml` | required, tracked, generated by starci app sync (ci-workflows) | `app.ci-images` |
+| `.github/workflows/db-deploy.yml` | optional, tracked | `app.ci-db` |
+| `.github/workflows/stack-deploy.yml` | optional, tracked, generated by starci app sync (ci-workflows) | `app.ci-stack-deploy` |
+| `.dockerignore` | required, tracked, generated by starci app sync (docker-ignore) | `app.dockerignore` |
+| `deploy/` | optional, tracked | `app.deploy` |
+| `.github/workflows/<app>-deploy.yml` | optional, tracked | `app.ci-deploy` |
+| `.github/workflows/authorize-deploy-key.yml` | optional, tracked | `app.ci-authorize-deploy-key` |
+| `browser/` | opt-in, tracked; the full edition: a lite app has no e2e world, so no browser journey | `app.browser` |
+| `browser/tsconfig.json` | opt-in, tracked, generated by starci app sync (browser-config); the full edition: a lite app has no browser journey to type-check | `app.browser-config` |
+| `.github/{CODEOWNERS,pull_request_template.md,ISSUE_TEMPLATE/**}` | optional, tracked | `app.github-meta` |
+| `.github/dependabot.yml` | required, tracked, generated by starci app sync (skeleton) | `app.dependabot` |
+| `scripts/{.gitkeep,*.mjs,*.cjs,*.ps1,*.sh}` | optional, tracked | `app.scripts` |
+| `scripts/{env-sync.mjs,with-secrets.mjs,set-secrets.ps1,build-*.mjs}` | optional, tracked | `app.scripts.delivery` |
+| `{be,fe}/` | required, tracked | `app.sides` |
+| `.starciwork/` | required, tracked | `app.starciwork` |
+| `.starcistacks/` | required, tracked | `app.starcistacks` |
+| `.sops.yaml` | required, tracked | `app.sops` |
+| `{**/node_modules/,coverage/,reports/,test-results/,**/*.tsbuildinfo}` | optional, ignored | `app.build-output` |
+| `{.eslintcache,.turbo/,.scannerwork/,.sonar/,.jest-cache/,.cache/,.tools/}` | forbidden, external; ${STARCI_CACHE_HOME:-%LOCALAPPDATA%/StarCi/cache}/<repo>/<tool>/ (the canon presets set eslint --cache-location, jest cacheDirectory, turbo cacheDir, sonar.working.directory) | `app.tool-cache` |
+| `{report*.json,*.tmp.json,%*%,nul,.artifacts/,.tmp-*,*-lint.json,lf.json,lt.json,*.log,design-plans/,.gitmounts/,.dat,vi-flat.txt}` | forbidden, external; agent scratchpad or the StarCi blob store (%LOCALAPPDATA%/StarCi/blobs), cited by {name, sha256} | `app.agent-output` |
+| `{.worktrees/,worktrees/,.starciwork/worktrees/}` | forbidden, external; <lanes root>/<project>/<lane>/ (outside every repository) for a lane; a Kernel workflow's worktree is created and owned by Orca outside the app checkout, never tracked, and removed by the runtime's host-side controller once the workflow's finish marked it release-pending | `app.worktrees` |
+| `{.env,.env.*,secrets.env,.secrets/,**/*.pem,**/*.key}` | forbidden, external; .starcistacks/<env>/secrets/<slug>.enc (at the app root); decrypted values only in memory or under %LOCALAPPDATA%/StarCi/secrets/<project>/<env>/ via *_FILE | `app.plaintext-env` |
+| `supabase/` | opt-in, tracked | `app.supabase` |
+| `supabase/config.toml` | opt-in, tracked | `app.supabase.config` |
+| `supabase/migrations/<stamp>_<name>.sql` | opt-in, tracked | `app.supabase.migrations` |
+| `supabase/migrations/_archive/` | opt-in, tracked | `app.supabase.migrations.archive` |
+| `supabase/seed.sql` | optional, tracked | `app.supabase.seed` |
+| `supabase/types/database.types.ts` | opt-in, tracked | `app.supabase.types` |
+| `supabase/templates/*.html` | optional, tracked | `app.supabase.templates` |
+| `supabase/{.temp,.branches}/` | optional, ignored | `app.supabase.local-state` |
+| `supabase/functions/` | forbidden, external; a be feature: webhooks/<provider> for a third-party callback, api for an endpoint, a job of a pgmq-backed queue or a cli command on a schedule (pg_cron / pg_net) | `app.supabase.functions` |
+| `{package.json,package-lock.json,hfs.json,README.md,.gitignore,.gitattributes,.husky/,.github/,.starciwork/,.starcistacks/,supabase/,.sops.yaml,sonar-project.properties,codecov.yml,.prettierrc,.prettierignore,scripts/}` | forbidden, external; the app root: one package.json, lockfile, hfs.json, README, git and CI files, hooks, formatter, Sonar and Codecov configuration, scripts/, .starciwork, .starcistacks and .sops.yaml per app | `repo.side-root-forbidden` |
+| `be/{tsconfig.json,tsconfig.build.json,src/tests/tsconfig.json,eslint.config.mjs,jest.config.js}` | required, tracked, generated by starci app sync (tool-config) | `be.tool-config` |
+| `be/nest-cli.json` | required, tracked | `be.nest-cli` |
+| `be/{.eslintrc,.eslintrc.*,.eslintignore,eslint.config.js,eslint.config.cjs,eslint.config.ts,eslint.config.mts,eslint.config.cts,.prettierrc.*,prettier.config.*,jest.config.ts,jest.config.mjs,jest.config.cjs,jest.config.json,jest.config.e2e.js}` | forbidden, external; nowhere: a back end has exactly the managed tool configuration (be.tool-config); a change to a rule or a flag is proposed in the .claude runtime | `be.tool-config-local` |
+| `docs/{adr,runbooks,guides}/**/*.md` | opt-in, tracked | `repo.docs` |
+| `docs/**/*.{png,svg,webp}` | opt-in, tracked | `repo.docs-media` |
+| `i18n-dynamic-keys.yaml` | opt-in, tracked | `repo.i18n-dynamic-keys` |
+| `packages/<pkg>/` | opt-in, tracked | `repo.packages` |
+| `apps/<app>/Dockerfile` | required, tracked | `repo.app-image` |
+| `{**/node_modules/,dist/,apps/*/dist/,packages/*/dist/,.next/,apps/*/.next/,coverage/,reports/,test-results/,**/next-env.d.ts,**/*.tsbuildinfo}` | optional, ignored | `repo.build-output` |
+| `{**/__generated__/,apps/*/src/schema.gql}` | optional, ignored | `repo.generated` |
+| `{.eslintcache,.turbo/,.scannerwork/,.sonar/,.jest-cache/,.cache/,.tools/}` | forbidden, external; ${STARCI_CACHE_HOME:-%LOCALAPPDATA%/StarCi/cache}/<repo>/<tool>/ (the canon presets set eslint --cache-location, jest cacheDirectory, turbo cacheDir, sonar.working.directory) | `repo.tool-cache` |
+| `{report*.json,*.tmp.json,%*%,nul,.artifacts/,.tmp-*,*-lint.json,lf.json,lt.json,*.log,design-plans/,.gitmounts/,.dat,vi-flat.txt}` | forbidden, external; agent scratchpad or the StarCi blob store (%LOCALAPPDATA%/StarCi/blobs), cited by {name, sha256} | `repo.agent-output` |
+| `{.worktrees/,worktrees/,.starciwork/worktrees/}` | forbidden, external; <lanes root>/<project>/<lane>/ (outside every repository) | `repo.worktrees` |
+| `{.env,.env.*,.secrets/,**/*.pem,**/*.key}` | forbidden, external; .starcistacks/<env>/secrets/<slug>.enc (at the app root); decrypted values only in memory or under %LOCALAPPDATA%/StarCi/secrets/<project>/<env>/ via *_FILE | `repo.plaintext-env` |
+| `be/e2e/` | forbidden, external; src/tests/e2e/ for specs; operational probes move to scripts/ or are deleted | `be.root-e2e` |
+| `be/contracts/<app>/schema.graphql` | opt-in, tracked | `be.contract.graphql` |
+| `be/contracts/<app>/openapi.json` | opt-in, tracked | `be.contract.openapi` |
+| `be/contracts/<app>/events.json` | opt-in, tracked | `be.contract.events` |
+| `be/contracts/<app>/events.pin.json` | opt-in, tracked | `be.contract.events.pin` |
+| `be/contracts/<app>/<contract>.tools.json` | opt-in, tracked | `be.contract.mcp-tools` |
+| `be/apps/<app>/src/` | required, tracked, app kind api, at least 1 | `be.app.api` |
+| `be/apps/<app>/src/` | opt-in, tracked, app kind worker | `be.app.worker` |
+| `be/apps/<app>/src/` | opt-in, tracked, app kind cli | `be.app.cli` |
+| `be/src/features/api/<feature>/` | required, tracked, trigger api, at least 1 | `be.feature` |
+| `be/src/features/{api/,jobs/,reactors/,saga/}<feature>/application/` | required, tracked | `be.feature.application` |
+| `be/src/features/saga/<saga>/` | opt-in, tracked, trigger saga | `be.feature.saga` |
+| `be/src/features/saga/<saga>/steps/` | opt-in, tracked | `be.feature.saga.steps` |
+| `be/src/features/saga/<saga>/compensations/` | opt-in, tracked | `be.feature.saga.compensations` |
+| `be/src/features/{api/,jobs/,reactors/,saga/}<feature>/application/support/` | optional, tracked | `be.feature.application.support` |
+| `be/src/features/api/<feature>/transport/http/` | optional, tracked | `be.transport.http` |
+| `be/src/features/api/<feature>/transport/graphql/` | optional, tracked | `be.transport.graphql` |
+| `be/src/features/{api/,reactors/,saga/}<feature>/transport/message/` | opt-in, tracked | `be.transport.message` |
+| `be/src/features/webhooks/<provider>/` | opt-in, tracked, trigger webhooks | `be.feature.webhooks` |
+| `be/src/features/webhooks/<provider>/transport/http/` | opt-in, tracked | `be.feature.webhooks.http` |
+| `be/src/features/webhooks/<provider>/transport/http/dto/` | opt-in, tracked | `be.feature.webhooks.dto` |
+| `be/src/features/realtime/<channel>/` | opt-in, tracked, trigger realtime | `be.feature.realtime` |
+| `be/src/features/realtime/<channel>/transport/graphql/` | opt-in, tracked; src/features/realtime/<channel>/transport/websocket/ (be.feature.realtime.websocket): both editions push through the socket.io gateway; lite runs it in the api process | `be.feature.realtime.graphql` |
+| `be/src/features/realtime/<channel>/transport/graphql/dto/` | opt-in, tracked; src/features/realtime/<channel>/transport/websocket/ (be.feature.realtime.websocket): both editions push through the socket.io gateway; lite runs it in the api process | `be.feature.realtime.dto` |
+| `be/src/features/realtime/<channel>/transport/websocket/` | opt-in, tracked | `be.feature.realtime.websocket` |
+| `be/src/features/cli/` | optional, tracked, trigger cli | `be.cli` |
+| `be/src/assets/<kind>/` | optional, tracked | `be.assets` |
+| `be/src/modules/domain/<capability>/` | optional, tracked | `be.domain` |
+| `be/src/modules/{domain,integrations}/<capability>/errors/` | optional, tracked | `be.errors` |
+| `be/src/modules/{domain,platform,integrations}/<capability>/messages/` | optional, tracked | `be.domain.messages` |
+| `be/src/features/api/<feature>/messages/` | optional, tracked | `be.feature.messages` |
+| `be/src/modules/{domain,platform,projections}/<capability>/persistence/` | optional, tracked | `be.persistence` |
+| `be/src/modules/platform/<capability>/` | required, tracked | `be.platform` |
+| `be/src/modules/platform/event-bus/` | opt-in, tracked | `be.platform.event-bus` |
+| `be/src/modules/platform/queue/` | opt-in, tracked | `be.platform.queue` |
+| `be/src/modules/events/<service>/` | opt-in, tracked | `be.events` |
+| `be/src/modules/queues/<queue>/` | opt-in, tracked | `be.queues` |
+| `be/src/features/reactors/<reactor>/` | opt-in, tracked, trigger reactors | `be.feature.reactors` |
+| `be/src/features/jobs/<job>/` | opt-in, tracked, trigger jobs | `be.feature.jobs` |
+| `be/src/features/jobs/<job>/transport/queue/` | opt-in, tracked | `be.feature.jobs.queue` |
+| `be/src/features/jobs/<job>/steps/` | opt-in, tracked | `be.feature.jobs.steps` |
+| `be/src/modules/platform/jobs/` | opt-in, tracked | `be.platform.jobs` |
+| `be/src/modules/projections/<name>/` | opt-in, tracked | `be.projections` |
+| `be/src/modules/integrations/<provider>/` | optional, tracked | `be.integrations` |
+| `be/src/modules/integrations/<provider>/model/` | opt-in, tracked | `be.integrations.model` |
+| `be/src/modules/integrations/supabase/` | opt-in, tracked | `be.integrations.supabase` |
+| `be/src/tests/world/` | optional, tracked | `be.tests.world` |
+| `be/src/tests/world/kit/` | optional, tracked | `be.tests.world.kit` |
+| `be/src/tests/fixtures/` | optional, tracked | `be.tests.fixtures` |
+| `be/src/tests/fixtures/builders/*.builder.ts` | optional, tracked | `be.tests.fixtures.builders` |
+| `be/src/tests/fixtures/i18n/` | optional, tracked | `be.tests.fixtures.i18n` |
+| `be/src/tests/integration/<capability>/*.integration-spec.ts` | optional, tracked | `be.tests.integration` |
+| `be/src/tests/e2e/<area>/*.e2e-spec.ts` | optional, tracked; the full edition: a lite app has no e2e world; its logic is proven by unit specs and its database by optional integration specs on `starci supabase start` | `be.tests.e2e` |
+| `be/src/tests/contract/<provider>/*.contract-spec.ts` | optional, tracked; src/tests/contract/<provider>/*.contract-spec.ts in either edition: optional provider sandbox specs via test:contract; e2e stays full-only | `be.tests.contract` |
+| `be/src/tests/e2e/world/` | forbidden, external; src/tests/world/ (the only test infrastructure location; e2e/<area>/ holds only *.e2e-spec.ts) | `be.tests.e2e-world-dir` |
+| `fe/{tsconfig.json,eslint.config.mjs,stylelint.config.mjs}` | required, tracked, generated by starci app sync (tool-config) | `fe.tool-config` |
+| `fe/{.eslintrc,.eslintrc.*,.eslintignore,eslint.config.js,eslint.config.cjs,eslint.config.ts,eslint.config.mts,eslint.config.cts,.stylelintrc,.stylelintrc.*,.stylelintignore,stylelint.config.js,stylelint.config.cjs,stylelint.config.ts,stylelint.config.json,prettier.config.*,.prettierrc.*,lint-staged.config.*,.lintstagedrc*,turbo.json}` | forbidden, external; nowhere: a front end has exactly the managed tool configuration (fe.tool-config); the task graph is the app root's turbo.json (app.task-graph); a change to a rule or a flag is proposed in the .claude runtime | `fe.tool-config-local` |
+| `fe/apps/<app>/{package.json,next.config.ts,tsconfig.json,postcss.config.mjs}` | required, tracked, app kind next, at least 1 | `fe.app.next` |
+| `fe/apps/<app>/public/` | optional, tracked | `fe.app-optional` |
+| `fe/apps/<app>/src/app/` | required, tracked | `fe.route` |
+| `fe/apps/<app>/src/{proxy.ts,instrumentation.ts,instrumentation-client.ts,sentry.server.config.ts,sentry.edge.config.ts}` | optional, tracked | `fe.source-root-pinned` |
+| `fe/apps/<app>/src/{middleware.ts,middleware.js}` | forbidden, external; apps/<app>/src/proxy.ts: Next >= 16 reads proxy.ts and refuses middleware.ts | `fe.source-root-middleware` |
+| `fe/apps/<app>/src/app/auth/callback/route.ts` | opt-in, tracked | `fe.route.callback` |
+| `fe/apps/<app>/src/features/{pages,layouts,overlays}/<name>/` | required, tracked | `fe.feature` |
+| `fe/apps/<app>/src/components/{blocks,composites,branches,leaves}/<name>/` | optional, tracked | `fe.components` |
+| `fe/apps/<app>/src/components/providers/<name>/` | optional, tracked | `fe.components.providers` |
+| `fe/apps/<app>/src/hooks/<domain>/` | optional, tracked | `fe.hooks` |
+| `fe/apps/<app>/src/hooks/swr/` | optional, tracked | `fe.hooks.swr` |
+| `fe/apps/<app>/src/hooks/rhf/` | optional, tracked | `fe.hooks.rhf` |
+| `fe/apps/<app>/src/hooks/zustand/<store>/` | optional, tracked | `fe.hooks.zustand` |
+| `fe/apps/<app>/src/hooks/socketio/` | optional, tracked | `fe.hooks.socketio` |
+| `fe/apps/<app>/src/hooks/effects/` | optional, tracked | `fe.hooks.effects` |
+| `fe/apps/<app>/src/hooks/reuseables/` | optional, tracked | `fe.hooks.reuseables` |
+| `fe/apps/<app>/src/redux/` | optional, tracked | `fe.redux` |
+| `fe/apps/<app>/src/modules/<capability>/` | required, tracked | `fe.modules` |
+| `fe/apps/<app>/src/modules/api/` | optional, tracked | `fe.modules.api` |
+| `fe/apps/<app>/src/modules/api/graphql/__generated__/` | optional, ignored | `fe.transport.generated` |
+| `fe/apps/<app>/src/modules/api/graphql/clients/` | optional, tracked | `fe.transport.client` |
+| `fe/apps/<app>/src/modules/api/graphql/types.ts` | optional, tracked | `fe.transport.outcome` |
+| `fe/apps/<app>/src/modules/config/` | required, tracked | `fe.modules.config` |
+| `fe/apps/<app>/src/modules/i18n/` | required, tracked | `fe.modules.i18n` |
+| `fe/apps/<app>/src/modules/brand/brand.css` | optional, tracked | `fe.modules.brand` |
+| `fe/apps/<app>/src/modules/routes/` | required, tracked | `fe.modules.routes` |
+| `fe/apps/<app>/src/modules/types/` | optional, tracked | `fe.modules.types` |
+| `fe/apps/<app>/src/modules/types/ambient/` | optional, tracked | `fe.modules.types.ambient` |
+| `fe/apps/<app>/src/modules/auth/` | optional, tracked | `fe.modules.auth` |
+| `fe/apps/<app>/src/modules/toast/` | optional, tracked | `fe.modules.toast` |
+| `fe/packages/<family>-ui/` | opt-in, tracked | `fe.package.ui` |
+| `fe/packages/<family>-api/` | opt-in, tracked | `fe.package.api` |
+| `fe/packages/<family>-api/src/graphql/clients/` | optional, tracked | `fe.package.api.client` |
+| `fe/packages/<family>-api/src/graphql/types.ts` | optional, tracked | `fe.package.api.outcome` |
+| `fe/packages/<family>-i18n/` | opt-in, tracked | `fe.package.i18n` |
+<!-- hfs:generated-end app-map -->
+
+**Agent evidence is not tracked.** Evidence, logs, captures, UAT runs and draw rounds live in the blob store and the
+runtime ledger; a record cites them by hash. The single exception is the accepted design direction image of a
+ui-screen (`.starciwork/features/<feature>/ui/<name>/assets/<file>`), which is product content and is tracked. Initial and
+intermediate draw images and prompt files are agent data.
+
+## 5. Backend
+
+The rules of this section are the owner-locked back-end convention of 2026-09-30. Each rule id (R..) is a row of the
+catalog in section 12; the pattern files in `knowledge/patterns/be/` cite them and give the code forms.
+
+### 5.1 Source tree
+
+<!-- hfs:generated be-tree -->
+```text
+be/{tsconfig.json,tsconfig.build.json,src/tests/tsconfig.json,eslint.config.mjs,jest.config.js}                                                    required  be.tool-config
+be/nest-cli.json                                                                                                                                   required  be.nest-cli
+be/docs/{adr,runbooks,guides}/**/*.md                                                                                                              opt-in    repo.docs
+be/docs/**/*.{png,svg,webp}                                                                                                                        opt-in    repo.docs-media
+be/i18n-dynamic-keys.yaml                                                                                                                          opt-in    repo.i18n-dynamic-keys
+be/packages/<pkg>/                                                                                                                                 opt-in    repo.packages
+be/apps/<app>/Dockerfile                                                                                                                           required  repo.app-image
+be/{**/node_modules/,dist/,apps/*/dist/,packages/*/dist/,.next/,apps/*/.next/,coverage/,reports/,test-results/,**/next-env.d.ts,**/*.tsbuildinfo}  optional  repo.build-output
+be/{**/__generated__/,apps/*/src/schema.gql}                                                                                                       optional  repo.generated
+be/contracts/<app>/schema.graphql                                                                                                                  opt-in    be.contract.graphql
+be/contracts/<app>/openapi.json                                                                                                                    opt-in    be.contract.openapi
+be/contracts/<app>/events.json                                                                                                                     opt-in    be.contract.events
+be/contracts/<app>/events.pin.json                                                                                                                 opt-in    be.contract.events.pin
+be/contracts/<app>/<contract>.tools.json                                                                                                           opt-in    be.contract.mcp-tools
+be/apps/<app>/src/                                                                                                                                 required  be.app.api
+be/apps/<app>/src/                                                                                                                                 opt-in    be.app.worker
+be/apps/<app>/src/                                                                                                                                 opt-in    be.app.cli
+be/src/features/api/<feature>/                                                                                                                     required  be.feature
+be/src/features/{api/,jobs/,reactors/,saga/}<feature>/application/                                                                                 required  be.feature.application
+be/src/features/saga/<saga>/                                                                                                                       opt-in    be.feature.saga
+be/src/features/saga/<saga>/steps/                                                                                                                 opt-in    be.feature.saga.steps
+be/src/features/saga/<saga>/compensations/                                                                                                         opt-in    be.feature.saga.compensations
+be/src/features/{api/,jobs/,reactors/,saga/}<feature>/application/support/                                                                         optional  be.feature.application.support
+be/src/features/api/<feature>/transport/http/                                                                                                      optional  be.transport.http
+be/src/features/api/<feature>/transport/graphql/                                                                                                   optional  be.transport.graphql
+be/src/features/{api/,reactors/,saga/}<feature>/transport/message/                                                                                 opt-in    be.transport.message
+be/src/features/webhooks/<provider>/                                                                                                               opt-in    be.feature.webhooks
+be/src/features/webhooks/<provider>/transport/http/                                                                                                opt-in    be.feature.webhooks.http
+be/src/features/webhooks/<provider>/transport/http/dto/                                                                                            opt-in    be.feature.webhooks.dto
+be/src/features/realtime/<channel>/                                                                                                                opt-in    be.feature.realtime
+be/src/features/realtime/<channel>/transport/graphql/                                                                                              opt-in    be.feature.realtime.graphql
+be/src/features/realtime/<channel>/transport/graphql/dto/                                                                                          opt-in    be.feature.realtime.dto
+be/src/features/realtime/<channel>/transport/websocket/                                                                                            opt-in    be.feature.realtime.websocket
+be/src/features/cli/                                                                                                                               optional  be.cli
+be/src/assets/<kind>/                                                                                                                              optional  be.assets
+be/src/modules/domain/<capability>/                                                                                                                optional  be.domain
+be/src/modules/{domain,integrations}/<capability>/errors/                                                                                          optional  be.errors
+be/src/modules/{domain,platform,integrations}/<capability>/messages/                                                                               optional  be.domain.messages
+be/src/features/api/<feature>/messages/                                                                                                            optional  be.feature.messages
+be/src/modules/{domain,platform,projections}/<capability>/persistence/                                                                             optional  be.persistence
+be/src/modules/platform/<capability>/                                                                                                              required  be.platform
+be/src/modules/platform/event-bus/                                                                                                                 opt-in    be.platform.event-bus
+be/src/modules/platform/queue/                                                                                                                     opt-in    be.platform.queue
+be/src/modules/events/<service>/                                                                                                                   opt-in    be.events
+be/src/modules/queues/<queue>/                                                                                                                     opt-in    be.queues
+be/src/features/reactors/<reactor>/                                                                                                                opt-in    be.feature.reactors
+be/src/features/jobs/<job>/                                                                                                                        opt-in    be.feature.jobs
+be/src/features/jobs/<job>/transport/queue/                                                                                                        opt-in    be.feature.jobs.queue
+be/src/features/jobs/<job>/steps/                                                                                                                  opt-in    be.feature.jobs.steps
+be/src/modules/platform/jobs/                                                                                                                      opt-in    be.platform.jobs
+be/src/modules/projections/<name>/                                                                                                                 opt-in    be.projections
+be/src/modules/integrations/<provider>/                                                                                                            optional  be.integrations
+be/src/modules/integrations/<provider>/model/                                                                                                      opt-in    be.integrations.model
+be/src/modules/integrations/supabase/                                                                                                              opt-in    be.integrations.supabase
+be/src/tests/world/                                                                                                                                optional  be.tests.world
+be/src/tests/world/kit/                                                                                                                            optional  be.tests.world.kit
+be/src/tests/fixtures/                                                                                                                             optional  be.tests.fixtures
+be/src/tests/fixtures/builders/*.builder.ts                                                                                                        optional  be.tests.fixtures.builders
+be/src/tests/fixtures/i18n/                                                                                                                        optional  be.tests.fixtures.i18n
+be/src/tests/integration/<capability>/*.integration-spec.ts                                                                                        optional  be.tests.integration
+be/src/tests/e2e/<area>/*.e2e-spec.ts                                                                                                              optional  be.tests.e2e
+be/src/tests/contract/<provider>/*.contract-spec.ts                                                                                                optional  be.tests.contract
+```
+<!-- hfs:generated-end be-tree -->
+
+Nothing else exists at `be/src/` level, and no `types`, `constants`, `utils`, `helpers`, `shared`, `common`, `testing` or
+`exceptions` folder exists under `be/src/modules` or `be/src/features` (R01, R89). The unit specs are the
+`<name>.service.spec.ts` files beside their services and the `<name>.cli.spec.ts` files beside their cli commands
+(section 7). Files carry a role suffix from the closed
+list of the slot manifest, `ruleParams.be.suffixes` (`module`, `command`, `handler`, `decorators`, `sql`, `rows`, ...); `use-case`, `repository`,
+`store`, `worker`, `scheduler` and `dto` are not among them (R89).
+
+### 5.2 Tiers and direction (R26 to R28)
+
+<!-- hfs:generated be-tiers -->
+| From \ to | app | feature | domain | events | queues | projections | integrations | platform | e2e | fixtures | package |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| app | no | yes | yes | yes | yes | yes | yes | yes | no | no | yes |
+| feature | no | no | yes | yes | yes | yes | yes | yes | no | no | yes |
+| domain | no | no | yes, acyclic | yes | yes | no | yes | yes | no | no | yes |
+| events | no | no | no | yes, acyclic | no | no | no | yes | no | no | yes |
+| queues | no | no | no | yes | yes, acyclic | no | no | yes | no | no | yes |
+| projections | no | no | yes | yes | no | yes, acyclic | yes | yes | no | no | yes |
+| integrations | no | no | no | no | no | no | no | yes | no | no | yes |
+| platform | no | no | no | no | no | no | no | yes, acyclic | no | no | yes |
+| e2e | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| fixtures | no | no | yes | yes | yes | yes | yes | yes | no | no | yes |
+| package | no | no | no | no | no | no | no | no | no | no | yes |
+<!-- hfs:generated-end be-tiers -->
+
+Type-only imports count. Every import across owners goes through the owner's single `index.ts`; inside one owner imports
+are relative and never go through the owner's own `index.ts` (R30). Shared types that both platform and domain need go
+down to platform or are passed as options. Only these three module tiers exist.
+
+### 5.3 Persistence: one authority, one connection per database (R34 to R36, R83 to R86)
+
+Schema changes only by migration. `synchronize` is the literal `false` everywhere, including e2e databases (e2e runs the
+real migrations). There is no runtime DDL, no `dataSource.synchronize()`, no `migrationsRun`, no `CREATE|ALTER|DROP TABLE`
+outside `persistence/migrations/**`, no entity or migration glob. The cli migrate command (`cli migrate run`) is the only
+runner of migrations, once per connection, before api and worker start; `starci gate run --root <app>` verifies that path, and the test
+world runs them over the same connection list. Seed data is a cli seed command, never a migration. Entities and migrations live in `persistence/{entities,migrations}/` of
+the capability that owns the table; the owner's `index.ts` exports `<c>Entities` and `<c>Migrations` and the app composes
+them per connection. Migrations are `<epochMs13>-<kebab-name>.ts`.
+
+One physical database is one connection (`hfs.json` `sides.be.connections`), one `<conn>.connection.ts`, one `<conn>.config.ts` and
+one injector `Inject<Conn>EntityManager()` in `platform/database` (R84). The database is reached through that shared
+`EntityManager`, injected with the named injector and called directly: `getRepository`, `@InjectRepository`,
+`Repository<T>`, repository or store classes, QueryBuilder, a `DataSource` or `QueryRunner` outside `platform/database`,
+the cli (slots `be.app.cli`, `be.cli`) and the test world (slot `be.tests.world`) do not exist; specs use the world's `world.db.<connection>` `EntityManager` (R83). A handler opens the transaction with
+`this.entityManager.transaction(async (manager) => ...)` and only `manager` is used inside it.
+
+Raw SQL is a `sql`-tagged `SqlText` constant in `persistence/<name>.sql.ts` of the owning capability; `.query()` accepts
+only `SqlText` and numbered parameters; row shapes and mappers sit in `<name>.rows.ts` (R36, R68). SQL writes only its own
+capability's tables and reads only tables of owners it may import, and every multi-row read is bounded (R86, R69, R77).
+
+### 5.4 Errors, logging, filters (R37 to R40)
+
+One error profile. `platform/errors` owns `DomainError`, the closed `ErrorKind`, the one kind-to-HTTP table, one REST
+`ExceptionFilter` and one GraphQL `formatError` (HTTP 200 with `extensions.{code,kind}`), and masks undeclared errors (`INTERNAL`
+and a generic message, detail only in the log). Each capability owns `errors/<c>.error.ts`: a code enum
+(`<CAPABILITY>_<WHAT>`), an exhaustive `Record<Code, ErrorKind>` table and one error class. Expected refusals are
+`Outcome<Value, Code>` values, returned; the transport turns one into the error with `unwrapOutcome`. A domain never
+throws a platform error. Display text is resolved by code through the message catalog (R78). `platform/logging` (the
+`Logger` port through `InjectLogger()`, enum identities from `<owner>.log-events.ts`, JSON lines) is mandatory;
+`console.*`, the Nest logger and `winston` outside it are forbidden. Each app registers exactly one filter through
+`APP_FILTER`. Every `catch` logs, rethrows or returns an outcome that carries the cause; an empty `catch {}` is forbidden.
+
+### 5.5 Default deny (R41, R42)
+
+`domain/identity` exports `AuthGuard`, `CredentialGuard`, `@Public({ reason: PublicReason.X })`, `@Credential({ kind })`, the `CREDENTIAL_AUTHENTICATOR` port, `@Roles()` and `@CurrentPrincipal()`. Every api
+app registers four global `APP_GUARD`s in this order: `RateLimitGuard`, `OriginGuard`, `CredentialGuard`, `AuthGuard`. That chain is the only authentication
+and authorization: no `@UseGuards`, and no guard injected into another guard. `CredentialGuard` acts only on a handler marked `@Credential({ kind })` (`api-key`, `run-token`, `tool-token`, `link-token`, `posting`) and sets the request's credential principal through the port; `AuthGuard` stays default-deny. A public operation carries `@Public({ reason: PublicReason.X })` with a member of the
+closed `PublicReason` enum of `domain/identity` (`Health`, `AuthHandshake`, `SignedWebhook`, `CatalogRead`); a string or
+another enum is refused. Webhooks use the shared signature verifier or a domain verifier with per-connection secrets and
+compare secrets with `timingSafeEqual`. No
+`@Body() x: unknown`, no `GraphQLJSON`, no `switch (input.operation)` in transport. The global `ValidationPipe` whitelists and
+forbids unknown fields, every property of an input class carries the validators its type calls for (a string `@MaxLength`,
+an enum `@IsEnum`, an array `@ArrayMaxSize`, a nested object `@ValidateNested()` with `@Type`), and pagination is by cursor
+only: no `skip`, `offset`, `OFFSET` or page number. GraphQL has depth and complexity limits, and the auth and webhook
+doors are strictly rate limited.
+
+### 5.6 Configuration and secrets (R43, R44)
+
+Only the file of `platform/config` that declares `EnvSource` (which also resolves `<KEY>_FILE`, and its typed readers)
+touches `process.env`. A declared `<KEY>_FILE` takes priority over `<KEY>` and reads the file contents without trimming;
+an empty or unreadable file path stops boot instead of falling back to `<KEY>`. Without `<KEY>_FILE`, the reader uses `<KEY>`.
+Each capability and provider has `<name>.config.ts` (`parse<C>Config(env: EnvSource): <C>Options`, or
+`<C>Options | null` for an optional integration) and `<name>.options.ts`. `main.ts` builds `EnvSource` once and passes options
+to `AppModule.register(options)`; classes read them with `Inject<C>Options()`. `envConfig()`, `ConfigService`,
+`@nestjs/config` and dotenv preloaders do not exist. A value typed `Secret` or `Url` by `platform/config` has no default of
+any kind (no default argument, no `??` or `||` fallback, no `""`, `localhost` or `http://` literal): a secret, credential,
+host, URL, remote port, bucket or database name has no default, and an optional integration is all-or-nothing: none of its
+keys set gives `null`, some set stops boot naming the missing keys. No `process.cwd()` joined
+with `src` or `.starcistacks`.
+
+### 5.7 Background work (R46)
+
+Background work is a transport. `transport/message/<event>.consumer.ts` (an `EventConsumer` of `platform/event-bus`) and
+`features/jobs/<job>/transport/queue/<job>.processor.ts` (a `FencedProcessor` of `platform/jobs`) dispatch one command exactly as a resolver does.
+Mechanisms live in `platform/event-bus` (Kafka behind a transactional outbox, with inbox, retry and dead letter), `platform/queue`
+(BullMQ with the outbox relay and job schedulers) and `platform/jobs` (the fencing token). An app of kind `api` or `worker`
+composes them; `@Cron`, `@Interval` and `@Timeout` exist nowhere, a schedule is a BullMQ job scheduler. R46 identifies background
+work by job processor, scheduler, saga or event-handler context (including consumers), and follows methods called from it
+directly or transitively. A background runner that no api or worker app composes is a failure. Resolvers and controllers are
+never background; method names such as `retry*` or `replay*` alone do not establish background work. A domain service
+publishes `eventBus.publish(event, tx)` or enqueues `enqueueX(payload, tx)` inside its own transaction (knowledge/patterns/be/event-bus.yaml, queues.yaml, jobs.yaml).
+
+### 5.8 Modules, features and injection (R29 to R33, R45, R85, R87, R88)
+
+Features are grouped by trigger kind: `features/api/<feature>/` and `features/cli/`; a kind imports only `modules/*`, never
+another kind, and only `be/apps/*` composes features. An api feature root holds `index.ts`, `<feature>.module.ts`,
+`application/`, `transport/<protocol>/` and, when it has copy, `messages/` only. Inside one bounded context the handler
+calls that context's domain service in one transaction, with no event; an event (through the outbox) only crosses
+contexts or carries async work (`knowledge/patterns/be/api.yaml`). `application/` holds commands, queries, handlers and contracts: each message is a typed
+`Command<R>`/`Query<R>` carrying one `params` (`ExecuteParams<T>` or `PublicExecuteParams<T>`), each handler
+`extends ICQRSHandler` and overrides `process` as one call of an injected service; there is no use-case class, forwarder service or in-process event (R87).
+A transport injects only the command or query bus, dispatches exactly one message, holds no logic, returns no envelope and takes no
+`GraphQLJSON` (R88); a cli command is an action runner, not a transport, and has its own unit spec (R149). Each transport has exactly one Nest module `<feature>-<protocol>.module.ts`, plus one application
+module; never one module per operation.
+
+A capability module is `@Module` extending `ConfigurableModuleClass` from a typed `ConfigurableModuleBuilder<Options>`, and
+its only registration method is `register`. Each capability has one representative module, registered exactly once per app
+in `be/apps/<app>/src/app.module.ts` (or a `compose/<area>.ts` group it spreads) as `X.register({ isGlobal: true, ...options.x })`; it may import its own sub-modules as
+plain imports. No module imports another capability's representative module; other capabilities reach it through its
+injectors. `isGlobal: true` appears only at an app root and `@Global()` nowhere (R45).
+
+Every infrastructure dependency arrives through a zero-argument `Inject<Thing>()` exported from its owner's
+`<owner>.decorators.ts` over a `unique symbol` token; raw `@Inject(`, `ModuleRef`, `forwardRef` and property injection do
+not exist (R85). Every feature and every transport module is composed by at least one app. Apps hold only `main.ts`,
+`app.module.ts`, `<app>.options.ts` and the composition groups `compose/<area>.ts`; an app has no spec (the e2e world boots it).
+Entrypoints exist only in `be/apps/*/src` (R33).
+
+The composition files of an app have one role each and a line budget in their app slot (owner ruling 2026-10-14, R245, R246): `main.ts`
+(80) reads the environment once and boots; `<app>.options.ts` (200) holds env-derived options plus port bindings (provider maps
+such as `{ approvalGate: X }`) only, never an array of Nest modules, queue registrations or scheduler entries
+(`BE_APP_OPTIONS_COMPOSITION`); `compose/<area>.ts` (120) exports the module list of one area (and the providers of its global
+ports when it has any), composition only, with no business logic and no environment read; `app.module.ts` (250) imports the
+groups and spreads them, and binds the app-wide guards and filter. A group's registrations are the app root's (`isGlobal: true`
+is legal there). The budget is absolute (`BE_APP_COMPOSITION_BUDGET`): an app root that outgrows it moves an area into a new group.
+
+### 5.9 Query, transport and runtime safety (R68 to R77, R89, R90)
+
+A statement is text plus numbered parameters; a runtime value never becomes part of the text (R68). A list read states its
+bound, and a caller that needs every row pages by keyset instead of truncating (R69); a read never runs once per element of a
+loop, the keys are read once (R77). Every outbound HTTP call goes through `platform/http` whose `timeoutMs` is required
+(R70). A logger call names no credential and no personal identifier (R71). No type escape exists anywhere, specs included:
+`as X`, `as never`, `x!`, `any` (R72). An `async` function awaits (R73). A migration's `down()` reverses its `up()` (R74). A
+handler and a public method of an Injectable, Resolver or Controller declare their return type (R75). `JSON.parse` of
+outside text sits inside a `try` (R76). Each raw infrastructure library (HTTP, cache, queue, scheduler, logger, date,
+config, events) is imported only by its one owning platform or integration capability (R90). Each has an `eslint-be`
+enforcer in `@starci/eslint-canon-be`; the input classes of R42 carry the `class-validator` decorators their types call for
+(`input-bounded`).
+
+### 5.10 Copy, time, delivery and transactions (R78 to R82)
+
+Text a user reads - an error's display text, a notification's subject or body, a response's `message` or `description` -
+comes from the owner's `messages/<owner>.messages.ts` catalog (Vietnamese and English) through the typed `MessageCatalog`
+port and `InjectMessageCatalog()`, never a literal in source (R78). The catalog lookup takes an explicit locale:
+`platform/i18n`'s `RequestLocale` (`InjectRequestLocale()`) resolves it inside a request (the authenticated user's stored
+preference, else the first of `vi`/`en` named in `Accept-Language`, else `vi`) and a job resolves it from the message's
+recipient (their stored preference, else `vi`) - never a call-site guess (knowledge/patterns/be/messages.yaml). The ambient
+clock (`Date.now`, a bare `new Date()`, `performance.now`, `process.hrtime`, `Temporal.Now`, called or referenced) is read
+only inside `platform/clock`; code and specs take the injected `Clock` (`InjectClock()`), so a spec can drive time with a `FakeClock` (R79). Delivery that can
+repeat - a signed webhook a sender resends, a queue redelivering a message - is claimed through the shared inbox
+(`InjectInbox()`, table `inbox_claims`, unique on `(source, event id)`, owned by `platform/inbox`): the first awaited
+expression of the service method a consumer or signed-webhook handler dispatches to (a public `*.service.ts` method whose first parameter has an `eventId`) is `inbox.claim(source, eventId)` on a receiver typed `Inbox`, and a
+`false` answer returns without effect (R80). A loop that catches an error and waits before trying again goes through
+`platform/retry` (bounded attempts, exponential backoff with jitter, an abort signal), never a loop written at the call
+site (R81). No transaction spans an external call: commit first and call out after, or enqueue an outbox message inside
+the transaction (R82). Each has an `eslint-be` enforcer in `@starci/eslint-canon-be`.
+
+### 5.11 Services of one product (R163 to R168)
+
+A product with more than one back-end service keeps every service as a Nest app at `be/apps/<service>/` of the one repository
+(R163): the apps share the `be/src` libraries and the one `package.json`, each has its own `Dockerfile` and builds its own
+image, and no file of one service app imports a file of another (R168). In `.starcistacks/application-stacks.yaml` every api or
+worker app is a `role: service` component (R165) and every image of the stack, own or third-party, is pinned: a digest or an
+exact version, never a moving tag (R164); an own image is `<repo>/<service>:<x.y.z>` built from the app's Dockerfile, a service
+the product does not own stays a pinned third-party image. The wire between services is a contract the consumer judges
+itself against: a service keeps the snapshot of its GraphQL schema (R23, R113) and, for the messages it publishes, the literal
+table `apps/<service>/src/events.ts` and its snapshot `be/contracts/<service>/events.json`; a consumer lists what it reads
+in `apps/<app>/src/consumes.ts` and each entry must exist in the provider's snapshot at that version (R166). Messages travel
+on the Kafka topics of `platform/event-bus` (a transactional outbox, a relay, retry and dead letters): a publisher writes the outbox row in its transaction, a consumer is a
+`transport/message/<event>.consumer.ts` of a worker app, the receiver dedupes on the event id (inbox claim or an idempotent
+state check) and a message that runs out of attempts waits in the dead letters. A saga is a chain of services reacting to each
+other's events, never an in-process event: the failure is an event whose contract declares `compensates: "<event>"` and its
+consumer undoes that step. Every consumed event is named by an e2e spec that boots the real apps through `useTestWorld`, and the
+spec of a saga step also names the compensated event, so it drives the whole flow (R167). A saga is a declared pattern
+(`patterns: ["saga"]` in hfs.json): its folder `be/src/features/saga/<saga>/` (the saga kind) holds an orchestrator, a versioned state, steps and a
+compensation for every step (R169 to R173; `knowledge/patterns/be/saga.yaml`). See `docs/microservices.md` and the
+`full-app` example (`identity`, `order`, `billing`).
+
+### 5.12 Provider webhooks (R182, R183, R203)
+
+A webhook is the signed HTTP door of `features/webhooks/<provider>/`, composed by an api app. Its POST verifies first,
+then calls one domain intake such as `recordProviderDelivery`. The intake claims the delivery through the existing `Inbox`
+port, saves the durable receipt and publishes its typed receipt event through the outbox in the same transaction. The
+sanctioned path is `verify -> inbox.record -> reactor/job dispatches the command`: `inbox.record` names the recording
+responsibility, while the shared port's actual method is `Inbox.claim`. A reactor consumes the committed receipt event and
+dispatches one command with the consumer delivery id and receipt reference; a job may instead consume a transactionally
+enqueued receipt reference under its claim and fencing. The webhook door, its HTTP module and called intake dispatch no
+command/query bus or feature handler. Lint resolves those direct typed receivers in the intake; hidden helper calls, dynamic receivers and
+unavailable method bodies need semantic review.
+
+The default POST acknowledgement has an empty body. A provider that requires a fixed body may receive exactly the exported
+PROVIDER_ACK of that webhook feature, declared in the door or its own HTTP module as a literal object or string with
+`as const` or a readonly literal type. Its values are literals only; `return PROVIDER_ACK` follows proof and intake. An
+inline returned object, call, template with expressions, spread, input-derived constant or another feature's ACK is refused.
+Returning an ACK never replaces the first-statement proof.
+
+A subscription provider may have one GET challenge handler beside its one POST. GET starts with a declared domain verifier
+call, awaited when async, and returns exactly its result (directly or through the first statement's `const` binding). The
+verifier proves the subscription request before answering the challenge; GET performs no intake or response computation.
+Both handlers declare the signed-webhook public reason and strict rate tier. The worked Meta-style tree, door and durable
+receipt handoff are in `knowledge/patterns/be/webhooks.yaml`.
+
+## 6. Frontend
+
+### 6.1 Source tree
+
+<!-- hfs:generated fe-tree -->
+```text
+fe/{tsconfig.json,eslint.config.mjs,stylelint.config.mjs}                                                                                          required  fe.tool-config
+fe/docs/{adr,runbooks,guides}/**/*.md                                                                                                              opt-in    repo.docs
+fe/docs/**/*.{png,svg,webp}                                                                                                                        opt-in    repo.docs-media
+fe/i18n-dynamic-keys.yaml                                                                                                                          opt-in    repo.i18n-dynamic-keys
+fe/packages/<pkg>/                                                                                                                                 opt-in    repo.packages
+fe/apps/<app>/Dockerfile                                                                                                                           required  repo.app-image
+fe/{**/node_modules/,dist/,apps/*/dist/,packages/*/dist/,.next/,apps/*/.next/,coverage/,reports/,test-results/,**/next-env.d.ts,**/*.tsbuildinfo}  optional  repo.build-output
+fe/{**/__generated__/,apps/*/src/schema.gql}                                                                                                       optional  repo.generated
+fe/apps/<app>/{package.json,next.config.ts,tsconfig.json,postcss.config.mjs}                                                                       required  fe.app.next
+fe/apps/<app>/public/                                                                                                                              optional  fe.app-optional
+fe/apps/<app>/src/app/                                                                                                                             required  fe.route
+fe/apps/<app>/src/{proxy.ts,instrumentation.ts,instrumentation-client.ts,sentry.server.config.ts,sentry.edge.config.ts}                            optional  fe.source-root-pinned
+fe/apps/<app>/src/app/auth/callback/route.ts                                                                                                       opt-in    fe.route.callback
+fe/apps/<app>/src/features/{pages,layouts,overlays}/<name>/                                                                                        required  fe.feature
+fe/apps/<app>/src/components/{blocks,composites,branches,leaves}/<name>/                                                                           optional  fe.components
+fe/apps/<app>/src/components/providers/<name>/                                                                                                     optional  fe.components.providers
+fe/apps/<app>/src/hooks/<domain>/                                                                                                                  optional  fe.hooks
+fe/apps/<app>/src/hooks/swr/                                                                                                                       optional  fe.hooks.swr
+fe/apps/<app>/src/hooks/rhf/                                                                                                                       optional  fe.hooks.rhf
+fe/apps/<app>/src/hooks/zustand/<store>/                                                                                                           optional  fe.hooks.zustand
+fe/apps/<app>/src/hooks/socketio/                                                                                                                  optional  fe.hooks.socketio
+fe/apps/<app>/src/hooks/effects/                                                                                                                   optional  fe.hooks.effects
+fe/apps/<app>/src/hooks/reuseables/                                                                                                                optional  fe.hooks.reuseables
+fe/apps/<app>/src/redux/                                                                                                                           optional  fe.redux
+fe/apps/<app>/src/modules/<capability>/                                                                                                            required  fe.modules
+fe/apps/<app>/src/modules/api/                                                                                                                     optional  fe.modules.api
+fe/apps/<app>/src/modules/api/graphql/__generated__/                                                                                               optional  fe.transport.generated
+fe/apps/<app>/src/modules/api/graphql/clients/                                                                                                     optional  fe.transport.client
+fe/apps/<app>/src/modules/api/graphql/types.ts                                                                                                     optional  fe.transport.outcome
+fe/apps/<app>/src/modules/config/                                                                                                                  required  fe.modules.config
+fe/apps/<app>/src/modules/i18n/                                                                                                                    required  fe.modules.i18n
+fe/apps/<app>/src/modules/brand/brand.css                                                                                                          optional  fe.modules.brand
+fe/apps/<app>/src/modules/routes/                                                                                                                  required  fe.modules.routes
+fe/apps/<app>/src/modules/types/                                                                                                                   optional  fe.modules.types
+fe/apps/<app>/src/modules/types/ambient/                                                                                                           optional  fe.modules.types.ambient
+fe/apps/<app>/src/modules/auth/                                                                                                                    optional  fe.modules.auth
+fe/apps/<app>/src/modules/toast/                                                                                                                   optional  fe.modules.toast
+fe/packages/<family>-ui/                                                                                                                           opt-in    fe.package.ui
+fe/packages/<family>-api/                                                                                                                          opt-in    fe.package.api
+fe/packages/<family>-api/src/graphql/clients/                                                                                                      optional  fe.package.api.client
+fe/packages/<family>-api/src/graphql/types.ts                                                                                                      optional  fe.package.api.outcome
+fe/packages/<family>-i18n/                                                                                                                         opt-in    fe.package.i18n
+```
+<!-- hfs:generated-end fe-tree -->
+
+An instance of `fe.modules`, including its specialized module slots, requires `index.ts` when it contains a `.ts` or `.tsx` file, including nested files and
+declarations (`.d.ts`). A module containing only CSS or assets needs no barrel; neither required-file check reports its
+absent `index.ts`. Required module directories must still exist, and all other required files remain enforced.
+
+The front end's contract input is the back end's committed `be/contracts/<app>/` read in place (`hfs.json`
+`sides.fe.reads`); the root `codegen` script (`scripts/codegen.mjs`) writes the ignored `__generated__/` from it. There is
+no contract copy under `fe/`.
+
+### 6.2 Rules
+
+- **Direction.** route to feature; page and layout owners in `features/{pages,layouts}/<Name>/index.tsx` may compose overlays
+  and blocks through their public entries. The kind-scoped feature edge is only pages/layouts to overlays: layout-to-page,
+  page-to-page and overlay-to-overlay imports are forbidden, and components never import overlays. Feature to components,
+  hooks, modules; components descend blocks to composites to branches to leaves,
+  with no block-to-block import. A pure component or branch may render a list of blocks received through render props;
+  it never imports the blocks or fetches their data. Hooks to modules; modules to modules, acyclic; apps never import
+  each other (R27, R64).
+- **List composition (R92).** A server page can mount a client overlay that reads the list identities through its hook.
+  The overlay passes those identities and a render prop such as `id => <ItemBlock id={id} />` to its pure sibling, which
+  delegates the keyed list to a branch. The branch calls the supplied renderer; each connected block reads its own data
+  and renders its exact sibling `ItemBlockBase`. The overlay's world-reading render paths still reach a pure boundary,
+  and its supplied renderer contains block composition only, no drawing or hook calls. Pages and layouts stay server
+  components.
+- **Overlay hosts (R26, R55, R92).** A server page may import and render an overlay's client `index.tsx` directly.
+  `FE_CLIENT_BOUNDARY` allows the directive at the overlay entry and does not require one on its importing page;
+  `FE_CLIENT_SERVER_IMPORT` checks imports from client files and `FE_CLIENT_REACHES_SERVER` follows the client subtree
+  toward server-only code, so a safe client overlay imported by a server page passes all three. The same applies to a server
+  layout. For overlays selected by the URL, the layout imports the overlay entries and passes rendered `ReactNode` candidates
+  to `features/overlays/OverlayRouteHost/index.tsx`, the client boundary. Its hook reads route state using `usePathname()`
+  from the app's i18n navigation facade and `useSearchParams()`, then passes the selected key and candidate nodes to
+  `components/branches/OverlayHost`. The branch mounts the supplied nodes without importing overlays or reading route state;
+  the client host imports only its hook and branch, never another overlay.
+  Keep function render props inside the client subtree; only serializable props and rendered nodes cross from the server
+  layout. Enclose a search-parameter host on a static route in `Suspense` with a visible text fallback. The worked tree
+  and implementation are in `knowledge/patterns/fe/boundaries.yaml`.
+- **`hooks/` are hooks (R56).** `hooks/` holds React hooks only (`use*.ts`, one hook per file): `fe.hooks.swr`, `fe.hooks.rhf`,
+  `fe.hooks.zustand`, `fe.hooks.socketio`, `fe.hooks.effects`, `fe.hooks.reuseables` and `fe.hooks` with one `<domain>.shared.ts`
+  for shared non-hook helpers. Each concern's library and home is `knowledge/hfs/fe-stack.yaml`, the same in lite and full.
+- **Data transport (R50 to R52).** The browser calls the back end directly, in both editions: the auth and no-auth Apollo
+  clients and their link chain (`fe.transport.client`, or `fe.package.api.client` when several apps share it) run one file per
+  query and mutation of `fe.modules.api`, and the one axios instance of `modules/api/rest` serves uploads, presigned URLs and auth
+  endpoints only; nothing else calls `fetch`. Every operation returns the one `GraphQLResponse<T>` envelope
+  (`fe.transport.outcome`); UNAUTHENTICATED and FORBIDDEN become `refused` after one token refresh, and a failure is never
+  collapsed into empty data. Wire types are generated by graphql-codegen from `be/contracts/<app>/schema.graphql`. Components
+  call SWR hooks only (`fe.hooks.swr`, one per operation, keyed by every identity of the result); mutation outcomes go through
+  `fe.modules.toast`. One refresh mechanism per resource, SWR refreshInterval or a socket, never a hand-written poll loop; heavy
+  work is a mutation that enqueues a back-end job, followed by a status query or a socket namespace. The front end serves no API:
+  no Server Action and no route handler beyond health/live and `fe.route.callback` (R243), and it uses only the libraries of
+  `knowledge/hfs/fe-stack.yaml` (R244).
+- **Boundaries (R53, R54).** Every app has `app/global-error.tsx`, `app/[locale]/error.tsx`,
+  `app/[locale]/not-found.tsx`, and a `loading.tsx` for each route group that reads data. `Suspense fallback={null}` is
+  forbidden. Route files (page, layout, template, loading, not-found) hold no inline component, no drawing and no hook.
+- **Server first (R55).** Route files, page owners and layout owners are server components; an owner renders the client
+  block or overlay that carries the directive and never carries it. `"use client"` appears at the
+  entry of an interactive block or overlay, in a leaf with intrinsic interaction, and in the route error boundaries;
+  the client state slots (providers, hooks, redux and toast) also permit it. The i18n catalog is
+  split by namespace and a client component receives only the `pick`ed part. `force-dynamic` is forbidden on a client
+  page.
+- **i18n (R58 to R60).** Every app uses `next-intl` with the `[locale]` segment, default locale `vi`, `localePrefix`
+  `as-needed`, and `src/proxy.ts` (not `middleware.ts`) for locale routing. The next-intl stack (routing, navigation,
+  request config) is written once per front end: `fe/packages/<family>-i18n` exports `createAppI18n` and each app's
+  `modules/i18n/index.ts` calls it with its `messages/<locale>.json` (a one-app front end may keep the stack in its
+  `modules/i18n/`). No display text at any tier (block, page,
+  layout, `aria-label`, `title`, `placeholder`, `alt`) in any language; there is no escape comment. A single-language app
+  still uses `next-intl` with one locale. Catalogs of all locales have the same key set (R60), a key the source reads exists in every locale and a key nothing reads is deleted (R106).
+  `<html lang>` is set by the `[locale]` layout.
+- **CSS and tokens (R61, R62).** Only Grammar tokens. The Common tier reads only Grammar role tokens; a family supplies
+  their values. `app/globals.css` contains only `@import` and `@source` in the standard order and every `@source`
+  resolves. Colour values live only in `modules/brand/brand.css`, set only declared Grammar brand tokens, in light and
+  dark, checked against the brand record. Forbidden: `*.module.css`, class selectors in app CSS, `!important`, hex, oklch
+  or rgb outside `brand.css`, declaring `--<family>-*` in an app, breakpoints outside the Grammar scale, raw `<select>`,
+  `<input>`, `<textarea>`, `<button>` in product tiers. `@starci/stylelint-canon` runs like the ESLint canon.
+- **Packages (R63).** A shared UI package is `fe/packages/<family>-ui`, built to `dist`, explicit `exports`, no
+  `export *`, only composites, branches and leaves, no colour literal, no unused export. Family token values are a
+  family entry of `@starci/grammar`.
+- **Multiple apps (R64).** One independent `fe/apps/<app>` per app; shared code only through `fe/packages/*`. A design draft
+  is a branch, not a second app. The `work/ui-screen@2` record declares `app`, a name from `hfs.json` `sides.fe.apps`.
+- **Budgets (R65).** Connected units have at most 6 data hooks and 6 `useState`; component 300 lines; `index.tsx` 200;
+  hook 200; module 400. A pure re-export `index.ts` whose statements are all `export ... from` has a separate 400-line
+  barrel budget. An index containing imports, local declarations or exports without a source keeps its ordinary budget.
+
+## 7. Tests
+
+- Backend, four kinds by folder and suffix (R47): unit `<name>.<role>.spec.ts` beside its subject — required beside every file of a spec-required role of `ruleParams.be.unitRoles` (a service, a cli command) and beside a webhook or realtime door that has no service of its own, optional beside any other `ruleParams.be.logicRoles` file of a `coverage: required` slot —; integration
+  `be/src/tests/integration/<capability>/*.integration-spec.ts` (`useTestWorld({ modules })`, real database, no HTTP); e2e
+  `be/src/tests/e2e/<area>/*.e2e-spec.ts` (`useTestWorld({ apps })`); contract `be/src/tests/contract/<provider>/*.contract-spec.ts`
+  (provider sandboxes, skipped without sandbox config).
+- `be/src/tests/world/` is the only test infrastructure: `global-setup.ts`, `use-test-world.ts`, `fakes/<provider>/`
+  (network-edge fakes with `failNext`, `replayWebhook`, `delay`, plus payload fixtures) and `test-world.config.ts` (the
+  declaration the test-world library reads, in its one named form `export const { useTestWorld, useSandbox } = defineTestWorld({...})`: `stack`, per-service `stacks`, `fakes`). Nothing under `be/src/tests` overrides a provider or DI
+  token: everything first-party is real, and so is every service of the app's own stack (`.starcistacks/<env>`:
+  Postgres, Redis, Keycloak with its realm imported, a mail host, k3s through k3d with a local registry when the app drives
+  Kubernetes). The library starts them behind toxiproxy, `global-setup.ts` attaches to a warm stack when it answers and
+  otherwise starts its own, `global-teardown.ts` stops only what it started, and the world reads the services and the image
+  versions from the stack at run time. A spec fails a real service through `world.infra.<service>.latency(ms)`, `.cut()` and
+  `.restore()`, never by killing it. `fakes/<provider>/` is only for external SaaS the team does not operate (a payment
+  gateway). One exception: a stack service that is stateless compute needing special hardware or an external model (GPU
+  inference, a self-hosted embedding model) may be faked when its `stacks` entry in `test-world.config.ts` declares
+  `{ fakedBy, reason }`; a stateful service (database, cache, identity, storage, mail, queue, search, or one with a persistent volume)
+  never is (R47 `test-world-files`).
+- Backend specs never skip themselves (R48 `spec-no-skip`: no `skip`, `skipIf`, `runIf`, `todo`, `only`, `xit`, and no conditional runner); nothing skips, the contract layer included: a contract spec writes `sandbox.describe(...)` from the test-world library's `useSandbox(...)`, which registers one failing test naming the missing keys when its sandbox config is absent; no app file, world helpers included, writes a skip. An integration or e2e spec passes `useTestWorld` one object literal (R47 `test-world-shape`). Every `fakes/<provider>/` with `payloads/*.json` needs a `contract/<provider>/*.contract-spec.ts` asserting `shapeOf(real)` equals `shapeOf(fixture)` (R47 `contract-fixture-guard`, helper named by `ruleParams.be.contractShape`).
+- Integration, e2e and contract run by hand: no husky, lint-staged, default typecheck, coverage, Codecov upload or automatic
+  CI; the e2e workflow is `workflow_dispatch` only (R12). `test:contract` is never part of `test` or `test:e2e`.
+- Backend: one `be/jest.config.js` (preset `@starci/jest-preset`) with exactly the projects `unit`, `integration`, `e2e`
+  and `contract`; ts-jest `diagnostics: false` and `isolatedModules: true`; types are checked by `typecheck` (unit specs
+  and fixtures included) by the op gate and CI and by `typecheck:tests` (`be/src/tests/tsconfig.json`) for the world,
+  integration, e2e and contract trees. `test:integration`, `test:e2e` and `test:contract` are each
+  run through `starci gate run --root <app> --tests <name>`; `test` runs through `starci gate unit --root <app>` (per-file 100 on the measured scope `starci app sync` renders: the files of the `ruleParams.be.logicRoles` roles inside the slots whose `coverage` is `required`, R204). Every gate runs from the app root.
+- A backend e2e boots the real apps through the world; it never hand-assembles a lane module. Fixtures are typed
+  builders and doubles, not `as never` or `as unknown as`; they never import a feature. No `testing/` folder in
+  `be/src/modules`. A spec does not read source code with `fs` (R48).
+- Frontend: no tests by standard (R97): no spec, no e2e, no test runner, test script or test dependency under `fe/`, and no exception.
+- Write or update the spec of the service or cli command you change; the op gate (`gate.mjs --tests`) and the hooks run only the affected unit specs. The whole suite runs only at push.
+
+## 8. `.starciwork`, `.starcistacks`, secrets
+
+- Full's `.starciwork/` at the app root (one per app, for both sides) holds flat product records `features/<f>/<family>/<name>/index.yaml`, `br/<rule>/ac/<name>/`,
+  `workspace.yaml`, `brand/`, `shell/index.yaml`, `_resources/{identities,environments,fixtures}/<slug>/resource.yaml`
+  and accepted ui-screen assets. `_derived/` is generated and not tracked. Lite permits only `.gitignore`, optional
+  `workspace.yaml` metadata and `brand/**`; the tree is required only when the app has brand records (R212).
+- An identity record holds role, provider, realm and `custody.sealed: .starcistacks/<env>/secrets/identity-<slug>.enc`
+  (R09; the path is app-relative, like every path a record names). UAT `accounts.yaml` selects an identity by role; several flows share one identity per role. A record that holds
+  no secret uses `custody.provider: none`.
+- `.starcistacks/` (at the app root, never under a side) requires `application-stacks.yaml`. Full permits `<env>/{README.md, environment.json,
+  infra/{compose,k8s,terraform,swarm}, runtime/{config,env}, secrets/<slug>.enc, seeds/}`. Lite permits only environment
+  runbooks, value-free metadata, `infra/swarm/**` and encrypted-secret custody under slot `app.starcistacks`;
+  `infra/{compose,k8s,terraform}/**`, runtime, seeds and components duplicating Supabase backing services are forbidden.
+  A Lite production declaration uses `runtime: docker-swarm` and `backing.supabase: {provider: supabase, managed: true}`.
+  Swarm stacks follow the rollout, healthcheck, pinned-image, secret and scheduled-work rules of R10.
+  Recurring work is app-owned; no workflow or deployment script installs host crontab. There is no `runtime/files/`.
+  `runtime/env/KEYS.md` names slugs only. The Sonar block is `owner: host` and points at `.claude/ext/sonar`. `DESIGN.md`,
+  `deployment.json` and `k8s/` at its root do not exist (R10).
+- Secrets exist only as sops `*.enc` at `.starcistacks/<env>/secrets/<slug>.enc`, sealed per `.sops.yaml`; the front end
+  holds no secret. A decrypted value is never written into the app tree, ignored or not; it lives in memory or under `%LOCALAPPDATA%/StarCi/secrets/<project>/<env>/`
+  and is passed by `*_FILE` (R06). Agents never read, print or commit a secret value and never generate or rotate keys.
+  Owner ruling 2026-10-14: the owner runs `starci app secret init` to create or reuse an external age identity and record
+  its public recipient in the root `.sops.yaml`. The private key stays in the platform SOPS age key file (Windows:
+  `%APPDATA%/sops/age/keys.txt`); an existing recipient is retained and requires its matching identity. The stack text
+  describes those actual recipients and their outside-repository key custody. See [the secrets custody runbook](../../docs/application-stacks.md#secrets-custody).
+
+## 9. Shared tooling, formatter, pins, budgets
+
+- Every config is a thin call into a `.claude` package: `starciBeConfig({ hfs })`, `starciFeConfig({ hfs })`,
+  `@starci/tsconfig/{be,next}.json`, `@starci/prettier-config`, `@starci/jest-preset` (back end),
+  `@starci/stylelint-canon` (front end), and the `@starci/cli` dispatcher for the `starci app` command group.
+  The CLI catalog owns its verbs. Every managed file is generated by `starci app sync` at the app root and hash-checked (R05). The managed files are the slots whose `managedBy` is set in `slots.yaml`: at the app root `app.package-manifest`, `app.format-config`, `app.hooks`, `app.ci`, `app.quality-config` and the git files; per side `be.tool-config` and `fe.tool-config` (`appTokens` of the stylelint config derived from the `globals.css` files by `loadAppTokens`). `lint` (`starci app lint`:
+  ESLint over `be/` with the BE canon and over `fe/` with the FE canon, the app check, stylelint over `fe/`) is the one lint
+  gate and `lint:fix` its `--fix`; there is no front-end test script. An app defines and disables no rule (R16, R17). `noInlineConfig: true`: no `eslint-disable`, no
+  `@ts-ignore`, no `@ts-expect-error` (R18). Every `@starci/*` package is installed from the npm registry at the exact
+  version of `canon-pins.yaml` (`packages/README.md`).
+- **Formatter.** Prettier only: `printWidth` 120, `tabWidth` 4, `semi` false, `singleQuote` false, `trailingComma`
+  `all`. No ESLint formatting rule exists. Pre-commit runs `prettier --check` on the staged files, and CI enters the format check through `starci gate run --root <app>` (R19).
+- **Pins.** `canon-pins.yaml` holds exact versions. One version per dependency across the root and workspace manifests, root `overrides` for
+  react, next and grammar, no nested copies (R14, R15). Raising a version is a change in `.claude` first, then each app
+  moves to the new pin in its own upgrade lane. `tsconfig` extends `@starci/tsconfig` with `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
+  `noImplicitOverride`, `noFallthroughCasesInSwitch`, `allowJs: false` and never lowers a flag (R22).
+- **Size budgets.** Backend file 500 lines, function 80, `app.module.ts` 250, `<app>.options.ts` 200, `compose/<area>.ts` 120,
+  `main.ts` 80 (absolute, R246), owner `index.ts` 60 exports (integration provider entries 80), feature 250 source
+  files. Frontend component 300, connected `index.tsx` 200, hook 200, module 400; a pure re-export `index.ts` barrel has
+  its own 400-line budget. The mechanism is no-growth
+  (`HFS_SIZE_GROWTH`): a new file is inside the budget, a file already over its budget gains no lines against its parent
+  commit. There is no baseline and no allowlist (R20). A duplicated block at or above the one threshold
+  `ruleParams.<side>.duplicateBlock` of `slots.yaml`, and a helper defined twice under the same name, fail (R21).
+- **Integration entry budget (R30).** `be.integrations` allows 80 named exports because a provider exposes its whole port
+  surface: clients, configuration, options, injection tokens and errors, wider than a domain owner. This includes
+  `src/modules/integrations/data-sources/index.ts`; domain entries retain 60. The single-file `no-folder-reexport` rule cannot
+  distinguish a name used only by specs from one used in production, so the budget remains a count of every exported name,
+  with no spec exemption. `HFS_UNUSED_EXPORT` still checks external consumers across files and prunes unused names, including
+  its supported unit and matching-provider integration spec consumers.
+- **Contracts.** The back end commits `be/contracts/<app>/schema.graphql` (and `openapi.json` of a typed operation table),
+  written by `starci app emit`; the front end reads them in place and keeps no copy (R23).
+
+## 10. Gates
+
+| Gate | Runs | Target | Rules |
+| --- | --- | --- | --- |
+| PC pre-commit | L0 only: `starci app hygiene` (staged `.starciwork` and `.starcistacks` paths, the secrets guard), ESLint per side on the staged files, stylelint on the staged CSS of `fe/`, `prettier --check` on the staged files; no typecheck and no test run (the op gate does types and the targeted specs) | seconds | R06, R07, R18, R19, R34, R40, R41, R43 to R45, R49, R55, R58, R61, R62 |
+| PP pre-push | the release gate check, no test run, no typecheck, lint or format: `refs/backup/*` is allowed; `main` and `v*` tags only when HEAD carries an annotated `v[0-9]*` tag and the release cut recorded the full suite of HEAD (`<git common dir>/starci-release/<HEAD sha>.l4.json`); anything else is refused (`RIGHTS_PUSH_NOT_RELEASE`) | seconds | none |
+| OS op settle | the op gate `starci gate run` over the op's changed files, forced every round of the op loop: the merge guard, `starci app lint --changed`, `codegen` and package builds, `tsc` per owning tsconfig, the slice's specs; only findings new against the base block (the workflow's previous checkpoint); `starci kernel settle` re-reads the attached gate JSON and READ digest and refuses a red `done` | per op | every file-level and owner-level rule in scope |
+| LG land | the workflow's finish: `gate.mjs` over the whole workflow branch against its merge-base with main (merge guard included), `review.verify` of the exact head that lands, then the owning land gate integrates the verified result with current main and fast-forwards local main; the release flow owns the remote move ([git governance](../../docs/git-governance.md)). A green op before land is a checkpoint on `wf-<workflowId>`. | per workflow | as OS, over the whole branch, against the newest main |
+| CI GitHub | `starci npm ci`, `starci app lint --sonar reports/lint.sonar.json`, `starci check run --level L2` (formatting and app checks), `starci typecheck run --level L2`, `starci gate unit --root <app>` (unit with the per-file coverage threshold), the declared `build:be` and `build:fe` steps through `starci gate run --root <app>`, and `starci gate sonar scan --cwd <app> --wait` (Sonar scan and quality gate) | | every rule |
+| SQ Sonar | the imported lint findings, duplication, cognitive complexity and coverage 100 on the measured files of the be coverage scope (the `ruleParams.be.logicRoles` roles of the `coverage: required` slots; overall, new code and per file; the be unit run's lcov, the same per-file 100 the unit project enforces) | | R20, R21 (second gate) |
+
+A rule's gates are data in `rules.yaml`; adding a rule to a gate edits the manifest, not an app.
+
+## 11. Done for an app
+
+1. `starci app lint` has zero findings for every rule at the pinned version, and CI runs it.
+2. The e2e run boots the real `AppModule` of every back-end app and is green when run by hand.
+3. No feature or owner is left uncomposed or unmounted; no dead export.
+4. `be/contracts/` equals what `starci app emit` writes, and the front end's generated types come from it.
+5. `typecheck`, `lint`, `build:be`, `build:fe`, `test`, `format:check` and the Sonar gate are green.
+6. `typecheck:tests` (back end) is green; integration, e2e and contract still run by hand. The front end has none of them.
+7. `git status` is clean, with no untracked entry outside a slot marked `ignored`.
+
+## 12. Rule catalog
+
+Every rule is an error from 2.0. Finding code, then the rule. The pattern files cite these ids.
+
+<!-- hfs:generated rules -->
+| Id | Code | Law | Scope |
+| --- | --- | --- | --- |
+| R01 | `HFS_SLOT_UNDECLARED` | Every tracked path matches exactly one slot. | product |
+| R02 | `HFS_SLOT_REQUIRED_MISSING` | A slot is missing a required file (feature `index.ts`, app `main.ts`, FE `global-error.tsx`), or the root README breaks its standard shape (title, description, standard sections in order, Work pointer, live badges only, no private URL). | product |
+| R03 | `HFS_UNTRACKED_ROOT_ENTRY` | No untracked or ignored entry outside an `ignored` slot. | product |
+| R04 | `HFS_GITIGNORE_BLOCK_DRIFT` | The managed `.gitignore` block equals its render. | product |
+| R05 | `HFS_MANAGED_FILE_DRIFT` | A managed file equals its template render. | product |
+| R06 | `HFS_PLAINTEXT_SECRET` | Secrets exist only as `.starcistacks/<env>/secrets/<slug>.enc`. | product |
+| R07 | `HFS_AGENT_DATA_TRACKED` | `.starciwork` holds product records only. | product |
+| R09 | `HFS_IDENTITY_CUSTODY` | An identity points its secret at `secrets/identity-<slug>.enc`; UAT chooses by role. | product |
+| R10 | `HFS_STACKS_SHAPE` | `.starcistacks` has the edition-aware standard shape and the host Sonar owner; Swarm stacks have digest-pinned images, healthchecks, rollout, rollback and restart policies, versioned external secrets, ingress-only published ports and declared schedulers for replicated jobs. Recurring work is app-owned; host crontab installation is forbidden. Lite declares Supabase as managed backing and runs no duplicate backing-service component. | product |
+| R11 | `HFS_SONAR_CONFIG` | Sonar config is generated, with no host URL, importing the be lcov with the logic of be/src/modules (the coverage scope derived from the slot manifest) as the only coverage scope. | product |
+| R12 | `HFS_E2E_IN_AUTOMATIC_GATE` | e2e never joins husky, coverage or automatic CI. | product |
+| R13 | `HFS_CI_MISSING_CANON` | CI runs the pinned `starci app lint` (`npm run lint`), a clone never redirects `core.hooksPath` away from husky, and the folder a set `core.hooksPath` names holds the installed hooks in every checkout (husky's dispatcher in `.husky/_`), so no commit lands without the pre-commit gate. | product |
+| R14 | `HFS_DEP_VERSION_SKEW` | One version per dependency in the workspace, a root `overrides` pin included, and npm is the only package manager. | product |
+| R15 | `HFS_CANON_PIN_DRIFT` | Canon packages and frameworks match `canon-pins.yaml`. | product |
+| R16 | `HFS_TOOL_CONFIG_LOCAL` | Configs only call the factories; no local rules. | product |
+| R17 | `HFS_RULE_OFF_WITHOUT_REPLACEMENT` | The ESLint configuration (and a front end's stylelint configuration) is the rendered one-liner, so no rule is off, warned or redefined in a repository. | product |
+| R18 | `HFS_INLINE_SUPPRESSION` | No inline suppression of any kind. | product |
+| R19 | `HFS_FORMAT` | Prettier is the only formatter. | product |
+| R20 | `HFS_SIZE_GROWTH` | Over-budget files do not grow; new files are inside budget. | product |
+| R21 | `HFS_DUPLICATE_CODE` | No duplicated blocks or twice-defined helpers. | product |
+| R22 | `HFS_TS_STRICT` | tsconfig extends `@starci/tsconfig` and lowers no flag; no assertion, `!` or `any` in product source. | product |
+| R23 | `HFS_CONTRACT_SNAPSHOT_DRIFT` | The be side commits its contract snapshot and it equals the emit; the fe side reads it in place (be/contracts/). | product |
+| R24 | `HFS_ARCH_CONFIG_UNREAD` | The machine reads `hfs.json`; zero files analysed is red. | product |
+| R25 | `HFS_UNUSED_EXPORT` | No public export without a consumer; no source file nothing reaches. | product |
+| R26 | `BE_TIER_DIRECTION` | The tier direction matrix; a shared package never imports an app. Front-end page and layout owners may import overlay entries; every other cross-owner feature-to-feature edge is forbidden, including layout-to-page and overlay-to-overlay. Components never import overlays. | product |
+| R27 | `ARCH_OWNER_CYCLE` | No owner cycles, type-only included. | product |
+| R28 | `BE_FEATURE_IMPORTS_FEATURE` | A feature never imports a feature. | product |
+| R29 | `BE_FEATURE_SHAPE` | Feature root is `index.ts`, module, `application/`, `transport/<protocol>/`; `application/` never imports `transport/` or a protocol framework. | product |
+| R30 | `BE_PUBLIC_SURFACE` | Every owner has one `index.ts`; cross-owner imports use it, same-owner imports are relative and never go through it; it holds only named `export { }` lines, no `export *`, no alias re-export (`export { X as Y }`, `export const Y = X`, `export type Y = X`, `export interface Y extends X {}`: one declaration has one name), within the owner slot's `indexExports` budget (60 for domain and feature owners, 80 for `be.integrations` provider entries); cross-package imports use the package name and a declared export. | product |
+| R31 | `BE_FEATURE_NOT_COMPOSED` | Every feature, transport module and capability module is composed by an app. | product |
+| R32 | `BE_APP_COMPOSITION_ONLY` | Apps compose only; an app is proven by the e2e world (`useTestWorld({ apps })`), never by a unit spec. | product |
+| R33 | `BE_ENTRYPOINT_ONLY_IN_APPS` | Entrypoints only in `be/apps/*/src`. | product |
+| R34 | `BE_SCHEMA_AUTHORITY` | Migrations own the application schema and run only through cli migrate or TestWorld; `synchronize` is `false`. TestWorld infrastructure may provision generated write-fault triggers and functions only in its verified private connection, preserving production constraints and existing triggers, holding its operation lock through catalog-confirmed cleanup. | product |
+| R35 | `BE_SCHEMA_OWNER` | Entities and migrations live in the owning capability's `persistence/`; its `<c>Entities` and `<c>Migrations` are registered under exactly one declared connection, which every `Inject<Conn>EntityManager` of the capability names (no `CONNECTION` alias); only a platform capability the manifest lists as `perConnection` (the event-bus outbox, the job table) registers on several. | product |
+| R36 | `BE_SQL_OUTSIDE_PERSISTENCE` | Raw SQL is `sql`-tagged `SqlText` in `persistence/<name>.sql.ts` of the owning capability; `.query()` takes only `SqlText`; no QueryBuilder. | product |
+| R37 | `BE_ENTITY_IN_CONTRACT` | No ORM entity in a contract or transport type. | product |
+| R38 | `BE_ERROR_HOME` | Errors live in the owning capability's `errors/` and extend `DomainError`. | product |
+| R39 | `BE_ERROR_MASKED` | One filter per app; undeclared errors are masked. | product |
+| R40 | `BE_LOGGER_REQUIRED` | `platform/logging` exists and its `Logger` port is the only logger; every `catch` logs, rethrows or returns a reasoned outcome, and a log call names its event with a member of an owner's `<owner>.log-events.ts` enum. | product |
+| R41 | `BE_DEFAULT_DENY` | APP_GUARD plus `@Public({ reason: PublicReason.X })`; no `@UseGuards`; typed bodies; `timingSafeEqual`. | product |
+| R42 | `BE_INPUT_BOUNDED` | Bounded input, cursor-only pagination, depth limits, rate limits; every property of an input class carries the `class-validator` decorators its type calls for; a door opened for `PublicReason.AuthHandshake` or `PublicReason.SignedWebhook` carries `RateTier.Strict` of `platform/http-security`. | product |
+| R43 | `BE_CONFIG_OWNER` | Only the `EnvSource` declaration of `platform/config`, app `main.ts`, the matching `<app>.env.ts` and the test world read `process.env`; app environment reads through `EnvSource` and capability config helpers live in `main.ts` or the matching `<app>.env.ts`; options files and composition groups receive typed options. | product |
+| R44 | `BE_SECRET_DEFAULT` | No default for a secret key or infrastructure URL. | product |
+| R45 | `BE_MODULE_SHAPE` | `@Global` nowhere and `isGlobal: true` only at app roots; no cross-owner module imports; typed options; one module per transport, each module with its own module definition beside it (R295); every handler and provider registered exactly once. | product |
+| R46 | `BE_BACKGROUND_UNOWNED` | Every sweep, outbox or retry has a job or consumer composed by an app: the service that owns it (an api app) or a worker app scaled apart. | product |
+| R47 | `BE_TEST_TOPOLOGY` | One jest config, projects `unit`, `integration`, `e2e` and `contract`, live by folder, `diagnostics: false`; unit specs are `<name>.<role>.spec.ts` beside the file they test: required for the roles of `ruleParams.be.unitRoles` (`<name>.service.spec.ts` beside a `<name>.service.ts`, `<name>.cli.spec.ts` beside a cli command `<name>.cli.ts` of `src/features/cli`), optional for any other logic role (`ruleParams.be.logicRoles`) inside a slot whose `coverage` is required, except that the commit adding a measured logic file stages its `<name>.<role>.spec.ts` beside it (owner 2026-10-20, judged by `starci app hygiene` in the pre-commit hook), and nowhere else but beside a webhook or realtime door that has no service of its own (`<provider>.webhook.spec.ts`, `<channel>.gateway.spec.ts`, `<x>.subscription.spec.ts`) (every unit-tested subject has exactly one; any other `*.spec.ts` outside `be/src/tests/{world,integration,e2e,contract}` is a finding, including specs in apps), and the unit project collects coverage from the logic roles of the measured roots only (the scope derived from the slot manifest, R204) with a per-file threshold of 100 on lines, branches, functions and statements (`test` runs `--coverage`; `importHelpers` and `tslib`); `be/src/tests/world/` is the ONLY test infrastructure: `global-setup.ts` starts the app's own stack (`.starcistacks/<env>`, named by `stack` in `test-world.config.ts`, the declaration of the test-world library in its one named form `export const { useTestWorld, useSandbox } = defineTestWorld({...})` (a default export is not read): every service it declares runs REAL, behind toxiproxy, images and versions read from the stack at run time, never spelled in test source) or attaches to a warm one that answers, and runs the migrations once over the cli app's connections (the runner of the cli migrate command); `global-teardown.ts` stops only what its setup started; `use-test-world.ts` exports `useTestWorld({ apps } \| { modules })` (`world.apps.<name>.api`, `world.db.<connection>`, `world.infra.<service>` with `latency(ms)`, `cut()` and `restore()` on the real service, `world.fake.<provider>`, `world.waitFor`) and `fakes/<provider>/` holds the network-edge fakes (`failNext`, `replayWebhook`, `delay`, payload fixtures) of external SaaS the team does not operate ONLY: a fake of a service the stack declares is refused, except stateless compute that needs special hardware or an external model (GPU inference, a self-hosted embedding model), whose `stacks` entry in `test-world.config.ts` declares `{ fakedBy: <fake>, reason }` with a non-empty `reason` (a stateful service, or one with a persistent volume, is never accepted); it alone owns containers, DataSource, migrations and `process.env`; nothing under `be/src/tests` overrides a provider or DI token; `be/src/tests/integration/<capability>/*.integration-spec.ts` (`{ modules }`, with the real peer apps its client calls beside them as `apps`; real infrastructure, no HTTP door of ours), `be/src/tests/e2e/<area>/*.e2e-spec.ts` (`{ apps }`) and `be/src/tests/contract/<provider>/*.contract-spec.ts` (provider sandboxes, skipped without sandbox config, run only by `test:contract`, never by `test` or `test:e2e`) agree folder with suffix; an integration or e2e spec passes `useTestWorld` one object literal with plain keys (no variable, spread or computed key) and calls it; the contract layer has no skip either: a contract spec writes `sandbox.describe(...)` from the test-world library's `useSandbox(...)`, and when the sandbox config is absent that describe registers one failing test naming the missing keys (the body never runs), and every `fakes/<provider>/` that serves payload fixtures (`payloads/*.json`) has a `contract/<provider>/*.contract-spec.ts` that references those fixtures and asserts `shapeOf(real)` equals `shapeOf(fixture)` (the helper `shapeOf` is named by `ruleParams.be.contractShape` of the slot manifest; fakes the test-world library provides are guarded by the library); no `.test.ts`, `int-spec` or `harness-spec`, no `live/` and no `be/src/tests/e2e/world`. | product |
+| R48 | `BE_SPEC_QUALITY` | No source-reading specs; a spec asserts results or state, not only calls; no `as` and no `x!` in a spec (the borrowed rules of R72), no return-only generic (`<T>(value: unknown): T`), `unknown` handed back as a concrete type, `JSON.parse(JSON.stringify(x))` or `Object.assign(new X(), y)` returned as another type in a spec or a test fixture, and no `Date.now()`, argless `new Date()` or `process.env` (R79, R43); a unit spec (`<name>.service.spec.ts`) builds its subject with `Test.createTestingModule({ providers: [...] }).compile()` and `moduleRef.get(Subject)`: no `new` of the service, no `imports` key, no `override*` call, and no `jest.mock`, `jest.doMock`, `jest.unstable_mockModule` or `jest.requireMock` of an own module or a third-party library; it provides each infrastructure token from its `@starci/jest-preset` double (`mockEntityManager(...)` for an EntityManager token, `new FakeClock(...)`, `recordingEventBus()`, `recordingQueueOutbox()`, `fakeCache(...)`, `fakeLock(...)`, `fakeIds()`, `builder(...)(...)` or a plain literal of real values for an options token, `mock<T>()` for everything else; the token table is `ruleParams.be.specDoubles` of the slot manifest) and takes its EntityManager only from the kit's `mockEntityManager()` or `fakeTransaction()`, never an ad-hoc `jest.fn` object, and asserts exact values: ids from `fakeIds()` and dates from `FakeClock` are compared as themselves, never `expect.any(String)`, `expect.any(Number)` or `expect.any(Date)`; an e2e enters through transport, waits with `waitFor`, boots through `useTestWorld`, reads persisted state back and reaches no model provider. Test data is arranged by builders, which R98 to R101 hold. No spec of any layer skips, focuses or marks a test todo (`skip`, `skipIf`, `runIf`, `todo`, `only`, `xit`, `xdescribe`, `xtest`) and none selects its runner conditionally, and no file of the test tree (world, fixtures, kit) writes one either; the only skip is the test-world library's `useSandbox(...)` (`@starci/test-world`), which skips a contract spec when the sandbox config is absent. | product |
+| R49 | `FE_ENV_OWNER` | Only `modules/config` reads the environment; no localhost fallback. | product |
+| R50 | `FE_TRANSPORT_OWNER` | One transport per front end: the browser reaches the back end only through the auth and no-auth Apollo clients and their link chain (retry, error, timeout, token refresh, access token, http) in `fe/apps/<app>/src/modules/api/graphql/clients/` when one app calls the back end, or `fe/packages/<family>-api/src/graphql/clients/` shared by every app that does when several do (an app that calls no back end, such as a marketing landing, holds no transport), and through the one axios instance of `modules/api/rest` for uploads, presigned URLs and auth endpoints; no other `fetch`, HTTP or GraphQL client, and no token or locale held in module state; a component reads through an SWR hook of `hooks/swr` whose key carries the identity of its result, and a mutation hook is tied to its resource. | product |
+| R51 | `FE_HTTP_STATUS_COLLAPSE` | One `GraphQLResponse<T>` envelope (`success`, `message`, `error`, `data`) per front end, declared in `modules/api/graphql/types.ts` (or the shared api package's); a failure is never collapsed into empty data, and an UNAUTHENTICATED or FORBIDDEN answer (401, 403) becomes `refused`: the error link refreshes the token once, then the session sends the user to sign-in. | product |
+| R52 | `FE_WIRE_GENERATED` | Wire types are generated by graphql-codegen from `be/contracts/<app>/schema.graphql`, read in place and never copied, into `modules/api/graphql/__generated__`; an operation's request and response types re-export the generated ones and are never typed by hand. | product |
+| R53 | `FE_ERROR_BOUNDARY_MISSING` | Global, locale error, not-found and loading boundaries exist. | product |
+| R54 | `FE_ROUTE_FILES_THIN` | Route files mount one owner; Next conventions (`proxy.ts`, metadata). | product |
+| R55 | `FE_CLIENT_BOUNDARY` | Server first; `"use client"` only where allowed. | product |
+| R56 | `FE_HOOKS_ARE_HOOKS` | `hooks/` hold hooks only: `hooks/swr` (one SWR wrapper per modules/api operation), `hooks/rhf` (forms), `hooks/zustand/<store>`, `hooks/socketio`, `hooks/effects`, `hooks/reuseables` and `hooks/<domain>` with one shared file per domain; a product hook is defined only there and imported through its index. A function in `hooks/` is a hook when it calls a hook: a React, SWR or Redux hook, a `use*` of the app's own `hooks/` folders (a `hooks/swr` wrapper, a sibling domain hook; resolved by TypeScript symbol resolution), or a listed library hook (next-intl, next/navigation, react-hook-form, zustand); a file that exports a non-hook still fails (owner ruling 2026-10-16 "Theo y tro"). | product |
+| R57 | `FE_OWNER_REACHABLE` | Every owner is mounted; every href resolves to a route. | product |
+| R58 | `FE_I18N_LITERAL` | No display text at any tier, no escape comment. | product |
+| R59 | `FE_I18N_PLACEMENT` | `next-intl` with `[locale]`; the next-intl stack is written once per front end: `fe/packages/<family>-i18n` (`createAppI18n`) called by each app's `modules/i18n/index.ts`, or the only app's `modules/i18n/`. | product |
+| R60 | `FE_I18N_CATALOG` | Same keys in every catalog, `pick` for clients. | product |
+| R61 | `FE_STYLE_TOKEN_ONLY` | Token-only CSS; colour only in `brand.css`; every `@source` resolves (sub-check `FE_STYLE_SOURCE_UNRESOLVED`). Status colours follow HeroUI soft pairs: every status tone has `--<tone>-soft` and `--<tone>-soft-foreground` in light and dark, the soft foreground reaches 3:1 on its tint and on `--background`, body text 4.5:1, a solid tone is never text below 4.5:1, and text and icons take the soft foreground, never the solid tone. | product |
+| R62 | `FE_NATIVE_FORM_CONTROL` | No raw form controls, native images or raw structural tags in product tiers; the grammar renders them. | product |
+| R63 | `FE_PACKAGE_SHAPE` | Packages build to `dist` with explicit exports and no dead unit. | product |
+| R64 | `FE_APP_ISOLATION` | Apps never import apps; ui-screen declares `app`. | product |
+| R65 | `FE_SIZE_AND_STATE_BUDGET` | Hook and state budgets; no hand-written poll loop; keyed lists; everything an effect starts is released by its cleanup; no swallowed error or console. | product |
+| R68 | `BE_SQL_INTERPOLATED` | SQL text carries no runtime substitution; values are numbered parameters. | product |
+| R69 | `BE_QUERY_UNBOUNDED` | A read that can return many rows states `take`, `limit` or `LIMIT`, or pages by cursor. | product |
+| R70 | `BE_HTTP_TIMEOUT` | Every outbound `fetch`, axios or HttpService call states a timeout or an abort signal. | product |
+| R71 | `BE_LOG_SECRET` | A `Logger` call carries no `Secret` or `Pii` value and no credential or personal identifier by name; log an id or a masked form. A constructed error carries no `Secret` value and no text value named like a credential. | product |
+| R72 | `BE_TYPE_ESCAPE` | No type escape in any file, specs included: no `as X` (only `as const`), `<X>y`, `x!` or `any` (the factory turns on the typescript-eslint rules `consistent-type-assertions` with `never`, `no-non-null-assertion` and `no-explicit-any`), no `Function` type, no `eval`. | product |
+| R73 | `BE_ASYNC_NO_AWAIT` | An `async` function contains an `await`; otherwise it is not `async`. | product |
+| R74 | `BE_MIGRATION_REVERSIBLE` | Every migration declares a `down()` that reverses its `up()`; never empty, never a bare throw. | product |
+| R75 | `BE_RETURN_TYPE` | Handlers and public methods of an Injectable, Resolver or Controller declare their return type. | product |
+| R76 | `BE_JSON_PARSE_UNGUARDED` | `JSON.parse` sits inside a `try` in its own function and fails as a typed outcome. | product |
+| R77 | `BE_QUERY_IN_LOOP` | A read through the shared EntityManager does not run once per element of a loop; read once before the loop by key list. | product |
+| R78 | `BE_USER_COPY_LITERAL` | A literal exception message, notification text or response copy comes from the per-capability messages catalog through the typed `MessageCatalog` port, not from source. | product |
+| R79 | `BE_AMBIENT_CLOCK` | `Date.now`, a bare `new Date()`, `performance.now`, `process.hrtime` and `Temporal.Now` are referenced only inside `platform/clock`, specs included; code asks the injected `Clock` port and specs use `FakeClock`. | product |
+| R80 | `BE_INBOX_DEDUPE_MISSING` | Every service method that takes a delivery (a public method of a `*.service.ts` whose first parameter has an `eventId`) makes `claim(source, eventId)` on the `Inbox` port its first awaited expression and returns early when the claim answers `false`; consumers stay thin doors (R88) and dispatch one command to the handler whose service claims. SignedWebhook controllers verify first and call one domain recording intake directly (R182, R183); a reactor or job dispatches the processing command after the inbox receipt commits. | product |
+| R81 | `BE_HAND_ROLLED_RETRY` | A loop that catches an error and waits before trying again goes through the shared `platform/retry` helper, never a hand-written loop. | product |
+| R82 | `BE_TRANSACTION_EXTERNAL_CALL` | No transaction spans an external call; commit first and call out after, or write an outbox message inside the transaction. | product |
+| R83 | `BE_UNNAMED_DATA_ACCESS` | The database is reached through the shared EntityManager, injected as a constructor parameter by the `Inject<Conn>EntityManager()` of a declared connection and called directly; no bare `@InjectEntityManager()`, `getRepository`, repository, QueryBuilder or property injection; a `DataSource` or `QueryRunner` only in `platform/database`, the cli (`be/apps/cli`, `be/src/features/cli`) and the test world `be/src/tests/world`, whose `world.db.<connection>` EntityManager the specs use. No class outside an application handler, a domain service or a platform persistence capability takes, holds or returns an `EntityManager`, `Repository`, `DataSource` or `QueryRunner` (a repository under any name, a store, dao, gateway or persistence wrapper included), no exported function whose first parameter is an `EntityManager` (a statement module), and no wrapper return type, awaited value or `provide:` token hands out a connection object. | product |
+| R84 | `BE_CONNECTION_DUPLICATE` | One physical database is one connection and one `Inject<Conn>EntityManager()` injector declared once in `platform/database`; `hfs.json` connections, connection files, injectors and module registrations correspond one to one. | product |
+| R85 | `BE_RAW_INJECT` | Every injected infrastructure dependency arrives through a zero-argument `Inject<Thing>()` from its owner's `<owner>.decorators.ts` over a `unique symbol` token; raw `@Inject(` exists only there, and every such token is exported so a spec can provide it; a constructor parameter of a provider is typed by a class or carries an `Inject<Thing>()`, never a bare primitive, `Map`, union or interface; the parameter that injects a port of the table `ruleParams.be.paramNames` of `slots.yaml` (`Clock`, `Logger`, `Cache`, `CommandBus`, `QueryBus`, `EntityManager`, an `*Options`) carries the name that table gives it. | product |
+| R86 | `BE_SQL_TABLE_OWNER` | SQL writes only the tables of its own capability's entities, reads only tables of its own context (its own capability's, or a same-context capability it may import; a cross-context JOIN is refused), and every multi-row SELECT is bounded. | product |
+| R87 | `BE_CQRS_SHAPE` | The application layer is CQRS: typed `Command<R>`/`Query<R>` messages carrying one `params`, handlers extending `ICQRSHandler` that override `process`, where `process` is one `return this.<service>.<method>(...)` and the handler injects only `*Service` classes and the Logger (no EntityManager, no branch, no loop, no second call); no use-case classes, forwarder services or in-process events (`EventBus`, `EventEmitter`, an RxJS `Subject`, a stored listener list); a message and an injected dependency are `readonly`. | product |
+| R88 | `BE_TRANSPORT_SHAPE` | A transport handler (a controller, resolver, gateway, consumer or job; a cli command is an action runner, R149) maps its input, dispatches exactly one command or query through the injected bus and maps the result; it injects nothing else (no EntityManager, no Inbox), holds no branch, loop or other call besides pure mapper functions and `unwrapOutcome` of `platform/primitives`, returns no envelope and takes no `GraphQLJSON`. | product |
+| R89 | `BE_SOURCE_FORM` | Files use the closed role-suffix vocabulary of the slot manifest, `ruleParams.be.suffixes`; named exports only; every export has English JSDoc (its public members: R109); no emoji, and no Vietnamese in identifiers, string literals, comments or test titles outside message catalogs and the i18n fixtures slot; a public input or output is a named contract, never an inline object type; no `Mock*`, `Fake*` or `Stub*` class, function or constant in production source. | product |
+| R90 | `BE_INFRA_OWNER` | Each raw infrastructure library (HTTP, cache, queue, scheduler, logger, date, config, events) is imported or referenced only by its one owning platform or integration capability, and the `HttpClient` port of `platform/http` is called only by an `integrations` capability. | product |
+| R91 | `FE_SOURCE_FORM` | Front-end files sit in their tier folder with the fixed names, export arrow functions named after the folder, carry English JSDoc, no emoji, and no Vietnamese in identifiers, string literals, comments or test titles outside the i18n catalogs and the i18n e2e fixtures slot. | product |
+| R92 | `FE_COMPONENT_API` | A component exposes the canon surface: typed named props and slots, an exact sibling XBase presentational twin for every connected block, status through the slot view, no className or CSS doors, no resting twin or placeholder prop, class names in the colocated file; a pure component reaches no hook, router, locale or API, but may render a list of blocks supplied through render props without importing blocks or owning their data. | product |
+| R93 | `FE_VENDOR_BOUNDARY` | Vendor primitives and icons reach components only through their named owner: the one icon set of knowledge/hfs/fe-stack.yaml (the heroicons family) through the icon leaf at the glyph scale, every vendor primitive behind a named owner; the Grammar package is imported only through its selected code and style entry and keeps its declared contract. | product |
+| R94 | `FE_SLOT_FILE_ROLE` | A front-end file is owned by a slot and named by it: a slot that owns a directory (route, feature, components, hooks, api module) holds only the files its `allows` list names, and holds them inside a folder of its own. | product |
+| R95 | `BE_OPERATION_CONTRACT` | A versioned operation is declared once in the app's typed operation table (`OperationContract<Input, Output, RefusalCode>` registered by `defineOperations`): its input and output are closed types (never `any`, `unknown` or `Record<string, unknown>`), its refusal codes a closed union of string literals, and the route that serves the table takes `OperationRequest<Table>` and answers `Promise<OperationReply<Table>>` of that one table. | product |
+| R96 | `HFS_DOC_NOT_ENGLISH` | Every Markdown and YAML document under a side's docs/, src/ and apps/ (be/, fe/) and under the runtime's knowledge/ and docs/ is English, code fences included; only YAML data in a message-catalog or i18n-fixtures slot may hold another language. | product |
+| R97 | `FE_NO_TESTS` | The front end (`fe/`) has no tests by standard: no `*.spec.*`, `*.test.*` or `*-spec.*` file, no `e2e/`, `__tests__/`, `__mocks__/` or `test-support/` directory, no vitest, Playwright, jest or Cypress configuration or setup file, no test script, and no test-runner, test-environment, testing-library or axe dependency in any `package.json`; there is no exception, `scripts/` included. | product |
+| R98 | `BE_TEST_BUILDER_HOME` | A test data builder lives only in `be/src/tests/fixtures/builders/<area>.builder.ts` (slot `be.tests.fixtures.builders`, its SQL text in `<area>.sql.ts` beside it): a `*.repository.ts`, `*.factory.ts` or `*.fixture.ts` under `be/src/tests` and a `*.builder.ts` elsewhere are BE_SOURCE_FORM findings, and any other module of the test tree that exports a function creating persisted rows through an EntityManager, DataSource or QueryRunner is a builder in the wrong place. | product |
+| R99 | `BE_TEST_ROW_BY_BUILDER` | A unit, integration or e2e spec never hand-builds rows: no raw INSERT/UPDATE/DELETE text, no `save`, `insert`, `upsert`, `update`, `delete` or `remove` on an EntityManager, DataSource or QueryRunner, and no persistence entity built as an object literal more than once in the spec; rows come from the area's builder. | product |
+| R100 | `BE_TEST_CONSTRAINTS_ON` | Nothing under `be/src/tests` disables or drops a database constraint: no `session_replication_role`, `SET CONSTRAINTS ... DEFERRED`, `DEFERRABLE INITIALLY DEFERRED`, `ALTER TABLE ... DISABLE`, `DISABLE TRIGGER`, `DROP CONSTRAINT`, and no `dropForeignKey(s)`, `dropCheckConstraint(s)` or `dropUniqueConstraint(s)` on a QueryRunner; a builder creates the parent chain instead. | product |
+| R101 | `BE_TEST_BUILDER_ARRANGES` | A test data builder arranges data only: it imports no assertion or test-framework global (`expect`, `@jest/globals` or the Jest namespace) and its defaults are deterministic (no `Date.now()`, argless `new Date()`, `Math.random()`, `randomUUID()` or `crypto.random*`). | product |
+| R102 | `BE_SPEC_PLACEMENT` | A back-end spec or test file lives in one of the four test layers and nowhere else: a unit spec of a unit-tested role (`ruleParams.be.unitRoles`: `<name>.service.spec.ts` beside its service, `<name>.cli.spec.ts` beside its cli command), or an integration, e2e or contract spec under `be/src/tests/{integration,e2e,contract}`; a `*.spec.*`, `*.test.*` or `*-spec.*` file anywhere else, `scripts/` and `tools/` included, is a finding. | product |
+| R103 | `HFS_REPO_LOCAL_CHECK` | A repository keeps no check, lint rule or lint plugin of its own: no `check-*` file in `scripts/` or `tools/`, no `eslint-local-rules*` or local eslint plugin, no script that runs one; every check lives in the `.claude` runtime and the canons. | product |
+| R104 | `HFS_LINT_SUPPRESSION_FILE` | A repository keeps no lint-suppression file, script or option: no `eslint.suppressions*`, no `lint:suppressions` script, no eslint `--suppress-all` or `--suppressions-location` flag and no suppressions configuration passed to eslint; a finding is fixed in the code. | product |
+| R105 | `HFS_PROOF_COMMAND_FILE_MISSING` | A proof command of a `.starciwork` record (`requiresProof.<kind>.command`) is runnable as written: every repository file it names exists. | product |
+| R106 | `FE_I18N_KEYS` | The catalogs of a front-end app and its source agree both ways: a literal key read through `next-intl` (`useTranslations`, `getTranslations`, `t`, `t.rich`, `t.raw`, `t.markup`) exists in every locale, and a catalog key that no string of the app's or the shared packages' source can be reading is deleted. | product |
+| R107 | `FE_COOKIE_ATTRIBUTES` | A cookie the front end writes through Next's response cookies (`response.cookies.set`, `cookies().set`) states `httpOnly` as a literal (`true` for a session, `false` only for a preference page script reads), carries `secure` and has `sameSite` `lax` or `strict`. | product |
+| R108 | `BE_ERROR_CAUSE_DROPPED` | A `throw` that escapes a `catch` (or a promise `.catch` handler) rethrows the caught value or carries it: the replacement capability error takes the exact caught value as `cause`; a `catch` with no binding throws nothing new. | product |
+| R109 | `BE_MEMBER_DOC_MISSING` | Every public member of an exported class, interface or object type alias in product source opens with English JSDoc: methods, accessors, fields and signatures; a private, protected or `#` member, the constructor, an index signature and a property set to a literal or a named constant are not judged, and overloads of one name share one doc. | product |
+| R110 | `FE_PROPS_MUTABLE` | The props type of an exported rendering function in front-end product source is readonly all the way down: every field and index signature is `readonly`, and every collection it holds, directly or in a nested object, is `readonly T[]`, `readonly [A, B]` or `ReadonlyArray<T>`. | product |
+| R111 | `HFS_PEER_INTEGRATION_MISSING` | An app declares the runtime peer every driver integration it uses needs: when the app root package.json depends on every package of a pair of knowledge/hfs/peer-integrations.yaml (at the named major), it declares the pair's `requires` in its dependencies (`@nestjs/apollo` on `@nestjs/platform-express` 11, Express 5, needs `@as-integrations/express5`). | product |
+| R112 | `BE_INTEGRATION_SPEC_MISSING` | Every integration of a back end (`src/modules/integrations/<provider>/` holding `<provider>.config.ts`) has at least one `src/tests/integration/<provider>/*.integration-spec.ts` that, read as a syntax tree, calls `useTestWorld({ modules })` with a factory registering the integration's own module (`<Provider>Module.register`, imported from the integration folder; an inline array, a local const or an exported const of another file), references the ErrorCode enum the integration exports, and drives an outage through the world (`world.infra.<service>.cut\|latency\|during\|connection`, `world.fake.<name>.failNext`, `world.apps.<peer>.during`, `world.interruptDatabase`); the finding sits on the integration folder. | product |
+| R113 | `FE_GRAPHQL_CONTRACT` | Every GraphQL operation a front end keeps in a `.graphql` file under `fe/` is one its back end serves: it is judged against the contract snapshot (`be/contracts/<service>/schema.graphql`) whose root type declares its first root field, and every selected field, argument and input field must be declared there, every required argument and required input field given, every variable passed with the argument's named type, every leaf selected without and every object with a selection, and every declared variable used; a root field no contract declares is a finding too. | product |
+| R114 | `RT_EXTERNAL_OWNER` | In the runtime repository a process, the network, SQLite or an external binary is reached only by its owner in ruleParams.runtime.infraOwners of knowledge/hfs/runtime-slots.yaml: an owned module specifier, global or spawned program word is used only by the files of scripts/api/<system> or engine/db that the map names. | runtime |
+| R115 | `RT_TIER_DIRECTION` | Every relative import between two runtime owners goes from a tier to a tier its mayImport lists in tiers.runtime of knowledge/hfs/runtime-slots.yaml; owner cycles are ARCH_OWNER_CYCLE. | runtime |
+| R116 | `RT_BASE_IMPURE` | The runtime base tier (the engine foundation and scripts/lib) never writes the filesystem and reads process.env only in a declared seam of ruleParams.runtime.baseEnvSeams. | runtime |
+| R117 | `RT_API_SHAPE` | A call file of scripts/api/<system>/ exports exactly one function named in camelCase after the file; only the files of its own system import its lib.mjs; no api system imports another; a system with a calls contract has a call file only for a call id the contract declares. | runtime |
+| R118 | `RT_SPEC_PLACEMENT` | No runtime tests in .claude (owner ruling no-runtime-specs, 2026-10-17): a spec or test file is allowed only beside its package source as <name>.spec.* (never .test.), under examples/, or as a declared file of the scaffold e2e (slot runtime.e2e); any other tracked spec, tests/** included, is refused. | runtime |
+| R119 | `RT_SOURCE_NAME` | A runtime source file is named <kebab-name>.mjs, never a one-off of ruleParams.runtime.oneOffNames (_*, tmp-*, fix-*, *-backfill, migrate-*, *-old, *.bak*), and its basename is unique inside its tier except lib.mjs and index.mjs. | runtime |
+| R121 | `RT_GENERATED_DRIFT` | A generated root of ruleParams.runtime.generated is git-ignored output of its declared generatedBy: the repo's check regenerates every root, the runtime copies (packages/hfs/runtime, packages/eslint/be/runtime, packages/eslint/fe/runtime) are judged equal to what scripts/hfs/sync-runtime.mjs writes from the single source, and no git-tracked path lies under a generated root. | runtime |
+| R122 | `RT_CITED_PATH_MISSING` | A runtime path cited by live prose or contracts (modules, docs, skills, knowledge, CONTEXT.md, README.md, CONTRIBUTING.md, init, the ui docs) exists; history (a changelog, a benchmark file) is not read. | runtime |
+| R124 | `RT_PINNED_PATH_MOVED` | A pinned path of ruleParams.runtime.pinned (persisted outside git) exists. | runtime |
+| R125 | `RT_NODE_MODULES_LINK` | No runtime source creates a junction or a symlink for a node_modules folder, through node:fs (symlink, symlinkSync, directly or through a local wrapper) or a spawned link command (mklink /J or /D, New-Item -ItemType Junction or SymbolicLink, ln -s): every checkout installs its own dependencies with a real npm ci from the cache. | runtime |
+| R126 | `RT_CONTROL_CHARACTER` | Tracked text source of the runtime (*.mjs, *.cjs, *.js, *.ts, *.tsx, *.yaml, *.yml, *.md, *.json outside the generated copies) holds no raw control character (U+0000 to U+001F except tab, LF and CR, and U+007F); the character is written as its escape. | runtime |
+| R127 | `RT_ABSOLUTE_PATH` | No tracked file of the runtime holds a hard-coded absolute host path: a drive-letter path, a user-profile path (/Users/<name>/, /home/<name>/) or an expanded AppData path. Paths resolve from the runtime root, os.tmpdir(), the config or a state-root helper, and a spec builds every path and prompt fixture from its temp dir; %LOCALAPPDATA% as an unexpanded name is clean. In source the rule reads string and template literals and comments through the syntax tree (a URL and a generic drive-pattern regular expression are not paths); in yaml, json and md it reads line text. | runtime |
+| R141 | `BE_COOKIE_ATTRIBUTES` | A cookie a back-end door writes through the response of Express or Fastify (`cookie`, `setCookie`) states `httpOnly: true`, `secure: true` and `sameSite` `lax` or `strict` in options typed with those literals, and `Set-Cookie` is never written as a header (`setHeader`, `append`, `header`); the call is recognised by where its signature is declared, never by the receiver's name. | product |
+| R142 | `BE_AMBIENT_ID` | `randomUUID` of Node's crypto (named, namespace or global), the `v1`, `v4`, `v6` and `v7` generators of `uuid`, `nanoid` and `ulid` are used only inside `platform/ids`, specs and the test world included; code asks the injected `Ids` port (`ids.next()`) and specs use `fakeIds()`. | product |
+| R143 | `HFS_MONO_WORKSPACES` | Every app is a monorepo, even with one service: the app root package.json declares `workspaces` exactly `["fe/apps/*", "fe/packages/*"]`, `packageManager` as `npm@<exact version>` and `turbo` in its devDependencies (at the canon pin), the app root holds the one `package-lock.json` and the managed `turbo.json` (app.task-graph: build, dev, lint and typecheck, build depending on `^build` with cached `.next` and `dist` outputs). | product |
+| R144 | `HFS_MONO_FE_WORKSPACE` | Every fe app `fe/apps/<app>` is an npm workspace: its `package.json` is named `@<project>/<app>`, is private, declares its own runtime dependencies and has exactly the scripts `build: next build`, `dev: next dev`, `lint: starci app lint --workspace .`, `start: next start` and `typecheck: tsc --noEmit`; every fe package `fe/packages/<pkg>` is private with `build`, `typecheck` and the same workspace `lint` script. | product |
+| R145 | `HFS_MONO_NEST_PROJECTS` | The back end is a Nest monorepo of `be/apps/<app>`, even with one service: `be/nest-cli.json` is `"monorepo": true`, its default project (`root`, `sourceRoot`) is an api app, and its `projects` are exactly the be apps hfs.json declares, each `{"type": "application", "root": "apps/<app>", "sourceRoot": "apps/<app>/src"}`. | product |
+| R146 | `HFS_MONO_WORKSPACE_DEP` | An fe workspace declares every package its files import (read with TypeScript's import pre-processor, its tsconfig path aliases excluded) in its own `package.json`, a sibling workspace package at `"*"`; the app root `package.json` never declares a workspace package. | product |
+| R147 | `BE_CLI_REQUIRED` | Every one-off action of a back end lives in ONE app, `be/apps/cli` (kind cli, named cli): a back end that declares a connection (its migrations run as `cli migrate run`) or tracks a command under `src/features/cli/` declares exactly that app, and tracks its image `be/apps/cli/Dockerfile` (one image, run as `cli <group> <command>`). | product |
+| R148 | `BE_CLI_BOOTSTRAP` | The cli app boots in its `main.ts` with `CommandFactory.run(...)` of nest-commander and never serves: `NestFactory.create*` of `@nestjs/core`, a `.listen()`, a microservice connection, an `@nestjs/platform-*` adapter or `@nestjs/microservices` in the cli app is refused (by the import that binds each name). | product |
+| R149 | `BE_CLI_COMMAND_SHAPE` | A nest-commander command (`@Command` or `@SubCommand`, by the import that binds the decorator) is declared only in the cli feature root `src/features/cli/`: a group `@Command` in `<group>/<group>.cli.ts`, a `@SubCommand` extending `CommandRunner` in `<group>/subs/<name>.cli.ts`, one command per file, and every sub-command has its unit spec `<name>.cli.spec.ts` beside it (a command is an action runner, not a thin transport: R88 does not apply to it). `.cli.ts`, because `.command.ts` is the CQRS message. | product |
+| R150 | `BE_CLI_OWNER` | `nest-commander` is imported only by the cli app and the cli feature root, and no back-end source parses command-line arguments itself: `process.argv` and the parsers commander, yargs and minimist are refused everywhere; a one-off action anywhere but a cli command is a door the rule closes. | product |
+| R151 | `BE_EVENT_CLASS_CONTRACT` | Every typed event class `be/src/modules/events/<service>/<event>.event.ts` (one class with literal `static readonly eventName` and `version`, in a file named after its event: dots become dashes) equals an entry of the vendored contract `be/contracts/<service>/events.json` at the same name and version, and every entry of a vendored contract has its class; a class the contract does not list, a version mismatch, a contract entry with no class or a misnamed file is a finding (pattern event-bus). | product |
+| R152 | `BE_OUTBOX_WRITE_TX` | The outbox is written only by a domain service, with the manager of its own transaction: `eventBus.publish(event, tx)` and a queue producer's `enqueueX(payload, tx)` are called only in a file of `modules/domain` (the test world, e2e and fixtures aside), and `tx` is the `manager` parameter of a `.transaction(async (manager) => ...)` callback or a function parameter typed `EntityManager`; the injected shared manager, an alias, an outer manager or a missing argument is a finding. The call is found by the receiver's TYPE (the `EventBus` port of platform/event-bus) or by the resolved signature's declaring tier (queues), never by a name. | product |
+| R153 | `BE_EVENT_CONSUMER_SHAPE` | A class that implements the `EventConsumer` port of platform/event-bus (by type origin) is `transport/message/<event>.consumer.ts` (slot be.transport.message), its file stem is the kebab form of its event class's literal `eventName` (dots become dashes), and its `handle` reads `delivery.eventId` so the dispatched command carries the id the domain service claims in platform/inbox; a `.consumer.ts` that implements no `EventConsumer` is a finding. | product |
+| R154 | `BE_QUEUE_PRODUCER_SHAPE` | In `modules/queues/<queue>/<queue>.queue.ts` every exported function or class method that writes the `QueueOutbox` port of platform/queue declares a `tx` parameter typed `EntityManager` and passes that parameter as the first argument of the write; a write with another manager, an outer manager or none is a finding (pattern queue). | product |
+| R155 | `BE_PATTERN_SPEC_MISSING` | Every pattern a back end declares (hfs.json sides.be.patterns) is proven on the test world: each scenario id of ruleParams.be.patternScenarios.<pattern> has a test titled `<pattern>/<scenario>: ...` (the first argument of `it(` or `test(`) in an e2e or integration spec under be/src/tests; a declared pattern with a missing scenario is a finding. | product |
+| R156 | `BE_KIND_ISOLATION` | No trigger kind imports another: a feature whose owner slot names one `trigger` (api, webhooks, realtime, saga, reactors, jobs, cli) never imports (static, dynamic, re-export or type-only) a feature of another kind; each kind imports only `modules/*` and only be/apps/* compose features. The kinds meet through the event bus: a domain service publishes `eventBus.publish(event, tx)` and the other kind consumes it. The importing and imported owners are read from the slot view (slot field `trigger`), never from a folder name; the finding replaces BE_FEATURE_IMPORTS_FEATURE when both features name different kinds. | product |
+| R157 | `BE_JOB_WRITE_OUTSIDE_OWNER` | The job entity (the class `platform/jobs` declares in its persistence) is written only by `platform/jobs`: an `update`, `increment`, `decrement`, `save`, `insert`, `upsert`, `delete`, `remove`, `softDelete` or a query-builder write on it in any other file (the test world, e2e and fixtures aside) is a finding. The entity is found by the type origin of the call's arguments or builder chain, never by a name; raw SQL is judged by BE_SQL_TABLE_OWNER (pattern fenced-job). | product |
+| R158 | `BE_JOB_FENCE_REQUIRED` | Every `JobClaims` method that takes a job (a parameter type with `jobId`) declares a required, non-nullable `expectedFencingToken: number`; no call on `JobClaims` outside `platform/jobs` casts around it (`as`, a type assertion or `!` in an argument); and a `catch` around a `JobClaims` write rethrows, so a `JobFencedOut` stops the zombie with no further effect (pattern fenced-job). | product |
+| R159 | `BE_JOB_RUN_KEY` | In a job step (slot be.feature.jobs.steps) every call on a receiver typed by an `integrations` owner passes an argument of the `RunKey` type of `platform/jobs`, produced by `JobClaims.runKey(job, step)` (it includes the fencing token), never built with a cast; a read belongs in the application layer, not in a step (pattern fenced-job). | product |
+| R160 | `BE_JOB_SHAPE` | A `<job>.processor.ts` exists only in `features/jobs/<job>/transport/queue/`, is named after its job and declares a class extending the `FencedProcessor` of `platform/jobs`; a `steps/<step>.step.ts` exists only in `features/jobs/<job>/steps/` and declares a class implementing `JobStep`; a class implementing `JobStep` exists nowhere else (pattern fenced-job). | product |
+| R161 | `BE_PROJECTION_WRITE_OWNER` | A projection's entity (a class of `<name>.projection-entity.ts` in `modules/projections/<name>/`) is written only by the `<name>.projection.ts` of the same folder (the test world, e2e and fixtures aside): a write on it from a domain service, a handler, another projection or another file of the folder is a finding. The entity is found by the type origin of the write's arguments or builder chain (pattern projection). | product |
+| R162 | `BE_PROJECTION_SHAPE` | Every public method of a `<name>.projection.ts` class is `recompute*` (idempotent write from the source facts) or `get*` (read); the `index.ts` of a projection exports nothing from a `.projection-entity` file; and a feature whose kind is api calls no `recompute*` method of a projection (it reads through `get*`). The kind is read from the owner slot's `trigger` (pattern projection). | product |
+| R163 | `HFS_SERVICE_PLACEMENT` | A back-end service lives only at `be/apps/<service>/`: a folder with a `Dockerfile` of its own, or with a `package.json` other than the app root's and those of the fe workspaces (`fe/apps/<app>`, `fe/packages/<pkg>`), outside `be/apps/<service>/` (and outside a front end's `fe/apps/<app>/Dockerfile`) is a second service root and a finding; a service is a Nest app of the one repository that shares the `be/src` libraries and the one package.json, and its image is built from its own Dockerfile. | product |
+| R164 | `HFS_IMAGE_UNPINNED` | In a product with more than one service (two or more be apps of kind api or worker) every component `image` of `.starcistacks/application-stacks.yaml` is pinned: a digest (`@sha256:<64 hex>`) or an exact version tag (`x.y.z`, optionally with a suffix); no tag, `latest`, a branch word or a major or minor-only tag is a finding. An own service image is `<repo>/<service>:<x.y.z>`, built from `be/apps/<service>/Dockerfile`; a service the product does not own stays a pinned third-party image. | product |
+| R165 | `HFS_SERVICE_STACK_DECLARATION` | Every api or worker app `be/apps/<service>` of a product with more than one service is a `role: service` component in `.starcistacks/application-stacks.yaml`: the component of the same name, or one whose `environments.<env>.deploy.images.<component>.app` names the app. | product |
+| R166 | `HFS_EVENT_CONTRACT` | The async contract between services is vendored under `be/contracts/<service>/events.json` (`starci/event-contract@1`, emitted by `starci app emit` from the literal `EVENTS` table of `be/apps/<service>/src/events.ts`, never written by hand) and equals that table; an event that undoes the step of another declares `compensates: "<event>"` and the named event must exist in a contract; a consumer declares what it reads in the literal `CONSUMES` table of `be/apps/<app>/src/consumes.ts` (service, event, version), every entry must exist in the provider's vendored snapshot at the same version, and a missing or stale snapshot, an unknown event or a version mismatch is a finding. | product |
+| R167 | `BE_ASYNC_SPEC_MISSING` | Every event an app consumes (an entry of its `consumes.ts`) is named by an e2e spec, a file `be/src/tests/e2e/<area>/*.e2e-spec.ts` that boots the apps through `useTestWorld` (it publishes the event, reads the effect back and redelivers it); when the contract of the event declares `compensates: "<event>"` it is a saga step, and a spec naming it also names the compensated event, so the spec drives the whole flow: the step, the failure, then the compensated state. | product |
+| R168 | `BE_SERVICE_ISOLATION` | A service app (`be/apps/<service>/`) imports no file of a sibling service app: the app that owns the importing file and the app that owns the file a specifier resolves to (a relative path or an alias of the program's own `compilerOptions.paths`) are read from the HFS slot view, and two different apps is a finding; services share only the `be/src` libraries and meet through the wire (a client of the sibling's API, or the events of its vendored contract under `be/contracts/<service>/`). | product |
+| R169 | `BE_SAGA_STEP_COMPENSATION` | In a product that declares the `saga` pattern (`patterns: ["saga"]` in hfs.json sides.be) a saga is the folder `be/src/features/saga/<saga>/` (`<saga>.saga.ts` the orchestrator, `steps/<step>.step.ts`, `compensations/<step>.compensation.ts`): every step has a compensation of the same name and every compensation a step, the orchestrator imports every step and every compensation of its folder, and a folder of steps or compensations has an orchestrator; the folders themselves are slots enabled only by the declared pattern, so an undeclared saga is `HFS_SLOT_NOT_ENABLED`. | product |
+| R170 | `BE_SAGA_STATE_VERSIONED` | Every saga orchestrator has `<saga>.saga-state.ts` beside it, whose exported state type declares `status` and `version: number`, and imports the fenced store of `platform/saga`: the persisted state of a run moves only through the store, every transition naming the version it read, so a zombie delivery cannot move a run twice. | product |
+| R171 | `BE_SAGA_EVENT_CONTRACT` | A saga step and a saga compensation each name their event (`readonly event = "<name>"`), both events are declared in a vendored contract (`be/contracts/<service>/events.json`), and the contract of the compensation's event declares `compensates: "<event of the step of the same name>"`. | product |
+| R172 | `BE_SAGA_CONSUMER_DEDUPE` | A consumer of a saga (`be/src/features/saga/<saga>/transport/message/<event>.consumer.ts`) passes the id of the delivery on (`message.eventId`) to the command it dispatches: the saga takes every event through the inbox (R80), so the consumer must hand it the dedupe key. | product |
+| R173 | `BE_SAGA_E2E_MISSING` | Every compensation path of a saga has an e2e spec (`be/src/tests/e2e/<area>/*.e2e-spec.ts` through `useTestWorld`) that names the event of the compensation and injects a failure through the world (an outage of an infra service or an app with `during`, `cut` or `latency`, a fake's `failNext`, `interruptDatabase`): the compensation is proven under a fault, not only on the happy flow. | product |
+| R174 | `BE_CONTEXT_OWNER` | A connection of hfs.json is a bounded context owned by one api or worker app (`owner`, `isolation` database or schema): an app composes only the connections and capabilities of the contexts it owns, and the migrate and cli apps compose every declared connection (migrations run only through them, once per connection). | product |
+| R175 | `BE_CONTEXT_COUPLING` | Contexts are coupled only by events: no entity relation, no migration foreign key and no import (entities, services or SQL) of a domain or projection capability reaches a capability of another context. | product |
+| R176 | `BE_CONTEXT_TRANSACTION` | One transaction touches one context's connection: inside `transaction(async (manager) => ...)` of a connection's entity manager no entity manager of another connection is used and no capability of another context is called; work across contexts is a saga. | product |
+| R177 | `BE_CONTRACT_BREAKING` | An event contract evolves only additively: `be/contracts/<service>/events.json` against its pinned previous copy `events.pin.json` keeps every event, stream, version, payload field and type, adds only optional fields, and a breaking change is a new `<event>.v2` key. | product |
+| R178 | `BE_CONTEXT_PLATFORM_TABLES` | A platform capability the manifest lists as `perConnection` (the event-bus outbox, the job table) has its entities and migrations registered on every connection whose entity manager is passed to it. | product |
+| R179 | `BE_KIND_DECLARATION` | `hfs.json` `sides.be.kinds` lists exactly the trigger kinds (api, webhooks, realtime, saga, reactors, jobs, cli) the back end uses: a kind in use that is not declared, a declared kind with no feature, a declared kind whose patterns (`ruleParams.be.kindPatterns`, e.g. jobs needs fenced-job and queue) are missing from `sides.be.patterns`, and a declared kind whose platform capabilities (the tier-platform slots naming those patterns) are not tracked are each a finding. A kind is declared only when it is used; `starci app add <noun> <name>` creates the first member, the platform capabilities it needs and the registration. | product |
+| R180 | `BE_KIND_EMPTY` | A kind folder `be/src/features/<kind>/` holds only instance folders `<kind>/<name>/`, and each instance holds TypeScript source: a file directly in the kind folder (a feature named like a kind, a `.gitkeep`) and an instance with no TypeScript file are findings; an empty kind folder is never kept. | product |
+| R181 | `BE_SQL_RETURNING_SHAPE` | A `sql` constant that UPDATEs or DELETEs with RETURNING is wrapped as `WITH changed AS (UPDATE ... RETURNING ...) SELECT ... FROM changed`, because EntityManager.query returns a bare UPDATE or DELETE with RETURNING as `[rows, affectedCount]`, not as rows. | product |
+| R182 | `BE_WEBHOOK_SHAPE` | A provider webhook door (`src/features/webhooks/<provider>/transport/http/<provider>.webhook.ts`) is one `@Controller` with exactly one `@Post` handler and optionally one `@Get` subscription challenge handler, each declared `@Public({ reason: PublicReason.SignedWebhook })`. It injects only the `WebhookSignatureService` of `platform/http-security` and services of `modules/domain`, holds no branch, loop or `try`, and its POST calls proof then exactly one domain intake that durably records the inbox receipt and outbox event in its transaction. A combined domain proof and intake call is allowed. POST returns nothing or exactly the own-feature exported PROVIDER_ACK, a literal object or string declared with `as const` or a readonly literal type; computed values, inline return objects and cross-feature constants are refused. GET starts with a declared domain verifier call and returns exactly that result, with no intake. The door and its HTTP module import or inject no CommandBus, QueryBus of @nestjs/cqrs or feature command handler; the resolved called intake dispatches no command/query bus or feature handler. A reactor or job consumes the durable receipt and dispatches after commit; unresolved helpers and dynamic receivers require semantic review. | product |
+| R183 | `BE_WEBHOOK_UNVERIFIED` | The first statement of a webhook POST is an unconditional verification call to `WebhookSignatureService.verify` or a domain verifier, awaited when async, with no data access or other call before proof. A domain verifier is a method on a domain service whose declared class name ends in `Verifier` or `verify`, or a domain service method declared by symbol in the adjacent HTTP module's exported `webhookVerifiers` array. A domain method may verify with per-connection secrets before intake in the same call; invalid proof throws before intake. A fixed PROVIDER_ACK never replaces proof. The optional GET challenge handler starts with a declared domain verifier call (directly returned or bound to a const and then returned), awaited when async, and echoes only its exact result. | product |
+| R184 | `BE_REALTIME_SHAPE` | A realtime file is the one door its role names: `<channel>.gateway.ts` holds one `@WebSocketGateway` class with `@SubscribeMessage` handlers and `<x>.subscription.ts` holds one `@Resolver` class with `@Subscription` operations, and neither carries a query, a mutation, a field resolver, a REST route or the other protocol. A lite app serves the same socket.io gateway from its api process and no graphql-ws subscription (R212 case-2 (owner:lite-production-swarm), with the Work boundary amended by ruling:R212/case-4). | product |
+| R185 | `BE_REALTIME_WRITES` | A realtime door reads and pushes only: the one value injected into it is the `RealtimeHub` of `platform/realtime`; no `EntityManager`, bus, queue, event bus or domain service reaches it. | product |
+| R186 | `BE_REALTIME_TOPIC_SCOPE` | The topic a realtime handler passes to `RealtimeHub.subscribe` is built from the handler's `@CurrentPrincipal()` parameter of `domain/identity`, so a client can only listen to channels its principal owns. | product |
+| R187 | `HFS_DOCKER_BUILD_CONTEXT` | Every app image is built from the app root: the header comment of an app's Dockerfile states `starci docker build <app>` for its own path, and no COPY or ADD source leaves the build context (a `..` segment or an absolute path). | product |
+| R188 | `HFS_DOCKER_STAGES` | An app Dockerfile is multi-stage: a stage named `build` and a last stage named `runtime`; the runtime stage ends as `USER node` and runs no build (`npm run build*`, tsc, next, turbo, nest); every install is `npm ci`, never `npm install`; a back-end runtime runs `npm ci --omit=dev --ignore-scripts` and a front-end runtime installs nothing. | product |
+| R189 | `HFS_DOCKER_ENTRY` | The runtime stage starts the app's own built entry in exec form (be `node be/dist/apps/<app>/src/main.js`, fe `node` on the standalone `server.js` of the app); an api or Next app sets `ENV PORT` and EXPOSEs the same port and carries a HEALTHCHECK, a worker carries a process HEALTHCHECK and exposes nothing, a cli app says `HEALTHCHECK NONE` and exposes nothing; a Next app's build stage runs `turbo run build --filter=@<project>/<app>` and its `next.config.ts` sets `output: "standalone"`. | product |
+| R190 | `HFS_DOCKER_BASE_PIN` | Every FROM of an app Dockerfile is a prior stage, the one node base image of the canon (an exact node version on an exact alpine release, `NODE_IMAGE` in scripts/hfs/rules/docker.mjs), or an image pinned by `@sha256` digest; never a moving tag, never an unresolved build argument. | product |
+| R191 | `HFS_DOCKER_SECRETS` | No secret enters an image: no COPY or ADD of an `.env*` file (except `.env.example`) or of a path under `.starcistacks`, `.secrets`, `.volume`, a key, certificate or kubeconfig; no ADD of a URL; no ARG or ENV whose name is a credential (PASSWORD, SECRET, TOKEN, KEY, CREDENTIAL, PRIVATE), `NEXT_PUBLIC_*` excepted because it is published by design. | product |
+| R192 | `RT_FACT_FALSE` | Every claim of knowledge/hfs/facts.yaml holds against knowledge/hfs/slots.yaml (the one source of the product shape), and no prose of knowledge/**, docs/** or a README states the opposite of a fact (for example that an fe app lacks its own package.json, which fe.app.next requires); prose quotes a fact id or a slot id and never restates the claim. | runtime |
+| R193 | `RT_RULE_ID_UNKNOWN` | Every rule id (R<digits>) that tracked knowledge, docs, code or data names is a rule of this catalog, and rule ids are unique and well-formed (a gap between two ids is fine), and every rule of the catalog is named by the `hfsRules:` of at least one knowledge/patterns topic or carries `scope: runtime` (RT_RULE_UNCITED). History paths (changelogs, benchmark findings, .starciwork records), specs and generated copies are not read. | runtime |
+| R194 | `RT_GENERATED_BLOCK_STALE` | The app map (section 4), the back-end source tree (5.1), the tier matrix (5.2), the front-end source tree (6.1) and the rule catalog (12) of knowledge/hfs/README.md are generated blocks, rendered by scripts/hfs/readme-blocks.mjs from knowledge/hfs/slots.yaml and rules.yaml between hfs:generated markers and equal to the render byte for byte; the README never restates them by hand. Likewise the `verification.automated` list of a pattern rule is the failure codes of the rules its `hfsRules` names, the `slot` of a `files:` entry is the slot that owns its path, and the `code` of a why-map entry is the code of the catalog rule that lists the lint rule: scripts/hfs/derived-fields.mjs writes them and they equal the derivation byte for byte. | runtime |
+| R195 | `RT_PROSE_PATH_NO_SLOT` | Every product path the knowledge, the docs and the READMEs name (a be/ or fe/ path, whole or with placeholders, globs and braces) is owned by a slot of knowledge/hfs/slots.yaml or is a folder above one; a path no slot owns is prose that invented a place or kept one a slot no longer has. App names are free: a literal app name is one a shipped examples/*/hfs.json declares, a placeholder stands for any; a ** glob and a topic file of the knowledge are not paths. | runtime |
+| R196 | `RT_PROSE_RESTATES_SLOTS` | Knowledge, docs and READMEs never restate knowledge/hfs/slots.yaml: no fenced block or line names three or more product paths a slot owns, and no sentence lists three or more of the root or side file names the slots declare; a slot is referenced by its id, and the only allowed copy is a generated block between hfs:generated markers. The slot and rule catalogs, the example READMEs and the templates are sources or snapshots, not prose. | runtime |
+| R198 | `RT_CLI_CATALOG_DRIFT` | Every generated output of the unified CLI catalog (packages/cli/src/catalog.generated.mjs, docs/cli.md, packages/cli/completions/*) equals what scripts/cli/gen-catalog.mjs writes from modules/cli/commands. | runtime |
+| R199 | `RT_CLI_VERB_PARITY` | The CLI catalog of modules/cli/commands and the implementation agree: every catalog verb has a handler and a doc, every kernel verb module and cli.mjs dispatch case has a catalog file, and every --flag a verb module names (usage, required, api-boolean-flags.txt) is a catalog flag. | runtime |
+| R200 | `RT_CLI_APP_ONLY_TEMPLATES` | Managed app templates and their generated runtime copies invoke product actions only through `starci app <verb>`; any other starci group is forbidden there. | runtime |
+| R201 | `CLI_ONLY_ENTRY` | Every action enters runtime code through `starci <group> <verb>`: tracked prompts, docs, skills, knowledge files, configs, CI files, hooks and scheduled-task registrations do not bypass the catalog through direct runtime scripts or package-script wrappers; the dispatcher and the specs' own spawn helpers are the declared exceptions. | runtime |
+| R202 | `CI_UPLOAD_NOT_SILENT` | A coverage upload of a CI workflow never skips or fails silently: every step that uses codecov/codecov-action, in a root workflow, an example workflow or a template workflow of packages/hfs, authenticates by OIDC (`use_oidc: true`, with `permissions: id-token: write` on the job or the workflow), sets `fail_ci_if_error: true`, has no `continue-on-error`, and has no `if` that reads a secret or CODECOV_TOKEN, so a missing token can never turn the upload into a skipped step. Every step that uses SonarSource/* has no `if` that reads a secret or SONAR_TOKEN (a missing token fails the job), and no step or job of a workflow sets `continue-on-error`. | runtime |
+| R203 | `BE_FEATURE_THIN` | A feature file (a role of ruleParams.be.thinRoles inside a slot of tier feature: handler, resolver, controller, consumer, processor, step, saga, saga-step, compensation, webhook, gateway, subscription, cli, mapper, the saga orchestrator service) maps its parameters and makes ONE delegating call into modules/ (a service, the command or query bus, the event bus, a queue producer): no branch, loop, ternary, try or throw and no computation. Business logic lives in modules/**, where every logic file owes 100 per file; orchestration (step order, compensation, claim, fencing, retry) lives in platform/*; the feature layer is proven by integration and e2e. The gate calls a kind requires are not delegation: a webhook's first verification call of R183 when followed by one separate intake, and a job step's `JobClaims` fence (`advance`, `runKey`); a combined domain verification and intake call counts as the delegation. A logger call, a pure mapper function and a modules function in argument position are free too; a mapper may map a collection item by item (`map`) and write a date as text (`toISOString`), and a cli group command shows its help. A webhook POST may return the declared literal PROVIDER_ACK and its optional GET may echo only its first domain verifier result; neither is an extra delegation. A webhook door and its HTTP module import or inject no CommandBus, QueryBus of @nestjs/cqrs or feature command handler: the inbox recording intake is the handoff, and a reactor or job dispatches after commit. | product |
+| R204 | `HFS_COVERAGE_SCOPE_DRIFT` | What a back end measures at 100 per file is derived once from the slot manifest (the `coverage: required\|none` field of every be slot and ruleParams.be.logicRoles, scripts/hfs/coverage-scope.mjs), and the three files that state it are its render: be/jest.config.js (thresholds), the `sonar.coverage.exclusions` line of sonar-project.properties, and codecov.yml (paths and one component per service app plus platform, each at 100). A difference is drift; the scope is never edited by hand. | product |
+| R205 | `RT_DOC_NO_OWNER` | Every tracked docs/*.md declares exactly one ownership header on its first line — "Owner: <knowledge/ or modules/ path that exists>" when the document explains a machine-owned source, "Task: <one task>" for a how-to — no two documents carry the same task, and two documents whose titles share two or more topic words while at least 30% of the shorter one's sentences appear in the other are one document merged, not two. | runtime |
+| R206 | `RT_EXAMPLE_COUPLING` | Runtime source never couples to a product or its example: no tracked file under scripts/, engine/, packages/, ui/src or ui/api - and no managed template under packages/hfs/templates/ - spells a literal examples/<name>, one of the product names this runtime shipped against (the closed PRODUCT_NAMES list of scripts/lib/example-refs.mjs), an inc-<hash> a product name prefixes, or a host drive path. Specs, tests, the generated runtime copies, changelogs and .starciwork records are out of scope; a read the runtime genuinely makes at run time is declared once in scripts/lib/example-refs.mjs and every consumer names that constant. | runtime |
+| R208 | `RT_PORT_RESTATED` | Every port literal of the runtime is spelled once, by its owner, and every other file references the owner: the harness UI ports live in modules/models/runtimes.yaml statusApp.port/devPort read through ui/ports.mjs, the local SonarQube host in scripts/gates/sonar-local.mjs DEFAULT_HOST. No in-scope file that is not the owner spells an owned literal in a port position (a scheme://host:NNNN or host:NNNN authority, a *port*/PORT assignment, a listen(NNNN) call), and an unowned literal in a port position of two or more runtime source files gets one owning exported constant the rest reference. Specs, tests, node_modules, the generated runtime copies, changelogs, .starciwork and the product stack declarations (.starcistacks, starcistacks-services - a product owns the ports of the services it runs) are out of scope. | runtime |
+| R209 | `RT_CONFIG_DEFAULT_TWICE` | Every documented configuration default is stated once, by its owner, and read through it: a camelCase leaf or lowercase key of config.example.yaml, or a value an owner declares - scripts/machine/home.mjs DEFAULTS (supervisor workers, the land gate, frozenMinutes, pollIntervalMs), engine/config.mjs (connector, ask, UAT, spec and allocation defaults, and DEFAULT_OWNER_LANGUAGE which scripts/machine/home.mjs re-exports), engine/orca-config.mjs (worker depth), scripts/reconciler/state.mjs (the controller mode) - is never restated as a literal fallback (?? or \|\|, a parameter default, or a language ternary) in any other runtime source file; the reader calls the owner accessor (supervisorSettings(), configuredMode(), ownerLanguage(), ...). Specs, tests, the generated runtime copies, stories and the HFS templates are out of scope, and a bare identifier or a computed value is a read, not a restatement. | runtime |
+| R210 | `RT_VERSION_RESTATED` | knowledge/hfs/canon-pins.yaml spells the version of every @starci package and every canon-pinned dependency once; a package.json is the declared install site and a lockfile its resolution. Anywhere else a semver literal equal to a pin - or a name@x.y.z specifier naming one - restates it, except on the declared binding keys a refresher owns and rewrites in place (canon.version of the code-pattern bindings held by check-canon-pins.mjs, provenance.version and identity.version of the grammar snapshots rewritten by scripts/work/ui/grammar-knowledge.mjs). Package manifests, lockfiles, changelogs, specs, tests, the generated runtime copies and .starciwork are out of scope; a restatement is fixed by naming the pin, never the literal. | runtime |
+| R211 | `RT_SLOT_ID_SHAPE` | A slot id follows the grammar its manifest declares, read from the manifest not from a list: dot-separated lowercase kebab segments, a first segment of naming.prefixes in knowledge/hfs/slots.yaml (profiles in knowledge/hfs/runtime-slots.yaml), <side>.app.<kind> naming a kind of appKinds.<side>, and every deeper id extending a declared id - an explicit parent field, or a family at least two slots share; a lone deep orphan invents a family. The role-suffix vocabulary holds no synonym pairs: a profile's suffixes never share a word with bannedSuffixes, no naming.refusedPairs pair is live in suffixes on both sides, and naming.sameConceptPairs is the one declared exception (step + saga-step), live on both sides or dropped; naming.glossary binds the five incoming-thing names (consumer, subscription, webhook, processor, handler) to their distinct kinds. | runtime |
+| R212 | `HFS_EDITION_INVALID` | hfs.json names an edition the manifest knows (full, or lite; absent means full). Lite follows the 2026-10-13 ruling: the same monorepo, code structure, slots, patterns and back-end unit specs, with only backing infrastructure swapped for managed Supabase (Postgres, Auth, Storage, Supabase Queues/pgmq for queue and event bus, Postgres locks, pg_cron); the api and sidecars run on docker-swarm on a VPS. The realtime pattern uses the same socket.io gateway inside the be api process (one instance, no Redis adapter), and both editions share knowledge/hfs/fe-stack.yaml. Lite requires application-stacks.yaml and permits environment metadata, runbooks, infra/swarm and encrypted-secret custody, while refusing infra/compose, infra/k8s, infra/terraform and components duplicating Supabase backing services (runtime/{config,env}, seeds and the sealed secrets of its environments are allowed). Contract specs and `test:contract` are allowed (owner 2026-10-14); it has no e2e spec, `test:e2e`, `test:stack` or `test:browser` script, e2e workflow, browser journey, Work catalog, shell, features, resources, UAT or br records, test container, toxiproxy, browser-runner, BullMQ, Kafka, Redis or graphql-ws dependency, or supabase/functions. Its .starciwork is optional and admits only .gitignore, workspace.yaml and brand/**; workspace.yaml is optional and carries project identity and repo roles for the Work tools. | product |
+| R213 | `DB_MIGRATION_SHAPE` | A migration is `supabase/migrations/<ts14>_<kebab>.sql`; the stamp is a valid UTC instant, active stamps are unique, and a new migration sorts strictly after the committed active migrations in HEAD. Repository history includes the archive: moving an active migration to the archive retires it from ordering, so a replacement baseline may predate archived stamps and later migrations append after the baseline. Wall-clock time, commit time and remote-branch stamps do not set the ordering boundary. A migration already on the base is immutable (a diff or an unarchived removal is a finding); a file that does not parse as PostgreSQL is a shape failure. | product |
+| R214 | `DB_RLS_REQUIRED` | Row level security is code a parser can read: every `create table` (or `create table as`) in an exposed schema (`public` plus the config.toml `[api] schemas`) is followed, in the same migration, by `alter table <t> enable row level security` (and `force` for a table hfs.json `supabase.forceRls` declares); no `DO` block or function runs dynamic SQL that builds DDL or grants; a write or `for all` policy never uses `(true)`, `to anon`/`to public` is legal only on a `for select` policy named `*_public_read`, every policy is named `<table>_<role>_<action>`, and `service_role` is never granted. | product |
+| R215 | `DB_DEFINER_SAFE` | Privileged database objects are declared safely: a `security definer` function pins `search_path` (never `from current`), lives outside the exposed schemas or is `revoke execute ... from public` in the same migration, declares a return type and interpolates parameters into dynamic SQL only through `format('%I/%L')`; a bucket inserted into `storage.buckets` declares `public = false` (true only for an id ending `_public`), `file_size_limit` and `allowed_mime_types`, and has a `storage.objects` policy naming its `bucket_id` in the same migration. | product |
+| R216 | `DB_CONFIG_POLICY` | The database configuration and its types are checked facts: `supabase/config.toml` carries no literal value under a credential key (the value is `env(NAME)`), `auth.jwt_expiry` is at most 3600, and signup, site url and redirect urls equal the Supabase block of hfs.json where it declares them; `supabase/types/database.types.ts` is committed and equals the text `contract:emit` regenerates from the migrations. Type emission refuses HFS_EMIT_DB_TYPES_STALE unless the complete applied migration version set equals the SQL filename stamps; lint and check report drift without writing types. | product |
+| R217 | `FE_SUPABASE_CLIENT_OWNER` | Supabase has one door per side: on the front end `@supabase/supabase-js` and `@supabase/ssr` are imported only by `fe.modules.auth` and only their auth API is called (sign-in, sign-out, session, access token; never `.from`, `.rpc`, `.storage` or `.channel`, so the front end reads and writes no data through Supabase), and on the back end only `be.integrations.supabase` imports them, every back-end client carrying the committed `Database` type; the front end holds no credential: `fe/` names no service-role or `*_SECRET`, `*_PRIVATE`, `*_TOKEN`, `*_PASSWORD` value (public configuration is read once by `modules/config`). | product |
+| R219 | `BE_SUPABASE_JWT_VERIFIED` | The principal is verified, never trusted: a back-end principal comes only from a Supabase access token verified against the project JWKS (signature, issuer, audience, expiry, pinned algorithm), never decoded unverified and never from the request body. | product |
+| R220 | `HFS_LITE_SECRET_CUSTODY` | A lite app holds no secret material in the tree: root `.env*`, `secrets.env`, `.secrets/` and an `.enc` file outside `.starcistacks/<env>/secrets` are forbidden, and `fe/` and `supabase/` hold no Supabase token, JWT or connection string with a password; the one custody is the sealed `.starcistacks/<env>/secrets/<slug>.enc`. | product |
+| R221 | `CI_TRIGGERS_RELEASE_ONLY` | The only workflow triggers are a push of release tags, a push of release candidate branches `release/candidate-*`, a person dispatching it and, in the runtime's own workflows (`.github/workflows/` at the root), a push to `main`: every tracked workflow declares an `on` that holds only `push` filtered to `tags: ['v*']` and/or `branches` naming only `release/candidate-*` (and, in the runtime's own workflows, `main`; no paths or ignore filter beside them) and `workflow_dispatch`. Every `ci.yml`, and the runtime's `examples.yml`, must name `release/candidate-*`: `starci release cut` and `starci app release push` push the exact release sha there and move main and the tag only when that run is green (owner ruling candidate-ci, 2026-10-18). A push to any other branch, a pull_request, a schedule, a workflow_call or any other event refuses the workflow. | runtime |
+| R222 | `RELEASE_NOTES` | A release tag `v<version>` on HEAD has its CHANGELOG.md section `## [<version>]` with no TODO, PENDING or TBD left in it and no `in preparation` mark: the tag message and the GitHub Release are that section, so a tag is never cut over an unfinished or missing section. | runtime |
+| R223 | `RIGHTS_ROLE_DENIED` | By the caller's role, the command guard refuses git push, git tag, raw git commit/add/rm/mv, raw git synchronization writes, npm publish, a whole-suite run outside the release cut and unit.verify/e2e.verify, npm ci without the host lock, a release cut, and raw side-effecting tools; modules/kernel/command-policy.yaml is the one rule table read by both the PreToolUse guard and the PATH shim. | runtime |
+| R224 | `RIGHTS_PROTECTED_ZONE` | The protected zone declared once in modules/kernel/protected-zone.yaml is edited only by the owner path; a supervisor self-upgrade files an owner proposal, and an op never writes the .claude runtime checkout. | runtime |
+| R225 | `RT_HOOK_SHAPE` | The app hook templates keep the gate model: pre-commit is L0 only (no typecheck, no test run); pre-push checks the release gate (the starci-release L4 record, refs/backup/, v[0-9] tags; the runtime's own hook is scripts/guards/release-push-gate.mjs, which judges main and v* tags against the release definition and lets every other ref through) and runs no npm test, jest, typecheck or lint. | runtime |
+| R227 | `RT_SYNTAX_INVALID` | Every git-tracked .mjs, .cjs and .js file parses as JavaScript, including tests and package sources; node_modules, generated roots of ruleParams.runtime.generated and vendored build output are outside the authored-source scope. The runtime folder's Node-exact syntax pass remains in place, while this batched in-process pass extends coverage to the whole tracked repository and reports every parser diagnostic at its file and line. | runtime |
+| R228 | `RT_IDENTIFIER_UNDECLARED` | Every identifier a runtime ES module (scripts/, engine/ without the vendored yaml bundle, ui/api/, packages/cli/bin and src) reads or writes resolves, by scope analysis over its TypeScript syntax tree, to a declaration, import, parameter or Node global of an enclosing scope. A re-export (export {x} from './y.mjs') binds x in no local scope; require, module, exports and __dirname are not globals of a module; browser globals resolve only inside a function that a module hands to page.evaluate, here or through an import. A name a refactor left behind is refused before the line that reads it runs. | runtime |
+| R229 | `RT_REMOVED_VOCABULARY` | No text an agent or the owner reads teaches a spelling the runtime refuses. The refused names - config keys, routing-bias fields, verbs, flags, codes and vocabulary - are the one list modules/kernel/removed-vocabulary.yaml, each with its replacement and the release that removed it; the config and routing-bias refusals read the same list. Every tracked file of skills/, docs/, README.md, CONTEXT.md, CONTRIBUTING.md, modules/ and knowledge/ (Markdown and yaml) is scanned line by line, and a line that spells a listed name is a finding naming file:line, the name and its replacement unless the file is the list, CHANGELOG.md, or the line or block carries the [removed-list] marker (a marker alone on a comment line covers the lines up to the next blank one). Removing or renaming a key, flag, verb, field or code adds its entry to the list in the same commit. | runtime |
+| R230 | `RT_PROSE_COMMAND_UNKNOWN` | A command an instruction shows exists as written. Every `starci <group> <verb>` in a backticked span, fenced code line or yaml example item of skills/, docs/, README.md, CONTEXT.md, CONTRIBUTING.md and modules/ names a verb of the CLI catalog (modules/cli/commands) in a catalogued group, and every --flag on it is a flag of that verb or a global flag; the text after a lone -- belongs to another program and a [removed-list] marked line is exempt. The catalog is generated into the valid set, never typed twice. | runtime |
+| R231 | `RT_DOCUMENTED_DEFAULT_DRIFT` | A default a document states equals the value the code reads. A document states a default by citing its key - default <value> = `<key>` - where the key is a config.yaml path (resolved through the validator's settings reader, so an absent block yields its code default) or <yaml file under modules/>:<dotted path>; the check resolves the key and compares, and a key that resolves to nothing is a finding. docs/, README.md, CONTEXT.md, config.example.yaml and modules/ prose and yaml are scanned; a bare number stated as a default without its key is not judged, so the owner of a default is cited, never retyped. | runtime |
+| R232 | `RT_ROLES_CONTRACT_DRIFT` | A role is described once. modules/kernel/roles.yaml holds, per role, its scope, what it does, what it must clean up, what it never does, whom it reports to and who oversees it; a Markdown surface of the role carries the block generated from it, a yaml or script surface cites modules/kernel/roles.yaml#<role>, and no surface teaches a spelling the role's contradicts list names. | runtime |
+| R233 | `RT_EDGE_CASE_REGISTRY` | Every edge case met is a declared entry of modules/reconciler/edge-cases.yaml with its family, its real occurrence and a status of covered or open; a covered entry names the rule that handles it and that file exists, a named spec is a package spec or the scaffold e2e that exists (never a runtime test, owner ruling no-runtime-specs), and an open entry says why. | runtime |
+| R234 | `RT_SECRET_TRACKED` | The runtime repository is public and tracks no secret material, not even ciphertext: no tracked *.enc member and no tracked secret.env or .env file, except the paths ruleParams.runtime.heldSecrets names with their reason (a list that only shrinks). Every secret the host needs lives in the one untracked .claude/secret.env, read only through engine/secrets.mjs, its names listed in the tracked secret.env.example; a product repository keeps its own custody in its own repository. Two Sonar servers, no overlap: SonarCloud serves everything that lives in the runtime repository (the runtime and the example apps, token SONAR_TOKEN), the self-hosted ext/sonar serves product repositories only. | runtime |
+| R235 | `SCAN_SMELL` | Code carries none of the smells SonarCloud measures that a lint rule can decide: no `await` inside a loop (S9382; an endless loop is spared), no `charCodeAt`/`fromCharCode` (S7758), no string that only escapes backslashes (S7780; a Next `matcher` is spared, it is read statically), no nested conditional expression (S3358), no `void` on anything but a call (S3735), no unused import (S1128), no import that is only handed on instead of `export ... from` (S7763), no prop of a component's props type the component never reads (S6767, front end), no `<video>` or `<audio>` without a captions track unless muted (S4084, front end), and, through typescript-eslint with type information, no deprecated API (S1874), no object turned into text (S6551) and no `async` function that never awaits and returns no promise (S7503). No function takes more than seven parameters (S107), except the constructor of an injectable class, whose parameters are its injected dependencies. Every other rule of the Sonar way TypeScript profile with an ESLint equivalent that reports what the server reports on the same source (scripts/lib/sonar-way.mjs: eslint-plugin-sonarjs' Sonar way set and the core and unicorn rules it builds on) is on at error in both canons (S7785, top-level await, runs in the front end only: a back end compiles to CommonJS); a port that disagrees with the server is fixed in the source it reports, never left out. The files a unit or an end-to-end spec names are outside the scan, so outside these rules. | product |
+| R236 | `RT_GATE_LOOSENING` | A change that loosens a gate or check is always red: a check removed from a gate file's list, a floor lowered or a ceiling raised there, an allowlist entry added, a spec deleted or weakened or skipped together with product code (modules/kernel/gate-loosening.yaml). It never lands and never passes the check; there is no approval route, the owner's included (owner:loosening-always-red), and the fix is to restore the gate. An entry that only moves with a git rename of the paths it names is no loosening. | runtime |
+| R237 | `RT_REVISION_SCOPE` | What a change of the runtime tree asks of each role is declared once, in modules/kernel/revision-scope.yaml: every tracked path matches a row, the engine-loaded files are derived from the import graph of the engine's entries and never hand-listed, the files each seat's launch prompt is built from are the files its generator reads, and a wording-only declaration holds only for an edit that keeps the file's structure. | runtime |
+| R238 | `RT_EVENT_SPILL_BYPASS` | A ledger event payload that grows with its input (a file list, a manifest, a digest, a report, a critique, a menu) goes to the blob store through the one path of appendEvent: engine/db/event-compact.mjs eventPayloadRecord keeps a bounded inline view of at most 16 KiB and the whole payload behind events.payload_sha, and readers resolve it through engine/db/event-payload.mjs. No runtime source file other than engine/db/ledger.mjs and engine/db/event-compact.mjs passes a payloadSha to a write, catches the payload-too-large refusal to spill by hand, or inserts into the events table directly. Specs, tests, node_modules, the generated runtime copies and packages are out of scope. | runtime |
+| R239 | `RT_STORAGE_UNDECLARED` | Content lives as a file in the content-addressed blob store under the runtime state dir (<runtime root>/.runtime/artifacts, engine/db/blob.mjs) and a database row holds only the reference (the sha) plus the small scalars it is queried by (owner ruling 2026-10-09). Always content, whatever its size: a report, a critique or verdict, a prompt or dispatch contract, a read manifest, a list of files, a log or command output, a menu or digest snapshot, an image or render, a diff. What may stay inline: ids, states, timestamps, counts, short codes and one-line reasons up to 256 bytes; any other free text up to 1024 bytes; a payload of any size is class spill (appendEvent and supEvent keep the whole payload behind the sha and a small inline form). Every text column of the product ledger and of machine.sqlite is declared in modules/schemas/storage-convention.yaml with its class (scalar, bounded, reference, spill, migrate), so a new table or column cannot appear without one; a column that holds content inline today is class migrate with its measured size, and the migration to a reference is a proposed runtime step, idempotent and journalled, never a hand rewrite of a live store. | runtime |
+| R240 | `RT_ROOT_ADHOC` | Which directory a component reads or writes is decided in one module, scripts/lib/roots.mjs: the runtime tree, its state directory, the temp root, the invocation directory, the Work directory name, the order in which two trees that can hold the same record are tried (the tree the work happens in first, then the product's main checkout: workDirHolding, workRecordPath) and the order a tool is looked up (the tree the work happens in, then the project, the runtime's own install last: toolSearchDirs). A runtime source file does not resolve a root by itself: it neither spells process.cwd() nor the Work directory name as a literal outside that module more often than the tree the check landed on held it: a file keeps the count it had and only loses it as it is converted, and a new file starts at none. Four times in two days a component read or wrote the wrong tree because it resolved the directory itself. | runtime |
+| R241 | `RT_HELD_UNSURFACED` | A failure code the catalogue gives to the Supervisor or the owner as a runtime fault is a state that role must be able to learn of; a stop that nobody is told of stands for hours until someone reads source. Each such entry of modules/kernel/failure-codes.yaml names the house mechanism that reaches its owner (surfacedBy: decision-item, sla-clock, incident, digest, notifier, caller or open) with surfacedAs (the item kind, clock code, incident kind, digest problem line or urgent class) and surfacedAt (the file that does it), and the check proves the mechanism exists and is wired in that file: the kind is a Decision Item kind and the file opens items naming it, the code is an SLA code with an owner and the file sets its clock, the problem line is a departure of the operating standard, a caller is a verb the owning role ran itself and never a reconciler file (a loop is no owner). An entry nothing reaches is surfacedBy open and names an open edge-case registry entry with the exact reason; it is never exempted silently. | runtime |
+| R242 | `RT_OP_JUDGE_UNDECLARED` | Every op declares who judges its product (principle P2: the maker never judges its own work). The contract of each op (modules/ops/ops/<op>.yaml) carries the required field `judge`, a list of at least one entry, each with a one-line why: machine (independent measures the runtime owns or re-runs at settle, named from modules/kernel/op-judges.yaml, and the contract proofs they rely on; a test file the same attempt wrote is never one by itself), critic (the independent Critic and its rubric, declared exactly for the op kinds that modules/kernel/critic.yaml coverage marks covered), owner (only where modules/kernel/op-judges.yaml ownerGates holds an owner gate) and next-leg (a registered reviewing leg whose contract is to review this product). Nobody cannot be declared. The registry and the contracts are checked against the runtime's own tables (op-gate and sonar-gate enforcedOps, opProofs, proof media, the Critic coverage), so the declarations and what the runtime does cannot drift apart. Surfaced in the full status text of a leg and in the op prompt. | runtime |
+| R243 | `FE_SERVER_ACTION_FORBIDDEN` | The front end serves no API, in every app and edition (R212 case-2 (owner:lite-production-swarm), with the Work boundary amended by ruling:R212/case-4): no file under `fe/` carries a `"use server"` directive (module or function level), and the only route handlers are `app/health/live/route.ts` and the auth callback of the `fe.route.callback` slot; reads and writes reach the back end through `modules/api` and the SWR hooks, and a webhook, cron, public API or third-party callback is a back-end feature. | product |
+| R244 | `FE_STACK_FORBIDDEN` | A front end uses the one canonical library of each concern of knowledge/hfs/fe-stack.yaml: no front-end package.json (an app or a `fe/packages/*` package) depends on, and no source file under `fe/` imports, a package that the catalog lists under a concern's `forbids`; a missing concern is added to the catalog (with its pin in canon-pins.yaml), never installed beside it. | product |
+| R245 | `BE_APP_OPTIONS_COMPOSITION` | An app's `src/` holds five app roles (owner ruling 2026-10-14): `main.ts` builds `EnvSource` once, parses inline or imports `<app>.env.ts`, builds options and boots; `<app>.env.ts` holds typed, fail-fast environment parsing only, via `EnvSource` and capability parse helpers, with no logic, module composition, business code or feature imports; only `main.ts` and `<app>.env.ts` may read the app's environment; `<app>.options.ts` holds env-derived options plus port bindings (provider maps such as `{ approvalGate: X }`) only, with no parsing; neither the env nor options file holds an array listing `*Module` classes, module or queue registrations (`register`, `forRoot`, `registerQueue`) or scheduler entries, or an `imports`, `modules`, `schedulers` or `processors` list; the env file also refuses standalone module or queue registration calls; `compose/<area>.ts` exports the module list of one area (and the providers of its global ports when it has any), composition only, with no business logic and no environment read; `app.module.ts` imports the groups and spreads them and binds the app-wide guards and filter. | product |
+| R246 | `BE_APP_COMPOSITION_BUDGET` | Each app file stays within the line budget its `be.app.*` slot names (`budget`, keyed by the slot entry the file matches): `main.ts` 80, `<app>.env.ts` 150, `<app>.options.ts` 200, `compose/<area>.ts` 120, `app.module.ts` 250. The budget is absolute, not a ratchet: an entrypoint that outgrows it moves typed, fail-fast parsing into `<app>.env.ts`; an app root that outgrows it moves an area into a new `compose/<area>.ts` group, never into the env or options file. | product |
+| R247 | `RT_COVERAGE_MATRIX` | Every surface and rule has an existing enforcer, edition-specific spec proof, documentation, template, example and mutation witness in each applicable edition; edition differences cite their owner ruling, Work schemas have full example records, gate claims match their commands, superseded rulings are not cited alone and hard documentation requirements are ledgered. | runtime |
+| R248 | `ENV_REQUIRED_UNSET` | The environment keys a back end reads through its typed `EnvSource` (`<app>.env.ts` and the capability `*.config.ts` parse helpers, resolved by a static TypeScript walk that substitutes the literal arguments of a reader's call sites into a template key such as `${prefix}_WEBHOOK_SECRET`), the key names sealed in `.starcistacks/<env>/secrets/*.enc` and the keys the stack declares or passes (`KEYS.md`, `environment:`/`env:` entries, `runtimeSecrets`, `vars[].name`) are one set, compared by name only in both editions: a required read is sealed or declared (ENV_REQUIRED_UNSET), a sealed key is read or has a declared consumer (ENV_SEALED_UNREAD), one key lives in one member (ENV_DUPLICATE), no `NEXT_PUBLIC_*` key is sealed (ENV_PUBLIC_SEALED) and every `*.env.example` key is read (ENV_EXAMPLE_DRIFT). | product |
+| R249 | `ENV_VALUE_SHAPE` | A stored environment value parses as the type its `EnvSource` reader declares (an integer, `true`/`false`, an absolute URL, a duration `250`/`30s`/`5m`/`2h`, a member of the declared enum, a nonempty string or secret): `starci app secret verify <env>` decrypts every member in memory and reports each key and its violated shape, never a value, and a concrete (non-placeholder) value of a `*.env.example` parses the same way. | product |
+| R250 | `HFS_HOST_CRON` | In lite and full apps, scheduled work belongs to the back-end scheduler, pgmq/pg_cron or a declared replicated-job. Deployment files, scripts, workflows, compose files and Dockerfiles install no host crontab, cron.d entry, systemd timer, @reboot job or at job; a workflow does not schedule app work. Docker compose up, down and pull run only against an explicitly dev environment. Deploy shell scripts delegate to docker, starci or the app CLI, and contain no node -e, psql, inline SQL or downloaded shell logic. | product |
+| R251 | `HFS_DEPLOY_WORKFLOW` | In lite and full apps, deployment jobs declare a protected environment, explicit permissions and concurrency, materialize sealed secrets through SOPS_AGE_KEY or starci app secret materialize, and reference only the age key and transport SSH key/known_hosts secrets. They never embed a dotenv blob or write a dotenv file. Every remote workflow action uses a 40-hex commit SHA (local actions are allowed and container actions require a full sha256 digest); supply-chain reports each unpinned uses reference at its source line, including disabled jobs and steps; installed tools are checksum or digest verified, or supplied by a pinned action. App workflows start only on release tags [v*], the release candidate branches release/candidate-* (required in ci.yml: starci app release push waits for that run, owner ruling candidate-ci 2026-10-18) or workflow_dispatch, never on another branch push. | product |
+| R252 | `HFS_SCRIPT_PLAINTEXT_LOAD` | In lite and full apps, executable scripts and workflow commands never load plaintext secrets.env, secret.env, .env secret files or a home-directory credential file, enable shell xtrace or request --reveal. Service-role references belong only to the back-end Supabase integration; deployment scripts and source outside that integration never use the service role. Scanners inspect source references and report paths without reading secret files or printing their values. | product |
+| R253 | `HFS_AGE_KEY_CUSTODY` | The age identity that seals and opens an app's `.starcistacks/<env>/secrets/*.enc` is host-local custody only: it lives in the untracked `.claude/secret.env` (as `SOPS_AGE_KEY`, which wins over the legacy `keys.txt` and is handed to sops through the `SOPS_AGE_KEY` child environment, never as an argument and never printed) or in the sops config dir's `keys.txt`; a tracked `.claude/secret.env`, `keys.txt` or `*.agekey` is the identity committed. The three files the secret custody depends on - `src/modules/platform/config/env-source.config.ts`, `src/modules/platform/http-security/origin.guard.ts` and `src/modules/platform/http-security/webhook-signature.service.ts` - are hash-sensitive canon, not files to edit: their bytes equal the `be/skeleton` template they were scaffolded from, judged by sha256. | product |
+| R254 | `DB_BE_ONLY_ACCESS` | In lite and full, browser data access stays closed on exposed schemas: authenticated receives neither table or sequence privileges nor data policies, and anon reads only through a select policy named *_public_read. A table listed in hfs.json supabase.directAccess is an explicit exception. A table joins supabase_realtime only when that direct access is declared. The front end uses Supabase for Auth and reaches product data through the back end. | product |
+| R255 | `DB_APP_ROLE` | The declared back-end database role (hfs.json supabase.appRole, app_be by default) has only the privileges it needs: role declarations refuse superuser and bypassrls, require noinherit and nobypassrls, and never grant all schema or table privileges. Tables owned by that role enable and force row level security by default; a forceRls exemption identifies the table and carries a nonempty reason. This applies to every edition that declares Supabase. | product |
+| R256 | `DB_POLICY_TAUTOLOGY` | Exposed database objects keep their access boundaries in lite and full. Policies refuse tautological true, is-not-null and self-equality predicates; policies for browser roles prove a principal predicate. An exposed view or materialized view uses security_invoker or the migration set ends with access revoked from anon and authenticated. Disabling RLS or moving a table into an exposed schema preserves the R214 RLS obligation. A security definer declaration, including alter function, preserves R215 safety checks and the migration set ends with execute revoked from authenticated when exposed, in addition to R215's public and anon revocation. A storage.objects policy scopes an ownership prefix to the principal unless its bucket id ends _public. | product |
+| R257 | `DB_BASELINE_SHAPE` | An archived migration chain has exactly one active baseline marked -- starci:baseline <archived-last-stamp>, with a later valid stamp or an explicit restamp. Archived files only need the digits-stamp_name.sql shape, whatever the stamp value (they are immutable history and never applied); the baseline and active migrations keep the real-instant stamp check. Archive contents are immutable against repository history; an active migration enters the archive unchanged only in the same diff that adds the replacement baseline. The app db baseline, restamp and plan verbs are read-only unless --apply is explicit. | product |
+| R258 | `DB_PGMQ_DECLARED` | DB_QUEUE_CRON: every pgmq queue constant has an active migration creating the queue and every created queue has a constant. Queue objects are granted only to the application role. A uniquely named pg_cron job belongs to a migration and only enqueues to an existing queue directly or through one enqueue-only *_tick function; it executes no business DML or HTTP request and shares no tick with an app scheduler. Removing a tick unschedules its job. | product |
+| R259 | `DB_EXTENSION_ALLOWED` | DB_CONFIG_EXT: extensions belong to the database allowlist, vault writes and migration role passwords are refused, pgmq schemas are never exposed through the API, and lite API access is closed except for explicit public-read policies. R216 DB_CONFIG_POLICY also checks API schema allowlisting, existing seed paths, anonymous sign-ins, disabled edge runtime, bounded storage uploads and the database major-version pin. Destructive DDL belongs only to *_contract_* migrations whose targets are no longer referenced by back-end SQL or entities. Seeds contain no real email or phone literals. | product |
+| R260 | `BE_JWT_ALG_PINNED` | A back-end JWT verifier pins a nonempty literal subset of ES256, RS256 and EdDSA and obtains its issuer from configuration. A Supabase principal is built only after verification and rejection of every role other than authenticated, in lite and full. | product |
+| R261 | `BE_CORS_ALLOWLIST` | Every back-end API declares an exact browser origin allowlist, applies the platform/http-security response middleware, disables x-powered-by and states a nonnegative integer trust proxy hop count. Wildcard or missing CORS and blanket proxy trust are refused in lite and full. | product |
+| R262 | `BE_READY_REAL` | Every back-end API serves distinct live and ready health signals. Readiness probes a required dependency with a bounded failure timeout and returns unavailable on dependency failure; an alias of liveness is refused. The API Docker HEALTHCHECK reaches an existing live route and cannot be a command that always succeeds, in lite and full. | product |
+| R263 | `BE_WEBHOOK_SCOPE` | SignedWebhook public metadata belongs only to a webhook HTTP door or an exact domain verifier declared in its HTTP module's exported webhookVerifiers array. A public controller route containing webhook, callback or events belongs in the webhook door; the one exception is a third-party OAuth redirect (owner:oauth-redirect-not-webhook): a GET route that declares PublicReason.AuthHandshake and whose path is not a webhook or events path, which has no signature to verify and is not a door. A POST, a webhook or events path, and any other reason are still judged. A receipt transaction may call a domain receipt port (owner:webhook-receipt-port): a class with no base class whose constructor takes only platform ports and TypeORM, one of them the platform Inbox; a call on any other domain service or on a bus inside the transaction is processing. Domain intake methods identified by a first *Id parameter or DTO property, or raw-body signature input, claim the shared Inbox with the stable delivery key and return early on a duplicate before doing work. The receipt transaction records the inbox delivery and publishes its typed outbox event; process callbacks, domain processing and command dispatch run only after commit in a reactor or job. | product |
+| R264 | `HFS_FEATURE_LOGIC_ROLE` | A non-door role in the feature tier declares data, types and DTO metadata only: a support policy, guard, client, filter, interceptor, projection or contracts file cannot hide a decision, loop, computation or executable call by changing its suffix. Business logic belongs in tested modules; thin feature roles remain governed by R203 and feature module composition keeps its module laws. One exemption (owner ruling 2026-10-16 "Theo y tro"): a `registerEnumType(...)` call of `@nestjs/graphql` at module top level of a `<name>.type.ts` file of the GraphQL transport slot (`be.transport.graphql`) declares a schema enum that `starci app emit` loads from that file; the same call in any other role or slot, or nested in a function, is still logic. | product |
+| R265 | `BE_COMPOSITION_UNTYPED` | App composition is identified by resolved module, DynamicModule, Provider, queue and scheduler entry types, independently of class, helper or registration method names. Composition lists and maps live in explicitly typed compose/<area>.ts groups, never in main.ts, <app>.env.ts or <app>.options.ts. The bootstrap may pass its app module to NestFactory (a cli app, to the CommandFactory.run of nest-commander, R148), options may bind ports, and app.module.ts spreads the groups. starci app add writes and updates the generated feature's typed area group. | product |
+| R266 | `STACKS_SECRET_NOT_EXTERNAL` | Every rendered Swarm deployment uses external immutable secrets whose names match the declared runtimeName and positive version; services carry no secret environment literals. Only the one declared ingress publishes ports; its hosts have routes, DNS ownership receipts and TLS ownership evidence. Stateful services declare placement constraints, and runnable services declare healthchecks and update, rollback and restart policies. A lite api app composing be.feature.realtime.* pins deploy.replicas to 1; full is unaffected by that replica restriction. | product |
+| R267 | `STACKS_RELEASE_UNDECLARED` | Each Swarm environment declares an immutable images lock, active and previous release pointers and nonempty health assertions. Every stateful component and declared managed backing dependency declares backup target, retention and owner with a tracked restore proof. The rendered deployment model must be available and valid; an unavailable model is a finding, never a skipped check. | product |
+| R268 | `HFS_SCHEDULE_UNDECLARED` | Every app scheduler, active pg_cron schedule, selected scheduled component and rendered replicated-job has a matching top-level jobs declaration with its schedule and invocation of a named back-end CLI action. A rendered replicated-job uses the same declared CLI invocation; inline JavaScript and shell chaining are refused. Scheduling is app-owned; a manifest entry never grants host crontab or deployment business logic. | product |
+| R269 | `HFS_DEPENDABOT_MISSING` | In lite and full apps, .github/dependabot.yml declares scheduled npm, github-actions and docker updates. Every npm entry declares a minor-and-patch version group and a security-updates group; every group explicitly restricts update-types to minor and patch, leaving majors per package, and npm entries ignore @starci/* without version or update-type restrictions. The CI workflow runs npm audit --omit=dev as an enabled gate whose failure stops the job. The images workflow generates an SBOM and provenance for release images; a disabled step, comment or label is not evidence. | product |
+| R270 | `HFS_DOC_PATH_MISSING` | In lite and full products, READMEs, docs and stack READMEs cite existing repository paths, npm scripts, starci app verbs, environment keys declared by typed readers or KEYS.md, and rule ids from the HFS catalog. Documentation changes with the product it describes. | product |
+| R271 | `HFS_RELEASE_TAG_MISMATCH` | A lite or full product release uses a v-prefixed semantic version tag equal to package.json version; images.yml publishes images under that release tag, and every database deployment refuses a non-tag ref before migration. | product |
+| R272 | `BE_APP_BOOT_PROOF_MISSING` | Every lite back-end app proves its real Nest AppModule composition by compiling the dependency graph with explicit fixture options and infrastructure doubles; unresolved providers, circular dependencies and a missing or failed proof are refused. The app check wiring verb uses the same proof. Full retains its existing e2e boot proof. | product |
+| R273 | `HFS_COVERAGE_BELOW` | An app check supplied with a coverage-from lcov report proves 100 percent lines, functions and branches per tracked back-end logic file in the edition's slot-derived measured scope; a missing source record or unavailable metric is refused. The unit runner also enforces statement coverage. Reports list the measured scope and the source files outside it, including features, cli and webhooks. | product |
+| R274 | `RT_RULING_STALE_CITE` | Live prose, source comments and spec titles cite current owner rulings using ruling:R212/case-4 or a stable owner id. A superseded or amended ruling needs its live successor in the same paragraph; staleWhen statements outside historical case text and CHANGELOGs are refused, and a bare owner ruling date must match a catalog case or owner ruling. | runtime |
+| R275 | `STACKS_INGRESS_UNDECLARED` | Every Swarm environment declares its one ingress component and hosts. The named component has role ingress and a digest-pinned supported ingress image; Traefik and Caddy are both accepted without a preferred product. An absent declaration, unknown component or unsupported image is refused. | product |
+| R276 | `STACKS_LITE_SELFHOSTED_DB` | Lite uses managed Supabase and runs no PostgreSQL, Redis or MongoDB backing image. A sidecar that needs a database uses SQLite on a named persistent volume declared by its component and mounted in the rendered model; a sidecar requiring another database is refused. Full retains its declared backing topology. | product |
+| R277 | `HFS_SECRET_PLAINTEXT_FILE` | In every edition the only custody a tracked secret may take is a sops envelope at `.starcistacks/<env>/secrets/**.enc`. A tracked plaintext secret file is refused by being: `secrets.env` or `.secret(s).env` at any depth, a non-dot `*.env` or `*.env.<profile>` holding secret keys (deploy-side dotenv included), and a plaintext member of a `secrets/` directory; a sealed `.enc` outside the one sealed home is refused too (for lite it is already `HFS_LITE_SECRET_CUSTODY`). | product |
+| R278 | `BE_REST_DOOR_EVIDENCE` | GraphQL is the default door in lite and full. Each REST route carries its own evidence: a probe, auth handshake, signed webhook, actual byte stream, a public versioned operation served from the app's nonempty defineOperations table, or a credential-guarded route (owner:credential-guarded-rest-door): the route or its controller carries @Credential({ kind: "<literal>" }) imported from the domain identity capability, which also declares the CredentialGuard class implementing CanActivate (resolved by TypeScript symbol, never by name); a local decorator of the same name, a @UseGuards of any other guard and a computed kind prove nothing. A class-level reference or an unused StreamableFile import proves no route, and a public REST route absent from the operation table is refused. | product |
+| R279 | `BE_THIRD_PARTY_OWNER` | Third-party SDK ownership is derived from the app's package.json dependencies rather than a finite SDK table. A dependency outside the pure-library and framework allowlists is imported only by one integrations/<provider> capability; domain services call that integration's public API. Existing infrastructure owner restrictions remain in force. | product |
+| R280 | `HFS_UNUSED_SYMBOL` | Every enum member, queue constant, error code and catalog key has a production consumer; an error's kind or message mapping and a test-only reference do not keep a dead symbol alive. Namespace imports consume the members actually read. Keys the detector cannot see are declared with a reason in the side's i18n-dynamic-keys.yaml; a stale or malformed entry is itself a finding. | product |
+| R281 | `BE_SPEC_FORM_ALL_ROLES` | Unit spec form applies to every declared logic role, including policies, mappers, guards and integration clients. A spec obtains its subject from a compiled Nest testing module with explicit providers, never constructs the subject or mocks an own module or third-party library, and asserts behavior or state rather than only toBeDefined existence checks. | product |
+| R282 | `HFS_ASSET_OVERSIZE` | Back-end build assets stay within the per-file asset budget (512000 bytes by default) and the build-asset extension allowlist; ordinary media lives in object storage, and model weights and datasets are never tracked in the back end. Declared documentation media remains allowed. | product |
+| R283 | `HFS_APP_LEXICON` | An app's source and documentation use the current product vocabulary: a word declared in hfs.json lexicon.removed is refused as a whole word or identifier segment, in both editions. | product |
+| R284 | `BE_LITE_PROOF_LANE_MISSING` | A lite back end declaring event-bus, queue, webhooks, realtime, fenced-job, projection or saga proves each declared pattern through integration specs under src/tests/integration: runnable tests carry titles `<pattern>/<scenario>: ...` for every required scenario of that pattern. A missing integration lane is refused; missing scenario proofs use R155's BE_PATTERN_SPEC_MISSING. Full-edition pattern proof behavior is unchanged. | product |
+| R285 | `FE_SWR_OUTSIDE_FAMILY` | SWR runtime calls belong to the declared SWR hook family. A component, feature or domain hook consumes its wrapper hook instead of importing an API operation or calling SWR itself; each back-end operation is imported and invoked only by its SWR wrapper under hooks/swr, regardless of whether the tier matrix still permits a direct transport edge. | product |
+| R286 | `FE_COPY_IN_CALL` | Copy shown by validation and toast calls comes from the next-intl catalog, including Zod message arguments and toast titles or descriptions. Browser alert calls are forbidden. Inline SVG glyphs are forbidden outside a declared brand-mark leaf; ordinary icons use the one Heroicons family through the Icon leaf. | product |
+| R287 | `FE_CALLBACK_SHAPE` | The fe.route.callback handler performs only the auth code exchange and redirect: read the callback URL, obtain the auth client, exchange the code and redirect to the declared route. An email confirmation or recovery link (owner:auth-callback-email-link) arrives as the query values token_hash and type; the handler then awaits one verifyOtp({ token_hash, type }) of the auth owner (the auth client, or verifyOtp from modules/auth/server), built from exactly those two query values, in place of or beside the one code exchange. The handler may read the exchange outcome's success or ok flag, and may call pure text helpers exported by the app's modules/routes or modules/auth (owner:auth-callback-pure-helpers): a synchronous function with no await, no network, storage, DOM, process or console access and no import beyond other such helpers, found by TypeScript symbol resolution, so the public origin and the same-origin validation of next stay in the owner modules. It carries no product data operation, business logic, additional request handler or JSON response. | product |
+| R288 | `FE_STACK_UNLISTED` | Every FE workspace dependency belongs to knowledge/hfs/fe-stack.yaml or is declared in hfs.json fe.extraPackages with its name and a nonempty reason. Every product Next app declares the catalog's core runtime packages; codegen, lint, TypeScript and Tailwind tools may be installed once at the app root. The marketing landing app is exempt (lite and full) from core presence. GraphQL documents, including gql templates, match the back-end contracts, and SWR keys carry fetcher identities without an opt-in declaration. | product |
+| R289 | `BE_APP_ENV_REQUIRED` | Every declared back-end app owns a tracked apps/<app>/src/<app>.env.ts exporting its typed environment interface and read<App>Env(env: EnvSource). main.ts constructs EnvSource once and delegates its reads to that reader, with no inline parsing. app.module.ts composes module lists only by spreading compose/<area>.ts groups; its own providers are limited to app-wide guards and filters. | product |
+| R290 | `BE_PUBLIC_REASON_CLOSED` | In lite and full PublicReason has exactly Health, AuthHandshake, SignedWebhook and CatalogRead. An app-defined public reason such as ToolToken or ApiKey is refused; API-key, run-token and tool-token routes authenticate with their own credential guard (@Credential, R278) instead of extending the public vocabulary; an anonymous route without one of the four reasons still fails. | product |
+| R291 | `HFS_FUNCTION_BUDGET` | Every back-end and front-end function, method or arrow body stays within ruleParams.functionLines (80 physical lines), including comments and blank lines, in lite and full; split a larger body by responsibility. This is an absolute budget. | product |
+| R292 | `HFS_FEATURE_FILE_BUDGET` | Every feature owner stays within ruleParams.featureFiles (250 tracked files), including nested files, in lite and full; split a larger feature by product capability. | product |
+| R293 | `STACK_TOOLING_REIMPLEMENTED` | In lite and full apps, an app does not re-implement the Swarm deploy tooling the canon ships as `starci app stack <verb>`. Tracked deploy sources (files under deploy/ and scripts/, the scripts of package.json and every workflow except the managed stack-deploy.yml) never call a docker command a verb owns (docker stack deploy and config, docker secret and config create and rm, docker service ls, ps, inspect and update, docker swarm init, docker volume create, docker node ls), and deploy/ holds no render, provision, converge, verify, prune, rollback, release, backup, prepare, doctor, jobs or public script. A finding names the file and the replacing verb, never a snippet; docker stack rm, ls, ps and services, docker compose, docker run, exec, ps and logs, comments, documents and `starci app stack ...` command lines are not judged. | product |
+| R294 | `STACKS_DEPLOY_CONFIG_INVALID` | In lite and full apps, every docker-swarm environment of .starcistacks/application-stacks.yaml that declares environments.<env>.deploy declares a coherent block: it is judged by the same normalizeDeploy the `starci app stack` verbs use, against the real tree. Unknown fields are refused, names, keys, volumes, hosts, URLs and commands match their patterns, the config and public environment files exist below .starcistacks/<env>/, every service names a service of the first stack source, every sealed member has a secrets/<member>.enc file, verify entries and configs are well formed with unique config names, and the backup helper image is pinned by a real sha256 digest (no placeholder). Each problem is one finding at environments.<env>.<field>; an environment without a deploy block is not a finding. | product |
+| R295 | `BE_MODULE_DEFINITION_MISSING` | Every NestJS module of the product has a module definition (owner ruling 2026-10-15, owner:module-definition-everywhere): capability modules, sub-modules, features, transport modules and cli groups alike. For a module `<x>` the folder holds `<x>.module-definition.ts` (`export const { ConfigurableModuleClass, MODULE_OPTIONS_TOKEN, OPTIONS_TYPE } = new ConfigurableModuleBuilder<XOptions>().setClassMethodName("register").build()`; the representative module of a capability keeps `.setExtras({ isGlobal: false }, ...)`), `<x>.options.ts` (`export type XOptions`, `Record<string, never>` with a one-line doc when it takes nothing yet) and `<x>.module.ts` (`@Module({...}) export class XModule extends ConfigurableModuleClass {}`, no `register` override except the capability representative's). A module appears in an `imports` array or in an app composition group only as `XModule.register({...})`, never as a bare class. The `AppModule` of an app root and the test world are composition roots and are not judged. | product |
+| R296 | `CI_SECRET_SEALED` | A name declared in ci.secrets or ci.dependabot.secrets never names a key stored inside an app sealed .starcistacks/<env>/secrets/<member>.enc member. App runtime and CI custody are separate; checks inspect key names without decrypting or printing values. | product |
+| R297 | `APP_SECRET_IN_CI` | A sealed member key granted to an app container by a deploy grant never appears in ci.secrets or ci.vars. The grant environment, member and selected key determine app custody; online GitHub custody is verified by starci app ci verify. | product |
+| R298 | `CI_DECLARATION_DRIFT` | Workflow secrets and vars references are declared in their matching top-level ci class, except automatic GITHUB_TOKEN. Non-optional Actions declarations are consumed by a workflow; Dependabot secrets need no Actions read. Service token and variable bindings name declarations in the matching class. Missing declarations produce migration findings; a tree with neither ci declarations nor references stays quiet. | product |
+| R299 | `HFS_WORKFLOW_CONTEXT` | GitHub Actions expressions use only contexts available at their workflow key. Job env cannot read runner, job, steps or env; runner-local data paths belong to step env or shell RUNNER_TEMP. Every tracked workflow is checked in both app editions. | product |
+| R300 | `FE_PUBLIC_BUILD_ARG_MISSING` | Every front-end app with a Dockerfile supplies each required NEXT_PUBLIC_* source/config/schema name through a Dockerfile ARG default or through that image's buildArgs.values/buildArgs.sealed.keys in every environment deploying the image. Source reads with literal string ?? or \|\| fallbacks are optional. The finding names missing keys and environments at the Dockerfile; sealed values are never opened. CI release images use the same starci app stack build-args verb and environment as deployment. | product |
+| R301 | `CI_STANDARD` | The managed app CI, the example apps (the reference) and the runtime repository's own workflows follow the ONE CI standard of knowledge/hfs/ci-standard.yaml (owner ruling ci-standard, 2026-10-18): the job shape fast/test/build(/sonar) with the unit run and the Codecov upload in test alone, full history with STARCI_BASE_REF written before the lint, NODE_OPTIONS --max-old-space-size=6144 on every heavy step, the Sonar lint per side, optional providers probed before they skip, a timeout on every job and every action pinned to a commit sha; the other items (candidate trigger R221, per-fe-app build env, prettier-stable renders, R299 contexts) are owned by the rules the standard names. Apps get the standard only through starci app sync. | product |
+| R302 | `HFS_MCP_TOOLS_SNAPSHOT` | An app that commits the MCP tool catalog of its server keeps it at `be/contracts/<app>/<contract>.tools.json` (slot be.contract.mcp-tools, opt-in), `<contract>` being `<server>@<major>`, as the server's `tools/list` result: `{ contract, server: { name, version }, tools }` where the contract equals the file name and the server name, and every tool has a unique name, a description and an object `inputSchema`. | product |
+| R303 | `HFS_BYPASS_MARKER` | A product repository holds no bypass of a check (owner ruling loosening-always-red): no inline disable of any tool (eslint, stylelint, tslint, prettier, biome), no ts-ignore, ts-expect-error or ts-nocheck directive, no Sonar exclusion comment, no istanbul, c8 or v8 coverage ignore, no skipped, focused or todo test or skip option, and no failure swallowed in a hook, script or workflow (`\|\| true`, `continue-on-error`, `set +e`, `HUSKY=0`, `--no-verify`, `fail_ci_if_error: false`). A front end has no specs, but its source is still judged for the inline disables. `starci app check` reads the tracked tree and `starci app hygiene` (the managed pre-commit hook) the staged files from the index, so the bypass fails at the commit. | product |
+<!-- hfs:generated-end rules -->

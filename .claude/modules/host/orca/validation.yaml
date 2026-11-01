@@ -1,0 +1,73 @@
+schema: starci/orca-provider-validation@1
+preflight:
+  - starci runtime check --only providers
+  - starci runtime check --only providers -- --live
+  - starci runtime check --only host-boundary
+callContract:
+  file: calls.yaml
+  runner: scripts/api/orca/lib.mjs orcaCall (one wrapper per verb over it)
+  envelope: starci/orca-call-result@1
+  rules:
+    - lib.mjs loads calls.yaml once per process and builds every argv from it; a wrapper names a verb and shapes its receipt, and a param calls.yaml does not declare throws before the process runs. Prose templates in index.yaml document the same calls and are never a second construction path.
+    - Before the first call of kind mutation, lib.mjs reads the live agent-context listing once and compares calls.yaml command and flags against it; a mismatch is outcome failed, effectState none, reason host-contract-drift and no process runs (calls.yaml liveSchema).
+    - An Orca exit code 1 is a classified result with outcome and effectState; only a contract violation throws.
+    - A mutation whose result is unknown is replayed once with --retry-request; a still-unknown result blocks fallback until a read-only reconciliation proves state.
+    - Fallback to the next candidate requires effectState none, proven by settlement (worker-stop, worker-release released or already_released) when the failed attempt created a Dispatch.
+receipts:
+  required:
+    - run-id
+    - task-id
+    - dispatch-id
+    - agent-terminal-handle
+    - worktree-id
+    - parent-worktree-id
+  devinAdditional:
+    - explicit-positive-workflow-slot
+    - stored-cli-auth-proven-by-read-only-model-inventory-before-launch
+    - one-worker-start-per-attempt
+    - agent-terminal-is-the-started-worker
+    - worker-show-effective-agent-devin
+    - logical-model-devin-agent-without-underlying-model-inference
+  providerAttestation:
+    source: orchestration.worker-show
+    required:
+      - exact-worker
+      - active-task-id
+      - effective-agent
+      - effective-model
+      - agent-terminal-handle
+      - canonical-task-display-name
+    onMismatch: fence-reconcile-release-and-retry-before-effect-acceptance
+  titleCanonicalization:
+    afterManagedAssigneeShown:
+      - terminal-rename-to-canonical-op-name
+      - record-ui-defect-without-rejecting-valid-operation-effects
+    duringRuntime:
+      classification: mutable-native-ui-metadata
+      onDriftWithExactImmutableIdentity: recanonicalize-without-fencing
+      effectDecision: never-reject-solely-for-runtime-title-drift
+dispatchAssertions:
+  - The workflow kernel invokes scripts/kernel/cli.mjs dispatch; it never composes worker-start, candidate fallback or terminal naming calls itself.
+  - One dispatch invocation owns the whole attempt: it tries the allocated candidate when the kernel supplies one, otherwise it walks the resolved chain, and the kernel never re-invokes dispatch for the same attempt to obtain a fallback.
+  - A runtime that cannot launch is released, classified and cooled down by the runtime allocator, which then names another runtime; there is no supervisor to replace and no layer to recover.
+  - Operation equals an operation of the approved goal before Task creation.
+  - architecture.decide is admitted only by an active implementation secondary_request with reason sds-technical-gap and an explicit bounded SDS allowlist.
+  - Review findings, suggestions and open questions never create architecture.decide.
+  - Provider selection is resolved before launch and attested from worker-show before any effect is accepted.
+  - Task display_name equals [Op] <operation> and is the immutable operation name; worker-task_<id> is never accepted as operation identity.
+  - An op's terminal is renamed [Op] <operation> once the start receipt (or worker-show) names its agent terminal, and a failed rename is recorded, never a rejection.
+  - A native activity-title drift during execution is mutable UI metadata; with exact Task, Dispatch, worker, agent and model identity it is recanonicalized rather than used to reject valid effects.
+  - An operation is never dispatched to an existing terminal; only worker-start creates its supervised agent, and the runtime never creates an agent terminal itself (a plain shell from calls.yaml terminal-create runs the start relay, never an agent).
+  - Devin is never an implicit candidate fallback; only an allocator candidate admitted by an explicit positive workflow slot may reach the launcher. The owner's default grant (config.yaml allocation.grants, e.g. devin-agent=10@implement+verify+write) is that slot for every workflow, and `starci kernel route` enforces it.
+  - An operation's `done` is never accepted on its own word: the kernel re-runs every declared check itself, computes the changed files from git and refuses a report whose files fall outside the operation allowlist.
+  - Current-runtime worker-start omits --on; a named --on value is used only after live runtime inventory returns that exact environment id.
+  - Literal or guessed environment labels such as windows are rejected before worker-start.
+uiAssertions:
+  - Workflow worktree display name equals [Workflow] <Workflow>.
+  - The kernel's own terminal title equals [Kernel] <Workflow>.
+  - Operation titles follow modules/kernel/start-workflow.yaml orcaTree.titles.
+  - Bash in the subtitle is accepted only as activity metadata beneath a native agent identity.
+messageAssertions:
+  - The kernel speaks to a live operation only by typing into that operation's own terminal, and delivery is proven from the screen rather than from the send receipt.
+  - Status messages are informational only and never carry a control instruction.
+  - An operation answers exactly once, in its report file; the Orca signal that follows is a wake-up, not the answer.

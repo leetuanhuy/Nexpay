@@ -1,0 +1,117 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:work:sds-component:1
+type: object
+additionalProperties: false
+description: "One piece of the intended technical design - what it is responsible for, what other code may
+  assume about it, and which module root actually owns it. It is a target, not a description of what the
+  code currently does: the component record is written before or against the implementation, and where the
+  two differ it is the implementation that is wrong until somebody argues otherwise and changes this record
+  on purpose. A done component names at least one owners[] directory that exists on disk, because the
+  read-scope boundary a design describes is a module boundary and not a prose claim."
+required:
+  - responsibility
+  - refs
+properties:
+  schema:
+    const: work/sds-component@1
+    $ref: "urn:work:common:1#/$defs/familyDiscriminator"
+  id:
+    type: string
+    pattern: ^sds(?:\.[a-z0-9]+(?:-[a-z0-9]+)*){2,}$
+    description: "The component's stable id, a lowercase dot-path under the sds family: sds.<feature>.<name>;
+      example sds.task.ownership-guard. The prefix is enforced so that a reference to sds.x is unambiguously
+      a design target rather than a shipped module."
+  title:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: What the component is, written so a reader learns its purpose from the line alone. It names
+      the thing in design terms, not by the file that happens to contain it today.
+  state:
+    $ref: "urn:work:common:1#/$defs/state"
+  activity:
+    $ref: "urn:work:common:1#/$defs/activity"
+  responsibility:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: "What this component is answerable for, and where relevant how - expiry enforced on read
+      rather than by a sweep, for instance. One responsibility per component: if this field needs the word
+      `and` twice, the record is describing two components that should be separable."
+  interfaces:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/prose"
+    description: What the rest of the system may assume about reaching this component - who may write, who
+      must go through whom. These are the assumptions a refactor breaks silently, so they are written down
+      as promises rather than left implicit in the current call graph.
+  owners:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    description: "The module roots that realise this component, each with the role it plays. architecture.decide
+      leaves the field absent - a design names no repository roles or paths, and no module exists before
+      code - and review.verify's final reconciliation writes it from the done work/implementation@1
+      records whose proves names the component. Absent before any done implementation proves the
+      component, it is pending (SDS_OWNERS_PENDING, info); once one does, a done component without it is
+      refused and a todo one warned (SDS_OWNERS_MISSING), because a finished design with no module is a
+      claim about nothing."
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - role
+        - path
+      properties:
+        role:
+          $ref: "urn:work:common:1#/$defs/slug"
+          description: What kind of unit this path is - module, route, entry, block.
+        path:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: The module-root directory, app-relative (be/<path>, fe/<path> or a directory of the app
+            root; anything else is refused OWNER_PATH_NOT_APP_RELATIVE). It is a directory a reader would call
+            the module's root, never an individual file.
+  refs:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/recordId"
+    description: The records this design exists to serve, by id - usually the business rules it enforces. It
+      is required because a component that serves no stated rule is design with no mandate, and nobody can
+      then say whether it is still needed.
+  dependsOn:
+    $ref: "urn:work:common:1#/$defs/dependsOn"
+  appliesTo:
+    $ref: "urn:work:common:1#/$defs/appliesTo"
+  subscribes:
+    $ref: "urn:work:common:1#/$defs/subscribes"
+  stateMachine:
+    $ref: "urn:work:common:1#/$defs/stateMachine"
+  sequence:
+    $ref: "urn:work:common:1#/$defs/sequence"
+  extensions:
+    $ref: "urn:work:common:1#/$defs/extensions"
+  requiresProof:
+    $ref: "urn:work:common:1#/$defs/requiresProof"
+  provenBy:
+    $ref: "urn:work:common:1#/$defs/provenBy"
+  evidence:
+    $ref: "urn:work:common:1#/$defs/slug"
+    description: The single evidence directory under this record's evidence/ folder that carries what was
+      observed of this component directly. It is one pointer and nothing more - it does not repeat when the
+      capture was taken, because that is in the manifest, and it does not list what else demonstrated this
+      record, because that is `provenBy`, which the kernel computes rather than an author copying it.
+  blockedBy:
+    $ref: "urn:work:common:1#/$defs/blockedBy"
+  conflictsWith:
+    $ref: "urn:work:common:1#/$defs/conflictsWith"
+  blockers:
+    $ref: "urn:work:common:1#/$defs/blockers"
+  verificationSource:
+    $ref: "urn:work:common:1#/$defs/verificationSource"
+  because:
+    $ref: "urn:work:common:1#/$defs/because"
+  change:
+    $ref: "urn:work:common:1#/$defs/change"
+allOf:
+  - $ref: "urn:work:common:1#/$defs/leafIdentity"
+  - $ref: "urn:work:common:1#/$defs/authoredClaimMustSayWhy"

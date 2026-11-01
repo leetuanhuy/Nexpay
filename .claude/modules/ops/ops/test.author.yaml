@@ -1,0 +1,300 @@
+schema: starci/op@1
+id: test.author
+goal:
+  en: Author the test files one bounded slice needs - inside a test-paths-only allowlist - and prove
+    they are collected by the real runner; the pass/fail judgement of the product belongs to the
+    verify ops, never to this one.
+params:
+  gateRounds:
+    type: integer
+    default: 5
+    min: 1
+    max: 10
+    setBy: owner
+    doc:
+      en: "Rounds of FIX then gate.mjs the op loop runs before it stops: a gate still red after the last round is reported blocked with the exact findings of that round (knowledge/op-gate.yaml)."
+      vi: "Số vòng SỬA rồi chạy lại gate.mjs của vòng lặp op trước khi dừng: hết vòng cuối mà cổng vẫn đỏ thì báo blocked kèm đúng các lỗi của vòng đó (knowledge/op-gate.yaml)."
+nodeKinds: [implementation]
+completionProfile: implementation
+sideEffects:
+  - test file authoring inside the declared test-paths-only allowlist
+  - no commits of its own - the runtime commits a green settle as the workflow's checkpoint
+  - runner collection/listing checks in the declared sandbox
+graphPolicy:
+  mode: read-only
+  location: shared
+  prerequisiteState: done-or-exact-direct-predecessor-proposal
+  dispatch: never
+reads:
+  - id: target
+    path: .starciwork/features/<feature>/**/index.yaml OR packet context.records -> exact bound
+      scope.define record/extensions.work3.scope
+    purpose:
+      en: "Read the existing selected target record, feature scope, declared refs/dependencies/proof
+        demands and validator freshness. Normally this consumer op requires its target record to
+        exist. The one exception is the workspace-canonicalization proposalAuthority below: when N
+        is the exact selected proposed id in the explicitly bound direct-predecessor scope record,
+        resolve that record by id and use the matching entry without materializing N. For this
+        exception, do not scan .starciwork for alternatives. Confirm packet context.workflow binds
+        the approved goal identity/revision, scope.define is its passed immediate predecessor, and
+        exactly one nodes[] entry matches the selected target id with grounded test paths,
+        assertions, dependencies and exclusions. If any binding is absent or ambiguous, report
+        DECLARED_DEPENDENCY_UNMET instead of inventing a target. Any other absent target is a
+        scope/graph gap."
+  - id: architecture
+    path: .starciwork/features/<feature>/{sds,contract,data,integration}/**/index.yaml
+    purpose:
+      en: Read the declared design contracts, data ownership, authorization and error identity of the
+        slice the tests cover, so each authored test exercises a stated behavior. Where the design
+        is silent about an observable effect, report the gap instead of writing a test that invents
+        an expectation.
+  - id: repo
+    path: <app>/<bound-paths>
+    purpose:
+      en: Resolve repository resource, actual checkout/root/HEAD and dirty state; read the delivered
+        slice, its public entry points and the test conventions its neighbors follow. The authored
+        tests bind the exact inspected tree.
+  - id: suite
+    path: <app>/<suite-paths>
+    purpose:
+      en: Inspect the existing test harness - its runner, naming convention, fixtures, helpers, lifecycle
+        hooks and the tests it already owns.
+  - id: conventions
+    path: knowledge/patterns/be/test.yaml + docs/architecture.md + docs/code-pattern-enforcement.md + packages/jest-preset/README.md + packages/test-world/README.md
+    purpose:
+      en: Read the adopted test conventions - naming, structure, fixture and assertion shape - for the
+        back end; a front end has no tests.
+  - id: profile
+    path: shared
+    purpose:
+      en: shared
+  - id: op-loop
+    path: shared
+    purpose:
+      en: shared
+      vi: "Dữ liệu của vòng lặp op: bảng loại tệp sang tệp pattern, app ví dụ cho từng phía, và schema của cổng và bản tóm tắt đọc mà read-digest.mjs và gate.mjs dùng."
+writes:
+  - id: node
+    path: .starciwork/features/<feature>/<family>/<name>/index.yaml
+    fields: [state, evidence, blockedBy]
+    content:
+      en: Read the existing selected scope, expected proof demands and the flat Work record graph
+        unchanged. When the target exists, write only state/evidence/blockedBy here; authored test
+        inventory and collection results belong to the evidence result, not semantic record prose.
+        When proposalAuthority is in use because the target does not exist, omit this write entirely
+        and leave the bound scope proposal unchanged for workspace.manage to materialize later.
+        Missing refs/dependsOn/proof demands require a reported gap; never add/remove them to obtain
+        pass.
+  - id: source
+    path: <app>/<test-ceiling>
+    fields: [test files, test fixtures and helpers inside the declared test paths]
+    content:
+      en: Only test files inside the explicit test-paths allowlist - specs, cases, fixtures and helpers
+        the suite convention owns. Product code, schema, configuration, declared expectations and
+        the runner's own manifest stay untouched; a product change the tests need is a reported
+        finding for a separate operation, never an edit hidden beside a test.
+  - id: evidence
+    path: evidence/**
+    fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+    artifacts: [manifest.yaml, authored-tests.json, collection.txt, result.md]
+    content:
+      en: "Map each covered assertion to the authored test file and cases that exercise it, and keep the
+        real runner's collection/listing output proving the new tests are discovered. Record
+        command, cwd, tested tree/commit, exit code and sanitized output of the collection check.
+        Operator-specific observed result in evidence/result.md: report tests authored and collected - the
+        pass/fail judgement of the product is the verify op's, and this evidence never claims it."
+  - id: read-digest
+    path: shared
+    content:
+      en: shared
+      vi: "Bản tóm tắt ĐỌC: các tệp sẽ sửa, bản đồ slot của chúng từ starci app explain, và mọi tệp pattern và ví dụ đã đọc kèm sha256."
+  - id: gate-proof
+    path: shared
+    content:
+      en: shared
+      vi: "Báo cáo cổng của vòng cuối: exit, commit gốc, head, các tệp đã đổi, số lỗi mới và lỗi có sẵn, và từng lỗi mới."
+steps:
+  - reads: [op-loop]
+    writes: [read-digest]
+    action:
+      en: "READ before coding (op loop, knowledge/op-gate.yaml): run starci gate read --root <app> --touch <every file the slice will create or change> --out $STARCI_JOB_SCRATCH/read-digest.json and read exactly what it lists, nothing wider - the knowledge/patterns/{be|fe}/*.yaml of each touched file kind, the matching example files of examples/<app>/{fe,be} and the slot map starci app explain prints per path (slot, tier, allowed imports, rules). Code only after this read; a file the slice comes to touch later is added with --touch and read the same way."
+      vi: "ĐỌC trước khi viết code (vòng lặp op, knowledge/op-gate.yaml): chạy starci gate read --root <app> --touch <mọi tệp slice sẽ tạo hoặc sửa> --out $STARCI_JOB_SCRATCH/read-digest.json và đọc đúng những gì nó liệt kê, không rộng hơn - các tệp knowledge/patterns/{be|fe}/*.yaml của từng loại tệp sẽ sửa, các tệp ví dụ cùng slot trong examples/<app>/{fe,be} và bản đồ slot mà starci app explain in cho từng đường dẫn (slot, tầng, import được phép, luật). Chỉ viết code sau bước đọc này; tệp phát sinh về sau được thêm bằng --touch và đọc theo cùng cách."
+  - reads:
+      - target
+      - architecture
+      - repo
+      - suite
+      - conventions
+      - profile
+    writes: [evidence]
+    action:
+      en: This op applies to a back end only; a front end has no tests. Bind the bounded slice and restate every selected assertion as the observable behavior a test
+        must exercise. Inspect the existing harness, its conventions and the adopted test patterns
+        before writing anything; reuse its fixtures and helpers. A behavior the design does not
+        state is a reported gap, not an invented expectation. Resolve the execution profile and
+        actual tool availability before selecting instruments; this does not switch the
+        model/runtime or spawn workers. The assertions name what the authored tests must exercise;
+        they are never re-worded here. New tests extend that harness; never stand up a second
+        parallel runner and never copy a neighboring test's assertions without the design behind
+        them. Authored tests conform to the declared patterns inside the suite's own harness; a
+        convention the suite and the adopted patterns disagree on is resolved toward the suite's
+        local convention and recorded in evidence, never silently.
+  - reads:
+      - architecture
+      - repo
+      - suite
+      - conventions
+    writes: [source]
+    action:
+      en: Author one test file set per covered assertion inside the declared test paths, following the
+        suite's naming and fixture conventions and the adopted test patterns - the positive path,
+        the declared denial and the invalid-input case the records state. Seed only preconditions
+        through the suite's own fixtures, and never pre-create the outcome under test. No product
+        file changes here.
+  - reads:
+      - repo
+      - suite
+    writes: [evidence]
+    action:
+      en: Prove the authored tests are real by running the runner's collection/listing - the tests are
+        discovered, parse and register under the real harness. A test that cannot be collected is
+        fixed inside the allowlist or reported; a green/red run of the authored tests is not this
+        op's verdict to report - verification belongs to the verify ops.
+  - reads:
+      - target
+      - repo
+    writes: [node, evidence]
+    action:
+      en: Review the diff and verify only test paths changed. Never commit - bind the authored tests to the
+        inspected working tree; the runtime commits a green settle as the workflow's checkpoint. Report done once with the authored inventory and collection proof -
+        never a product verdict.
+  - reads: [op-loop]
+    writes: [gate-proof]
+    action:
+      en: "FORCE THE CHECKS after coding: run starci gate run --root <app> --changed <the files the slice changed> [--tests <the slice spec pattern>] --out $STARCI_JOB_SCRATCH/gate.json. FIX what it reports and run it again, at most params.gateRounds rounds: exit 0 is green; exit 1 lists the new findings (lint per file and rule, tsc per message, failing specs - a finding the base already has never counts); exit 2 means a tool could not run and is never green. Still red after the last round: report blocked with the exact findings of that gate.json. Never report done while the gate is red or could not run. REPORT with gate.json and read-digest.json attached."
+      vi: "ÉP CHẠY KIỂM TRA sau khi viết code: chạy starci gate run --root <app> --changed <các tệp slice đã đổi> [--tests <mẫu spec của slice>] --out $STARCI_JOB_SCRATCH/gate.json. SỬA những gì nó báo rồi chạy lại, tối đa params.gateRounds vòng: exit 0 là xanh; exit 1 liệt kê lỗi mới (lint theo tệp và luật, tsc theo thông điệp, spec thất bại - lỗi đã có trên commit gốc không bao giờ bị tính); exit 2 là một công cụ không chạy được và không bao giờ là xanh. Hết vòng cuối mà vẫn đỏ: báo blocked kèm đúng các lỗi trong gate.json đó. Không bao giờ báo done khi cổng đỏ hoặc không chạy được. BÁO CÁO kèm gate.json và read-digest.json."
+  - reads: [conventions, suite, architecture]
+    writes: [source]
+    action:
+      en: "Each authored test sits in the layer its assertion needs, in that layer's form (knowledge/patterns/be/test.yaml, packages/jest-preset and packages/test-world READMEs): UNIT - a <name>.service.spec.ts beside the service, the subject built by Test.createTestingModule over exactly its constructor dependencies with the @starci/jest-preset kit doubles (mockEntityManager, fakeTransaction, fakeCache, fakeLock, recordingEventBus, recordingQueueOutbox, FakeClock, fakeIds, mock<T>()) and the Outcome matchers, every branch covered (the preset holds each service at 100); INTEGRATION - be/src/tests/integration/<feature>/<name>.integration-spec.ts with useTestWorld({ modules: [...] }); E2E - be/src/tests/e2e/<feature>/<name>.e2e-spec.ts with useTestWorld({ apps: [...] }) through the public API; CONTRACT - be/src/tests/contract/<provider>/<name>.contract-spec.ts with useSandbox. Our own stack runs real in the world layers and third-party SaaS is faked at the edge; failure paths go through world.infra.<svc>.cut()/restore() and world.fake.<name>.failNext. No new of the subject, no jest.mock, overrideProvider, Date.now(), process.env, docker, DataSource or sleep in any spec."
+      vi: "Mỗi test được viết nằm ở tầng mà khẳng định cần, theo dạng của tầng đó (knowledge/patterns/be/test.yaml, README của packages/jest-preset và packages/test-world): UNIT - một <name>.service.spec.ts cạnh service, đối tượng dựng bằng Test.createTestingModule trên đúng các phụ thuộc constructor với bộ đôi của @starci/jest-preset (mockEntityManager, fakeTransaction, fakeCache, fakeLock, recordingEventBus, recordingQueueOutbox, FakeClock, fakeIds, mock<T>()) và các matcher Outcome, phủ mọi nhánh (preset giữ mỗi service ở 100); INTEGRATION - be/src/tests/integration/<feature>/<name>.integration-spec.ts với useTestWorld({ modules: [...] }); E2E - be/src/tests/e2e/<feature>/<name>.e2e-spec.ts với useTestWorld({ apps: [...] }) qua API công khai; CONTRACT - be/src/tests/contract/<provider>/<name>.contract-spec.ts với useSandbox. Stack của chính ta chạy thật ở các tầng world và SaaS bên thứ ba được giả ở rìa; đường lỗi đi qua world.infra.<svc>.cut()/restore() và world.fake.<name>.failNext. Không new đối tượng, không jest.mock, overrideProvider, Date.now(), process.env, docker, DataSource hay sleep trong spec nào."
+proofs:
+  - id: binding
+    requirement:
+      en: Run the record-class validator `starci runtime validate` and, on every record directory it writes, `starci runtime validate --strict`; every cited ID/path exists or is explicitly
+        proposed, required assertions are covered, input bindings are current, and an honest
+        not-run/fail cannot earn done.
+  - id: proposal-binding
+    requirement:
+      en: When N does not yet exist in workspace-canonicalization, the evidence names the one scope record
+        id from packet context.records, the packet-bound workflow/goal identity and revision, the
+        passed immediate predecessor scope.define job, and the exact matching proposed target id. No
+        repository scan or alternative proposal can satisfy this proof, and the proposal remains
+        byte-unchanged for workspace.manage.
+  - id: authored-coverage
+    requirement:
+      en: Every selected assertion maps to at least one authored test file whose cases exercise the stated
+        behavior - the positive path, the declared denial and the invalid input where the records
+        declare them. An assertion with no authored test is reported, never quietly dropped.
+  - id: collected
+    requirement:
+      en: The real runner's collection/listing output shows every authored test discovered and registered
+        on the exact inspected tree; an uncollectable test is a defect of this op, not of the
+        product.
+  - id: test-paths-only
+    requirement:
+      en: The actual repository status against the tested tree shows only allowlisted test paths changed -
+        no product file, schema, configuration, expectation or runner manifest was touched.
+  - id: no-verdict
+    requirement:
+      en: The report claims authored and collected tests only. No product pass, fail or coverage verdict
+        is asserted; that judgement is the verify op's on a separate run.
+  - id: commit
+    requirement:
+      en: Never commit or stage. Inspect the exact working-tree diff and actual tests, report the changed paths and the
+        tested tree per repository, and separately retain integration/tested mappings; the runtime commits a green
+        settle as this op's checkpoint on wf-<workflowId>. Report no-change honestly.
+  - id: op-gate
+    requirement:
+      en: "starci kernel settle re-reads the attached gate.json (exit 0 over the slice's changed files) and read-digest.json (a pattern file named for every touched file kind) and records the runtime check op-gate; a done without them, with a tool that could not run or with a new finding is refused, and the Kernel re-runs the same gate on the branch at landing."
+      vi: "starci kernel settle tự đọc lại gate.json đính kèm (exit 0 trên các tệp slice đã đổi) và read-digest.json (có tệp pattern cho mọi loại tệp đã sửa) rồi ghi check op-gate; done thiếu chúng, có công cụ không chạy được hoặc có lỗi mới đều bị từ chối, và Kernel chạy lại đúng cổng đó trên nhánh khi land."
+judge:
+  - by: machine
+    measures: [declared-checks, work-hygiene, op-gate]
+    proofs: [op-gate]
+    why: "settle re-reads the gate over the authored files and the settler re-runs the validators; in the canonical-workspace chain code.refactor runs the pinned tests before and after its change"
+  - by: next-leg
+    leg: code.refactor
+    why: "in the canonical-workspace chain (scope.define, test.author, code.refactor, workspace.manage, review.verify) code.refactor runs the regression check these tests pin verbatim before and after its change"
+blockers:
+  - code: REQUIREMENT_UNSETTLED
+    condition:
+      en: The accepted SRS is silent or contradictory about an observable result, actor permission or
+        business effect a required test must assert - report blocked with blocker kind srs-gap and
+        the smallest affected semantic IDs; never invent the expectation.
+  - code: DESIGN_GAP
+    condition:
+      en: The accepted SDS is silent or contradictory about a logical authority boundary, public contract,
+        durable effect or recovery outcome a required test must assert - report blocked with blocker
+        kind sds-gap and the smallest affected semantic IDs; never invent that expectation. Test
+        names, fixture construction and other reversible suite-local mechanics are not spec gaps.
+  - code: OUTSIDE_TEST_ALLOWLIST
+    condition:
+      en: Authored tests cannot be collected without touching a product file, schema, configuration or
+        runner manifest outside the test paths - report the exact paths as blocker kind
+        shared-change; the allowlist is never widened here.
+  - code: RUNNER_UNAVAILABLE
+    condition:
+      en: The declared test runner or a required harness dependency cannot run in this environment and the
+        cause is provably unfixable from the allowlist - report blocked with blocker kind
+        environment naming the exact missing piece.
+  - code: AUTHORITY_REQUIRED
+    condition:
+      en: Authoring the required tests needs an authority the goal does not grant - report blocked with
+        blocker kind authority, an owner decision, never a silent widening.
+  - code: DECLARED_DEPENDENCY_UNMET
+    condition:
+      en: A declared prerequisite is not effectively done, or a required declared input/scope is missing.
+        For a proposal-authorized workspace-canonicalization leg this includes an absent explicit
+        context.records binding, a scope record not produced by the passed direct predecessor in the
+        packet-bound approved goal revision, or zero/multiple proposed entries matching N. Report
+        the exact ids; never search the repository for a substitute, run predecessors or weaken
+        dependsOn/refs/required to proceed.
+placeholders:
+  feature: Feature folder of the intake or migration, inside the operation allowlist
+  family: Flat family folder of the selected target record
+  name: Record folder inside its family
+  app: shared
+  bound-paths: shared
+  suite-paths: Existing test harness, fixture and helper paths
+  test-ceiling: Explicit owned test paths
+layoutPolicy:
+  checks: [starci-validate]
+policy:
+  # specsToggle: what this op does when the owner's config.yaml specs.<class> is false (scripts/route/spec-deferral.mjs):
+  # defer-leg = never dispatched, settled deferred; skip = runs without that class of test or coverage; not-counted = the gate does not demand it.
+  specsToggle: {unit: defer-leg, e2e: defer-leg}
+  proposalAuthority:
+    scope: workspace-canonicalization-only
+    permits: When the selected N/index.yaml does not exist yet, consume the exact proposed target entry
+      from the one scope record explicitly bound in packet context.records, but only when that
+      record is the passed scope.define output immediately preceding this test.author leg in the
+      packet-bound approved goal revision. The proposed id must equal the selected target id and
+      must carry the grounded test paths, assertions, dependencies and exclusions this operation
+      uses.
+    forbids:
+      - repository-wide discovery of a substitute scope record or proposed target
+      - choosing another nodes[] entry because it appears compatible
+      - materializing or editing the proposed Work node; workspace.manage owns later reconstruction
+      - treating an unbound, differently revised or non-predecessor scope proposal as authority
+  testPolicy:
+    writes: test-paths-only
+    judges: never
+    productCode: unchanged
+    verdict: verify-ops-own
+    collectionProof: runner-listing-required
+route:
+  nodeKinds: [implementation]
+  phase: [implement, implementation]
+  intent: [test, author, coverage]
+  prerequisites: [test-gap blocker or code under test]

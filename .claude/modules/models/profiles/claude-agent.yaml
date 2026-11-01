@@ -1,0 +1,40 @@
+# Profile: claude-agent — the Anthropic managed-agent pool.
+# Business frame: the thinking seat. First choice for every think kind and for
+# the [Kernel]; overflow for hands-on work.
+# Registry facts (provider, runtime, model pins, capacity, launch agent) live in
+# modules/models/registry.yaml — pools.claude-agent and targets.claude-agent. This
+# file carries only the behavioral position; every claim below traces to a cited
+# source; inferred analysis is marked.
+
+target: claude-agent            # registry.yaml: pools.claude-agent + targets.claude-agent
+schema: starci/module-model-profile@1  # module-local document kind; no upstream schema
+
+identity:
+  note: >-
+    Claude Opus 5.5 (`claude-opus-5-5`): 1M-token context, 128K output tokens,
+    adaptive thinking always on. The API's default effort is `medium`; StarCi
+    passes the effort its own routing decides (config.yaml `effort`/`kernel.effort`,
+    agents/claude.yaml effortArgs), so the API default applies only when no effort
+    is sent. The stable `claude-opus` alias names this exact model; an
+    unversioned host default is not proof of it — the dispatch's model
+    attestation is (modules/models/registry.yaml examplesNote, selection.yaml
+    pool-name-as-model).
+
+position: modules/models/tiers.yaml tiers, seats and difficulty; modules/models/runtimes.yaml roleOfKind; modules/models/registry.yaml pools
+
+business:
+  question: >-
+    "Which pool thinks?" — claude-agent leads the frontier tier (Opus 5.5) and the high tier (Sonnet 5.5).
+  whenNeeded:
+    - Strategy and hard work (runtimes.yaml roleOfKind work think; difficulty hard and insane) — the high tier (Sonnet 5.5, then Sol) and the frontier tier (Opus 5.5, then Sol) lead with it.
+    - The Supervisor, planner, validator and kernel manager seats (tiers.yaml seats: frontier, Opus 5.5 first).
+    - The [Kernel] seat (tiers.yaml seats.kernel: high, Sonnet 5.5 first, Sol behind it); config.yaml kernel.agent / kernel.model pin it as an `only` bias.
+  whenNot:
+    - "Host-tool routes: the agent card lists no host tool, so interface.audit (browser-dom) passes it (route.riskHints host-tool-required, modules/models/agents/claude.yaml capabilities.hostTools). The drawing ops (interface.draw, interface.asset, brand.decide) need no host tool: they take the tier of their difficulty (Sonnet 5.5 first in high) and get images from the headless `starci work imagegen` call; Claude is a member of the Critic tier (tiers.yaml seats.critic) and judges every drawing a provider other than Claude made."
+    - "Hands-on work as first pick: every hands-on order puts it last, keeping Opus for thinking."
+  pickedBy: >-
+    The kernel allocator via role preference + tier + qualification (selection.yaml);
+    humans only via the declared chains in registry.yaml operators.
+  failureModes:
+    - "Treating the alias `claude-opus` as proof of model: attestation must show claude-opus-5-5 (modules/models/registry.yaml)."
+    - Burning the strongest pool on easy fan-out — an availability/cost mistake, not an eligibility error.

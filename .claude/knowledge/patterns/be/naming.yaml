@@ -1,0 +1,294 @@
+schema: starci/knowledge-source@1
+id: be.naming
+title: Naming
+purpose: |-
+  Given a backend file, class, type, constant, method or GraphQL field, what is it called? Names carry the slot and the role,
+  so a reader and the slot check can tell where a unit belongs from its name alone.
+appliesTo:
+  - backend
+family: be
+provenance:
+  reviewedAt: 2026-09-30
+  sources:
+    - knowledge/hfs/slots.yaml
+    - knowledge/hfs/rules.yaml
+    - knowledge/hfs/README.md
+    - knowledge/patterns/be/folder.yaml
+    - owner-locked BE convention 2026-09-30
+  limitations: |-
+    A name does not prove responsibility. A file named `.service.ts` that holds a handler is a finding of design review even
+    when the suffix check passes.
+rules:
+  - id: BE-NAMING-1
+    title: Files are kebab-case with a role suffix from the closed list
+    kind: mandatory
+    hfsRules: [R01, R29, R89, R35]
+    requirement: |-
+      File basenames are kebab-case with a role suffix from this closed list; anything else is an R89 finding: `module`,
+      `module-definition`, `decorators`, `options`, `config`, `connection`, `service`, `command`, `query`, `handler`,
+      `contracts`, `port`, `resolver`, `controller`, `gateway`, `consumer`, `job`, `cli`, `input`, `type`, `args`, `request`,
+      `response`, `mapper`, `policy`, `entity`, `sql`, `rows`, `error`, `messages`, `log-events`, `cache-keys`, `guard`,
+      `interceptor`, `filter`, `client`, `spec`, `e2e-spec`, `global-setup`; plus the names outside the role vocabulary that
+      `ruleParams.be.suffixes` of slots.yaml records — the owner `index.ts` entries, the `be.app.*` root files and the
+      `be.persistence` migrations. These suffixes are banned: `use-case`, `repository`, `store`, `worker`, `scheduler`, `cron`, `listener`,
+      `dto`, `util`, `utils`, `helper`, `helpers`, `rules`, `types`, `constants`, `int-spec`, `harness-spec`, `test`. The slot
+      manifest lists which suffixes each slot allows.
+    rationale: |-
+      The slot check derives what a file is from where it sits and what it is called; an unlisted suffix is an undeclared file.
+    cases:
+      - id: case-1
+        when: Feature application
+        write: 'place-order.command.ts, place-order.query.ts, place-order.handler.ts, place-order.contracts.ts'
+      - id: case-2
+        when: Feature transport
+        write: 'place-order.resolver.ts, place-order.controller.ts, place-order.mapper.ts, dto/place-order.input.ts, dto/place-order.type.ts, dto/place-order.request.ts, dto/place-order.response.ts, checkout-graphql.module.ts, checkout-http.module.ts'
+      - id: case-3
+        when: Background transport
+        write: 'settle-payments.processor.ts in features/jobs/settle-payments, payment-settled.consumer.ts in transport/message, billing-message.module.ts'
+      - id: case-3b
+        when: Cli command
+        write: 'features/cli/db/db.cli.ts (the group), features/cli/db/subs/backup.cli.ts and backup.cli.spec.ts beside it; `.cli.ts` because `.command.ts` is the CQRS message (cli.yaml)'
+      - id: case-4
+        when: Capability
+        write: 'purchase.module.ts, purchase.module-definition.ts, purchase.config.ts, purchase.options.ts, purchase.decorators.ts, purchase.log-events.ts, purchase.service.ts, purchase.contracts.ts, credit-limit.policy.ts'
+      - id: case-5
+        when: Persistence
+        write: 'entities/purchase.entity.ts, migrations/1790000000000-create-purchases.ts, purchase.sql.ts, purchase.rows.ts, connection.ts'
+      - id: case-6
+        when: Errors
+        write: errors/purchase.error.ts holds the code enum, the kind table and the one error class.
+      - id: case-7
+        when: Spec
+        write: 'unit `commission.service.spec.ts` beside `commission.service.ts`; e2e `place-order.e2e-spec.ts` under be/src/tests/e2e/checkout/'
+      - id: case-8
+        when: App
+        write: 'main.ts, app.module.ts, api.env.ts, api.options.ts, compose/platform.ts'
+    verification:
+      automated:
+        - HFS_SLOT_UNDECLARED
+        - HFS_SLOT_AMBIGUOUS
+        - HFS_SLOT_NOT_ENABLED
+        - HFS_FORBIDDEN_PRESENT
+        - HFS_TRACKED_MUST_BE_IGNORED
+        - HFS_ROOT_ENTRY_FORBIDDEN
+        - HFS_ROOT_MARKDOWN_FORBIDDEN
+        - HFS_ROOT_SRC_FORBIDDEN_FE
+        - HFS_SRC_LAYOUT_INVALID
+        - HFS_MODULE_TIER_INVALID
+        - HFS_WORK_IN_FE
+        - HFS_STACKS_IN_SIDE
+        - BE_FEATURE_SHAPE
+        - BE_FEATURE_LAYOUT_INVALID
+        - BE_APPLICATION_IMPORTS_TRANSPORT
+        - BE_APPLICATION_TRANSPORT_FRAMEWORK
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+        - BE_SCHEMA_OWNER
+      manual: []
+    relatedExamples: []
+  - id: BE-NAMING-2
+    title: Classes are PascalCase subject plus role
+    kind: mandatory
+    hfsRules: [R29, R89]
+    requirement: |-
+      A class name is the PascalCase of the file name plus its role: `StartCheckoutCommand`, `StartCheckoutHandler`,
+      `StartCheckoutResolver`, `HealthController`, `PaymentCapturedConsumer`, `SettlePaymentsJob`, `PurchaseModule`,
+      `PurchaseService`, `PurchaseEntity`, `PurchaseError`, `PayosClient`, `AuthGuard`, `ErrorFilter`. There is no `I` prefix
+      except `ICQRSHandler`, kept for the reference's call sites. `Array<T>` is the array form; `interface` is for shapes and
+      `type` for unions.
+    rationale: |-
+      One vocabulary for roles keeps grep and DI error messages readable.
+    cases:
+      - id: case-1
+        when: Application and transport
+        write: StartCheckoutCommand, StartCheckoutHandler, StartCheckoutResolver
+      - id: case-2
+        when: Modules
+        write: PurchaseModule for a capability, CheckoutModule for the application module of a feature, CheckoutGraphqlModule per transport
+    verification:
+      automated:
+        - BE_FEATURE_SHAPE
+        - BE_FEATURE_LAYOUT_INVALID
+        - BE_APPLICATION_IMPORTS_TRANSPORT
+        - BE_APPLICATION_TRANSPORT_FRAMEWORK
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+      manual: []
+    relatedExamples: []
+  - id: BE-NAMING-3
+    title: Error identity
+    kind: mandatory
+    hfsRules: [R38]
+    requirement: |-
+      A capability has one error class `<Capability>Error extends DomainError<<Capability>ErrorCode>`, one enum
+      `<Capability>ErrorCode` whose values are `<CAPABILITY>_<WHAT>` and one table `<CAPABILITY>_ERROR_KINDS`. There is no
+      per-case error class and no `_EXCEPTION` or `_ERROR` suffix in a code. Member names are PascalCase, values UPPER_SNAKE and
+      unique repository-wide.
+    rationale: |-
+      A stable code, not a class name or a message, is what transports map and clients match on.
+    cases:
+      - id: case-1
+        when: Class and enum
+        write: PurchaseError and PurchaseErrorCode
+      - id: case-2
+        when: Code
+        write: '"PURCHASE_OFFER_NOT_FOUND", "PURCHASE_ALREADY_OWNED"'
+    verification:
+      automated:
+        - BE_ERROR_HOME
+      manual:
+        - Review capability vocabulary and message safety.
+    relatedExamples: []
+  - id: BE-NAMING-4
+    title: Enums
+    kind: mandatory
+    hfsRules: [R40, R89]
+    requirement: |-
+      Enums are PascalCase with PascalCase members and string values, and every member has a docblock. Log identities are
+      members of `<Owner>LogEvent` in `<owner>.log-events.ts`. Native database enum types are not used; an enum is stored as
+      `varchar` with a `CHECK`.
+    rationale: |-
+      String values are stable on the wire, and an enum member is a searchable identity.
+    cases:
+      - id: case-1
+        when: Declaration
+        write: |-
+          /** Locales a message can be shown in. */
+          export enum Locale {
+              /** Vietnamese. */
+              Vi = "vi",
+              /** English. */
+              En = "en",
+          }
+      - id: case-2
+        when: Log identity
+        write: 'PurchaseLogEvent.CheckoutFailed, never a string message'
+      - id: case-3
+        when: GraphQL registration
+        write: 'registerEnumType(Locale, { name: "Locale" }) in the transport that exposes it, not in the domain'
+    verification:
+      automated:
+        - BE_LOGGER_REQUIRED
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+      manual: []
+    relatedExamples: []
+  - id: BE-NAMING-5
+    title: Constants and injectors
+    kind: mandatory
+    hfsRules: [R44, R84, R85]
+    requirement: |-
+      Module-level constants are UPPER_SNAKE. Exported function values are camelCase arrows. Decorator factories keep PascalCase;
+      an injector is `Inject<Thing>` and its token a `unique symbol` constant in `<owner>.decorators.ts`. A connection name is
+      `export const <CONN>_CONNECTION = "<conn>"` in `platform/database/<conn>.connection.ts`, equal to a name in `hfs.json`
+      `sides.be.connections`; a capability's `persistence/connection.ts` declares no connection constant. SQL constants are UPPER_SNAKE in
+      `*.sql.ts`.
+    rationale: |-
+      Constants are visible at a glance and a connection name has exactly one definition.
+    cases:
+      - id: case-1
+        when: Module-level value
+        write: 'const HOLD_SECONDS_DEFAULT = 900, export const PRIMARY_CONNECTION = "primary"'
+      - id: case-2
+        when: Function value
+        write: 'export const orderTotal = (lines: ReadonlyArray<OrderLine>): number => ...'
+      - id: case-3
+        when: Decorator factory
+        write: 'export const Public = (options: { reason: PublicReason }) => SetMetadata(PUBLIC_KEY, options)'
+    verification:
+      automated:
+        - BE_SECRET_DEFAULT
+        - BE_CONNECTION_DUPLICATE
+        - BE_RAW_INJECT
+      manual: []
+    relatedExamples: []
+  - id: BE-NAMING-6
+    title: Methods
+    kind: mandatory
+    hfsRules: [R29, R46, R87]
+    requirement: |-
+      A handler implements `protected override async process(message)`. A capability service uses meaningful verbs
+      (`open`, `assertWithinCreditLimit`, `reserveStock`). A job exposes `run(at)`; a consumer one handling method; both
+      dispatch one command. A resolver or controller method is named after the operation and follows the schema or route
+      contract. A name never carries a version to hide an incompatible change and is never a bare verb export.
+    rationale: |-
+      The public method name tells a caller what the unit promises, and versioned names accumulate incompatible forks.
+    cases:
+      - id: case-1
+        when: A handler
+        write: 'protected override async process(command: StartCheckoutCommand): Promise<StartCheckoutResult>'
+      - id: case-2
+        when: A capability service
+        write: 'assertWithinCreditLimit, reserveStock, releaseReservation'
+      - id: case-3
+        when: A job
+        write: 'async run(at: Date): Promise<void> in SettlePaymentsJob, dispatching SettlePaymentsCommand'
+      - id: case-4
+        when: Not allowed
+        write: 'get, run2, placeOrderV2'
+    verification:
+      automated:
+        - BE_FEATURE_SHAPE
+        - BE_FEATURE_LAYOUT_INVALID
+        - BE_APPLICATION_IMPORTS_TRANSPORT
+        - BE_APPLICATION_TRANSPORT_FRAMEWORK
+        - BE_BACKGROUND_UNOWNED
+        - BE_CQRS_SHAPE
+        - BE_READONLY_BOUNDARY
+      manual: []
+    relatedExamples: []
+  - id: BE-NAMING-7
+    title: Type names
+    kind: mandatory
+    hfsRules: [R37, R89]
+    requirement: |-
+      Type names carry their layer: `<Action>Request` and `<Action>Result` for application contracts, `<Name>Options` for
+      configuration, `<Name>Params` for object parameters, `<Name>Row` for SQL rows, `<Action>Input`, `<Action>Type` and
+      `<Action>Args` for GraphQL DTOs, and `<Action>Request` and `<Action>Response` for HTTP DTOs. Only a handler's result is
+      `<Action>Result`. No contract name ends in `Entity`.
+    rationale: |-
+      A suffix tells which layer owns the type and keeps ORM entities out of contracts.
+    cases:
+      - id: case-1
+        when: Application contract
+        write: StartCheckoutRequest, StartCheckoutResult
+      - id: case-2
+        when: DTO
+        write: StartCheckoutInput and StartCheckoutType in transport/graphql/dto; PayosWebhookRequest in transport/http/dto
+      - id: case-3
+        when: Row
+        write: PurchaseRow with snake_case keys and toPurchase(row) in purchase.rows.ts
+    verification:
+      automated:
+        - BE_ENTITY_IN_CONTRACT
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+      manual: []
+    relatedExamples: []
+  - id: BE-NAMING-8
+    title: GraphQL surface
+    kind: mandatory
+    hfsRules: [R41, R42, R88]
+    requirement: |-
+      GraphQL field names are camelCase and equal the resolver method name. Each operation is one typed field; there is no
+      generic `execute` field that switches on an operation name. The argument holding the input object is named `input`. Every
+      operation requires the default guard or carries `@Public({ reason: PublicReason.X })`.
+    rationale: |-
+      A typed field per operation lets the contract, the guard and the input bounds be checked per operation.
+    cases:
+      - id: case-1
+        when: Field
+        write: '@Mutation(() => StartCheckoutType, { name: "startCheckout" })'
+      - id: case-2
+        when: Argument
+        write: '@Args("input") input: StartCheckoutInput'
+      - id: case-3
+        when: A public field
+        write: '@Public({ reason: PublicReason.AuthHandshake })'
+    verification:
+      automated:
+        - BE_DEFAULT_DENY
+        - BE_INPUT_BOUNDED
+        - BE_TRANSPORT_SHAPE
+      manual: []
+    relatedExamples: []

@@ -1,0 +1,516 @@
+schema: starci/op@1
+id: runtime.operate
+goal:
+  en: Deliver the requested runtime or service state with readiness, owned effects and real
+    postcondition proof.
+params:
+  mode:
+    type: enum
+    enum: [select, inspect, serve, service]
+    default: select
+    setBy: kernel
+    doc:
+      en: The execution mode this dispatch runs; starci kernel dispatch binds that mode's reads into the input
+        digests. select leaves the choice to the request.
+nodeKinds: [operations]
+completionProfile: operations
+sideEffects:
+  - Only the selected operation contract permits effects; no union of mode permissions.
+graphPolicy:
+  mode: read-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+reads:
+  - id: application-stacks
+    path: knowledge/application-stacks.yaml + docs/application-stacks.md +
+      docs/application-stacks.md + modules/schemas/application-stacks.schema.yaml
+    purpose:
+      en: When the selected scope touches application deployment, .starcistacks, bootstrap or recovery,
+        load the whole-application dev/VPS contract. Reconcile component ownership, encrypted
+        credential custody, lifecycle commands and existing consumers. Run the `starci-stacks-check`
+        when validating a materialized stack; bind its exact inputs and limitations. Acceptance
+        additionally requires the selected real startup, persistence, recovery and application
+        checks. This conditional read grants no extra deployment or source scope.
+  - id: target
+    path: N/index.yaml
+    purpose:
+      en: Read current target, ancestor scope, refs, dependencies, assertions and validator freshness.
+        Preserve unaffected accepted content.
+  - id: selection
+    path: shared
+    purpose:
+      en: shared
+  - id: profile
+    path: shared
+    purpose:
+      en: shared
+  - id: worktree-api
+    path: shared
+    purpose:
+      en: shared
+      vi: "API worktree và bộ khởi chạy agent của runtime: scripts/machine/worktrees.mjs (createWorktree với dòng registry trong machine.sqlite và giới hạn theo repo từ modules/kernel/product-land.yaml, worktreeList, worktreeCounts, removeWorktree, gcWorktrees), scripts/machine/worktree-git.mjs (safeRemoveWorktree: gỡ mọi liên kết như liên kết trước, rồi tới cây) và các lệnh worker điều phối của Orca (worker-start, worker-show, worker-read, worker-stop, worker-release)."
+writes:
+  - id: node
+    path: shared
+    content:
+      en: shared
+  - id: evidence
+    path: shared
+    content:
+      en: shared
+steps:
+  - reads:
+      - application-stacks
+      - target
+      - selection
+      - profile
+    writes: []
+    action:
+      en: "Resolve the exact named operation and load only its contract. Its reads/writes, effect ceiling
+        and completion profile replace this selector envelope, except the worktree and agent-launch step
+        below, which every mode keeps; the union of modes never grants
+        authority. Resolve the execution profile and actual tool availability before selecting
+        instruments; this does not switch the model/runtime or spawn workers. For an explicitly new
+        target, absence is expected: inspect the nearest existing ancestor/workspace, then create
+        only that selected scope."
+  - reads:
+      - target
+      - selection
+    writes: [node, evidence]
+    action:
+      en: Execute the selected mode procedure through its actual postconditions. Return operation, scope,
+        per-criterion results and real output refs; no other mode, source repair or successor is
+        implied. This handoff is conditional and does not change standalone or named frontend
+        response contracts.
+  - reads: [worktree-api, selection]
+    writes: [evidence]
+    action:
+      en: "Every worktree action goes through the runtime's worktree API, whatever the mode. A product workflow has exactly one worktree, which Orca creates before the Kernel starts (Orca's worktree create call, a real npm ci, no junctions; the Kernel then starts with worker-start --worktree <that path>) and the runtime's host-side controller removes once the workflow's finish marked it release-pending and its terminals are released (the link check, Orca's worktree removal, then git branch -d); its ops run in it and never get a worktree of their own. The op never makes a tree itself - a tree it needs is reported, and the runtime makes it through createWorktree (its registry row and the per-repo cap; a worktree-cap refusal waits, it is never worked around) - the inventory through worktreeList and worktreeCounts, a retirement through removeWorktree (uncommitted work preserved to refs/heads/preserved/<name>, every junction or symlink removed as a link, then the tree, pruned and verified) or the GC (starci machine worktrees gc --plan first), and a registered git worktree the registry does not know through safeRemoveWorktree. Never git worktree add or remove by hand, never rm -rf, rmdir /s or robocopy over a tree, never a junction or symlink made by hand, and never kill a process by image name - only a PID this op started. An agent this op needs is launched only through orca orchestration worker-start --agent <provider> [--model <id>] --worktree <selector> --spec <brief> --task-title <title>, and supervised through worker-show, worker-read, worker-stop and worker-release; never a raw terminal running an agent CLI or a headless -p run. A provider that is not an enabled Orca agent id on this host is reported, never replaced by a raw terminal."
+      vi: "Mọi thao tác với worktree đều đi qua API worktree của runtime, ở mọi chế độ. Một workflow sản phẩm có đúng một worktree, do Orca tạo trước khi Kernel khởi động (lệnh tạo worktree của Orca, npm ci thật, không junction; Kernel rồi khởi động bằng worker-start --worktree <đường dẫn đó>) và bộ điều khiển phía host của runtime gỡ nó sau khi bước kết thúc workflow đánh dấu release-pending và các terminal đã được giải phóng (kiểm tra liên kết, lệnh gỡ worktree của Orca, rồi git branch -d); các op chạy trong đó và không bao giờ có worktree riêng. Op không bao giờ tự tạo cây - cây cần thiết được báo, và runtime tạo nó qua createWorktree (dòng registry và giới hạn theo repo; lời từ chối worktree-cap thì chờ, không bao giờ lách) - danh sách qua worktreeList và worktreeCounts, gỡ bỏ qua removeWorktree (việc chưa commit được giữ vào refs/heads/preserved/<name>, mọi junction hay symlink được gỡ như liên kết, rồi tới cây, prune và xác minh) hoặc GC (starci machine worktrees gc --plan trước), và git worktree đã đăng ký mà registry không biết thì qua safeRemoveWorktree. Không bao giờ tự tay git worktree add hay remove, không bao giờ rm -rf, rmdir /s hay robocopy trên một cây, không tự tạo junction hay symlink, và không bao giờ kill tiến trình theo tên image - chỉ PID do op này khởi chạy. Agent mà op cần chỉ được khởi chạy qua orca orchestration worker-start --agent <provider> [--model <id>] --worktree <selector> --spec <brief> --task-title <title>, và được giám sát qua worker-show, worker-read, worker-stop và worker-release; không bao giờ là terminal thô chạy CLI agent hay một lần chạy headless -p. Provider không phải agent id Orca đang bật trên máy này thì được báo, không bao giờ thay bằng terminal thô."
+proofs:
+  - id: mode-result
+    requirement:
+      en: Exactly the selected mode contract and all requested criteria pass with real evidence before
+        delivery.
+  - id: worktree-api
+    requirement:
+      en: "The evidence names the worktree API call behind every worktree the op inspected or retired (the registry row or the removeWorktree result) and the worker-start id behind every agent it launched; a raw git worktree, a recursive delete or a raw agent terminal makes the run a defect."
+      vi: "Bằng chứng nêu lệnh API worktree đứng sau mọi worktree op đã xem hoặc gỡ (dòng registry hoặc kết quả removeWorktree) và id worker-start đứng sau mọi agent op đã khởi chạy; git worktree thô, xóa đệ quy hoặc terminal agent thô khiến lần chạy thành lỗi."
+    check: scripts/machine/worktrees.mjs
+judge:
+  - by: machine
+    measures: [declared-checks, contract-script]
+    proofs: [worktree-api]
+    why: "the settler re-runs the checks it can run itself and the worktree-api check refuses a run that touched a worktree or an agent outside the runtime API"
+blockers:
+  - code: OPERATION_REQUIRED
+    condition:
+      en: Missing, unknown or multiple operations; select a single mode under existing task authority.
+placeholders:
+  app: shared
+  bound-paths: shared
+  environment: shared
+  resource: shared
+layoutPolicy:
+  checks: [starci-validate, starci-stacks-check]
+policy:
+  modePolicy:
+    selection: required-exactly-one
+    implicitChain: false
+    permissionUnion: false
+    completion: selected-mode-profile
+  executionModes:
+    inspect:
+      id: runtime.operate
+      goal:
+        en: Collect readiness and blockers for exactly the selected development/test effects, repairing
+          nothing.
+      nodeKinds: [operations]
+      completionProfile: operations
+      sideEffects:
+        - read-only probes; no infrastructure/account changes
+      graphPolicy:
+        mode: read-only
+        location: .starciwork node dependsOn/refs with direct sourceRefs and collocated assets
+        prerequisiteState: done
+        dispatch: never
+      reads:
+        - id: application-stacks
+          path: knowledge/application-stacks.yaml + docs/application-stacks.md +
+            docs/application-stacks.md + modules/schemas/application-stacks.schema.yaml
+          purpose:
+            en: Reconcile component ownership, encrypted credential custody, lifecycle commands and existing
+              consumers. This conditional read grants no extra deployment or source scope.
+        - id: target
+          path: N/index.yaml
+          purpose:
+            en: "Read the existing selected N/index.yaml, ancestor scope, declared refs/dependencies/assertions
+              and validator freshness. This consumer op requires its target node to exist. An absent
+              target is a scope/graph gap: report it and propose a separately selected scope op; do
+              not create a target or invent its acceptance/graph here."
+        - id: repo
+          path: <app>/<bound-paths>
+          purpose:
+            en: When source exists/is selected, resolve repository resource, actual checkout/root/HEAD and dirty
+              state; read applicable instructions, manifests, owning code, callers and relevant
+              tests. Greenfield/spec-only work records source not-yet-created and grounds intent in
+              the user request; no invented repository or fact citation. Source implementation still
+              needs an actual selected writable repository.
+        - id: environment
+          path: .starciwork/_resources/environments/<environment>/resource.yaml
+          purpose:
+            en: Read exact target/origins, owner, configuration revision, declared probes and allowed effects;
+              validate live observations without inferring identity from hostname alone.
+        - id: capabilities
+          path: available tools/runtime + selected identity/fixture/service declarations
+          purpose:
+            en: Inspect actual browser/Playwright availability when needed, declared commands, custody handles
+              by name and target service probes. Do not open unrelated secrets.
+      writes:
+        - id: node
+          path: N/index.yaml
+          fields: [state, blocker, completion.inputDigest, completion.evidence]
+          content:
+            en: Read the existing selected scope, expected assertions and .starciwork graph unchanged. Write
+              only state/blocker/completion here; actual observations, findings, commit mappings and
+              remaining cleanup belong to the evidence result, not semantic node prose. Missing
+              refs/dependencies/acceptance require a reported gap or separately selected scope
+              update; never add/remove them to obtain pass.
+        - id: evidence
+          path: evidence/manifest.yaml
+          fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+          content:
+            en: "Collect all safely inspectable checks, with observed timestamp and source/config/environment
+              revision; dependent checks unavailable due to earlier blocker remain not-run.
+              Operator-specific observed result in evidence/result.md: One row per scoped prerequisite:
+              needed capability, declaration, actual observation, ready/blocked/not-needed, owner
+              and exact remedy. Readiness is time-bound evidence, not lasting global green."
+        - id: evidence-readiness
+          path: evidence/readiness.json
+          content:
+            en: Retain only the selected inspect readiness.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-result
+          path: evidence/result.md
+          content:
+            en: Retain only the selected inspect result.md at this exact destination; its scope and provenance remain those of evidence.
+      steps:
+        - reads:
+            - application-stacks
+            - target
+            - repo
+            - environment
+            - capabilities
+          writes: [node]
+          action:
+            en: Derive prerequisite list from the selected op/effect set, not the whole development cycle.
+              Inspect target identity and read permissions first.
+        - reads:
+            - repo
+            - capabilities
+          writes: [evidence, evidence-readiness, evidence-result]
+          action:
+            en: Inspect actual checkout, dependencies and command/browser capability without installing or
+              repairing. Report unrelated dirt without deleting it.
+        - reads:
+            - environment
+            - capabilities
+          writes: [evidence, evidence-readiness, evidence-result]
+          action:
+            en: Probe declared endpoints/build identity, credential custody availability by name, fixture
+              ownership and permitted effect scope. Sign-in mutation is not assumed if task only
+              authorizes passive diagnostics.
+        - reads:
+            - target
+            - repo
+            - environment
+            - capabilities
+          writes: [node, evidence, evidence-readiness, evidence-result]
+          action:
+            en: Record the complete blocker set and skipped dependent checks without stopping at the first
+              issue. Validate and finish read-only; no automatic runtime/account/fixture op.
+      proofs:
+        - id: binding
+          requirement:
+            en: Run the record-class validator `starci runtime validate` and, on every record directory it writes, `starci runtime validate --strict`; every cited ID/path exists or is explicitly
+              proposed, required assertions are covered, input bindings are current, and an honest
+              not-run/fail cannot earn done.
+        - id: readiness
+          requirement:
+            en: Every needed prerequisite has a recent actual observation; absent capability stays
+              blocked/not-run, not guessed ready.
+      blockers:
+        - code: ENVIRONMENT_NOT_READY
+          condition:
+            en: A required scoped capability or target cannot be verified.
+        - code: DECLARED_DEPENDENCY_UNMET
+          condition:
+            en: A declared prerequisite is not effectively done, or a required declared input/scope is missing.
+              Report node/resource IDs and propose a separately selected graph update when needed;
+              never run predecessors or weaken dependsOn/refs/required to proceed.
+      placeholders:
+        app: The bound app checkout (its root); every path written <app>/<path> is app-relative - be/..., fe/..., .starciwork/... or a path of the app root
+        bound-paths: Inspected source read set
+        environment: Resolved environment resource slug
+        resource: Selected owned resource slug
+    serve:
+      id: runtime.operate
+      goal:
+        en: Bring one selected development runtime to the authorized state and prove the actual served
+          build.
+      nodeKinds: [operations]
+      completionProfile: operations
+      sideEffects: [only authorized start/stop/restart/build or integration action on owned runtime]
+      graphPolicy:
+        mode: read-only
+        location: .starciwork node dependsOn/refs with direct sourceRefs and collocated assets
+        prerequisiteState: done
+        dispatch: never
+      reads:
+        - id: application-stacks
+          path: knowledge/application-stacks.yaml + docs/application-stacks.md +
+            docs/application-stacks.md + modules/schemas/application-stacks.schema.yaml
+          purpose:
+            en: Reconcile component ownership, encrypted credential custody, lifecycle commands and existing
+              consumers. This conditional read grants no extra deployment or source scope.
+        - id: target
+          path: N/index.yaml
+          purpose:
+            en: This consumer op requires its target node to exist.
+        - id: repo
+          path: <app>/<bound-paths>
+          purpose:
+            en: Source implementation still needs an actual selected writable repository.
+        - id: runtime
+          path: .starciwork/_resources/runtimes/<resource>/resource.yaml + selected source command/config
+          purpose:
+            en: Read exact runtime owner, command, checkout/build, endpoints, process/container identity,
+              declared desired action and health/version probes. Integration merge is not implied by
+              serving.
+      writes:
+        - id: node
+          path: N/index.yaml
+          fields: [state, blocker, completion.inputDigest, completion.evidence]
+          content:
+            en: Read the existing selected scope, expected assertions and .starciwork graph unchanged.
+        - id: resource
+          path: .starciwork/_resources/runtimes/<resource>/resource.yaml
+          fields:
+            - schema
+            - id
+            - kind
+            - owner
+            - revision
+            - details.environment
+            - details.commandRef
+            - details.sourceRef
+            - details.endpoints
+            - details.probeRefs
+            - details.custodyRefs
+            - details.observationRef
+          content:
+            en: Update only declared owned runtime refs and observed-state pointer on the work/resource@1
+              record. Record local PID/session handles in ignored local state or bounded evidence,
+              not durable identity.
+        - id: evidence
+          path: evidence/manifest.yaml
+          fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+          content:
+            en: "Record before/after generation, target/process ownership, actual build command and summary; attach raw build output from STARCI_JOB_SCRATCH at starci kernel report. Record full
+              source refs, immutable served artifact, endpoint probes and effect status.
+              Operator-specific observed result in evidence/result.md: Keep code/build/served identity
+              distinct and no UAT/release readiness claim from a healthy process."
+        - id: evidence-runtime
+          path: evidence/runtime.json
+          content:
+            en: Retain only the selected serve runtime.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-probes
+          path: evidence/probes.json
+          content:
+            en: Retain only the selected serve probes.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-effects
+          path: evidence/effects.json
+          content:
+            en: Retain only the selected serve effects.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-result
+          path: evidence/result.md
+          content:
+            en: Retain only the selected serve result.md at this exact destination; its scope and provenance remain those of evidence.
+      steps:
+        - reads:
+            - application-stacks
+            - target
+            - runtime
+            - repo
+          writes: [evidence, evidence-runtime, evidence-probes, evidence-effects, evidence-result]
+          action:
+            en: Inspect current process/container holder, source/build revision, ports and health. Reuse an
+              already matching healthy runtime without restart. Preflight the exact selected target,
+              capabilities, configuration/custody and permitted effects inside this job. Check
+              declared API/health postconditions on the resulting target; account or fixture setup
+              for UAT remains owned by UAT. Do not modify product source or run implementation
+              lint/Sonar.
+        - reads:
+            - runtime
+            - target
+          writes: []
+          action:
+            en: Check selected desired action and allowed effects. A foreign process/port is not permission to
+              kill it or silently choose another port/origin.
+        - reads:
+            - runtime
+            - repo
+          writes: [resource, evidence, evidence-runtime, evidence-probes, evidence-effects, evidence-result]
+          action:
+            en: Perform only the exact authorized runtime change and bounded recovery. If integration is
+              explicitly included, inspect ownership and conflict scope, preserve actual resulting
+              commit and rerun affected gates; otherwise do not merge.
+        - reads:
+            - runtime
+            - repo
+          writes: [evidence, evidence-runtime, evidence-probes, evidence-effects, evidence-result]
+          action:
+            en: Probe actual served source/build identity, endpoints and stability using declared checks. A
+              started PID or build success alone does not prove the target is serving the selected
+              code.
+        - reads:
+            - target
+            - runtime
+          writes: [node, resource, evidence, evidence-runtime, evidence-probes, evidence-effects, evidence-result]
+          action:
+            en: Record actual state, partial effects and source-versus-served mapping, then stop. No
+              account/fixture/deploy action is automatically performed.
+      proofs:
+        - id: runtime
+          requirement:
+            en: Declared health and served-version evidence are observed on the actual target with correct owned
+              generation.
+      blockers:
+        - code: RUNTIME_OWNER_CONFLICT
+          condition:
+            en: Target/process/port is foreign, ambiguous or changed concurrently.
+        - code: RUNTIME_EFFECT_UNAUTHORIZED
+          condition:
+            en: Required start/reset/merge/configuration change exceeds selected action.
+      placeholders:
+        app: The bound app checkout (its root); every path written <app>/<path> is app-relative - be/..., fe/..., .starciwork/... or a path of the app root
+        bound-paths: Inspected source read set
+        environment: Resolved environment resource slug
+        resource: Selected owned resource slug
+    service:
+      id: runtime.operate
+      goal:
+        en: Inspect or change one declared auxiliary service and verify its requested state.
+      nodeKinds: [operations]
+      completionProfile: operations
+      sideEffects: [explicit owned auxiliary-service lifecycle action only]
+      graphPolicy:
+        mode: read-only
+        location: .starciwork node dependsOn/refs with direct sourceRefs and collocated assets
+        prerequisiteState: done
+        dispatch: never
+      reads:
+        - id: application-stacks
+          path: knowledge/application-stacks.yaml + docs/application-stacks.md +
+            docs/application-stacks.md + modules/schemas/application-stacks.schema.yaml
+          purpose:
+            en: Reconcile component ownership, encrypted credential custody, lifecycle commands and existing
+              consumers. This conditional read grants no extra deployment or source scope.
+        - id: target
+          path: N/index.yaml
+          purpose:
+            en: This consumer op requires its target node to exist.
+        - id: service
+          path: .starciwork/_resources/services/<resource>/resource.yaml
+          purpose:
+            en: Read exact declared service, owner, desired state, command/config refs, target identity, probes
+              and allowed recovery; never infer service ownership from a listening port.
+      writes:
+        - id: node
+          path: N/index.yaml
+          fields: [state, blocker, completion.inputDigest, completion.evidence]
+          content:
+            en: Read the existing selected scope, expected assertions and .starciwork graph unchanged.
+        - id: resource
+          path: .starciwork/_resources/services/<resource>/resource.yaml
+          fields:
+            - schema
+            - id
+            - kind
+            - owner
+            - revision
+            - details.environment
+            - details.commandRef
+            - details.probeRefs
+            - details.observationRef
+          content:
+            en: Update only service-owned observation/declaration fields on the work/resource@1 record included
+              in scope; do not grant new authority by editing allowed effects.
+        - id: evidence
+          path: evidence/manifest.yaml
+          fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+          content:
+            en: "Retain actual holder and before/after health/stop evidence with selected command outcome and
+              bounded recovery. Operator-specific observed result in evidence/result.md: Record one service
+              outcome and partial effects; no product runtime or quality acceptance inferred."
+        - id: evidence-service-probes
+          path: evidence/service-probes.json
+          content:
+            en: Retain only the selected service service-probes.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-effects
+          path: evidence/effects.json
+          content:
+            en: Retain only the selected service effects.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-result
+          path: evidence/result.md
+          content:
+            en: Retain only the selected service result.md at this exact destination; its scope and provenance remain those of evidence.
+      steps:
+        - reads:
+            - application-stacks
+            - service
+            - target
+          writes: [evidence, evidence-service-probes, evidence-effects, evidence-result]
+          action:
+            en: Inspect target ownership, process/container identity and probe before action; reuse already
+              matching state without restart. Do not modify product source or run implementation
+              lint/Sonar.
+        - reads:
+            - service
+          writes: []
+          action:
+            en: Confirm selected inspect/up/down/restart action and authority. Do not touch product runtime
+              servers, foreign holders or unlisted dependencies.
+        - reads:
+            - service
+          writes: [resource, evidence, evidence-service-probes, evidence-effects, evidence-result]
+          action:
+            en: Run only the declared authorized command if needed, preserve uncertain effects and avoid blind
+              retries; no port stealing or undeclared install.
+        - reads:
+            - service
+            - target
+          writes: [node, resource, evidence, evidence-service-probes, evidence-effects, evidence-result]
+          action:
+            en: Verify requested state using actual service probe and holder identity, report limits and stop
+              without gates or product operations.
+      proofs:
+        - id: service
+          requirement:
+            en: Up is supported by the declared useful health probe; down is supported by owned
+              process/container and endpoint observations, not an ungrounded absence.
+      blockers:
+        - code: SERVICE_OWNERSHIP_UNKNOWN
+          condition:
+            en: Service target or effect is outside verified ownership/scope.
+      placeholders:
+        app: The bound app checkout (its root); every path written <app>/<path> is app-relative - be/..., fe/..., .starciwork/... or a path of the app root
+        bound-paths: Inspected source read set
+        environment: Resolved environment resource slug
+        resource: Selected owned resource slug
+route:
+  nodeKinds: [operations]
+  phase: [operate, cross-cutting]
+  intent: [runtime, serve, inspect, environment, service]
+  prerequisites: [a declared stack/environment]
+  riskHints: [runtime-effects]

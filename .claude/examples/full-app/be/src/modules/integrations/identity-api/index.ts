@@ -1,0 +1,8 @@
+export { IDENTITY_API_ERROR_KINDS, IdentityApiErrorCode } from "./errors/identity-api.error"
+export { parseIdentityApiConfig } from "./identity-api.config"
+export { IDENTITY_API } from "./identity-api.decorators"
+export type { IdentityApiClient } from "./identity-api.client"
+export { IdentityApiModule } from "./identity-api.module"
+export type { IdentityApiOptions } from "./identity-api.options"
+export { IDENTITY_API_MESSAGES } from "./messages/identity-api.messages"
+export { IDENTITY_API_DOCUMENTS } from "./identity-api.contracts"

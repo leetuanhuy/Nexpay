@@ -1,0 +1,692 @@
+schema: starci/op@1
+id: interface.implement
+goal:
+  en: Implement one selected frontend creation, refinement or defect repair by reconciling the full
+    draws image array, business intent, architecture and current source, then verify the actual
+    rendered result.
+params:
+  gateRounds:
+    type: integer
+    default: 5
+    min: 1
+    max: 10
+    setBy: owner
+    doc:
+      en: "Rounds of FIX then gate.mjs the op loop runs before it stops: a gate still red after the last round is reported blocked with the exact findings of that round (knowledge/op-gate.yaml)."
+      vi: "Số vòng SỬA rồi chạy lại gate.mjs của vòng lặp op trước khi dừng: hết vòng cuối mà cổng vẫn đỏ thì báo blocked kèm đúng các lỗi của vòng đó (knowledge/op-gate.yaml)."
+nodeKinds: [implementation]
+completionProfile: implementation
+grammarContext: required
+sideEffects:
+  - owned source edits
+  - no commits of its own - the runtime commits a green settle as the workflow's checkpoint
+  - authorized local preview/test actions
+  - reuse or create selected visual assets inside the owned frontend asset paths using available
+    authorized tools
+graphPolicy:
+  mode: read-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+reads:
+  - id: application-stacks
+    path: shared
+    purpose:
+      en: shared
+  - id: target
+    path: .starciwork/features/<feature>/impl/<repository>/<name>/index.yaml
+    purpose:
+      en: "Read the existing selected impl record, feature scope, declared refs/dependencies/proof demands
+        and validator freshness. This consumer op requires its target record to exist. An absent
+        target is a scope/graph gap: report it and propose a separately selected scope op; do not
+        create a target or invent its acceptance/graph here. Current reviewed todo spec inputs are
+        semantic refs; the settled-pass decide jobs are the execution prerequisites. Do not require
+        those specification refs to be record state done before implementation."
+  - id: business
+    path: shared
+    purpose:
+      en: shared
+  - id: architecture
+    path: .starciwork/features/<feature>/{sds,contract,integration}/**/index.yaml
+    purpose:
+      en: Read data ownership, operations/API/events, boundaries, code-scope and rationale declared by the
+        selected .starciwork graph; distinguish proposed paths from observed files. No universal
+        architecture-first op chain is implied; report genuinely missing required scope before
+        proceeding.
+  - id: repo
+    path: <app>/<bound-paths>
+    purpose:
+      en: shared
+  - id: knowledge
+    path: knowledge/index.yaml + applicable FE, UI composition/presentation/proof and selected family
+      topics
+    purpose:
+      en: Read applicable English knowledge topics and record actual rule IDs/cases and their scope.
+        Verify family-specific rules against installed components and repository policy.
+  - id: finding
+    path: selected defect evidence manifest + actual assets when repair is selected
+    purpose:
+      en: For repairs, inspect the original failing assertion and source/runtime revision; reproduce or
+        corroborate it on the current source before changing code. For new implementation record not
+        applicable without inventing a defect.
+  - id: draws
+    path: selected UI node index.yaml + its owned assets/*
+    designDrawn: true
+    purpose:
+      en: "Resolve each supplied image from its attachment, local asset or existing design resource
+        without requiring the user to author metadata. Open and visually inspect every image. The
+        selected array is not an alternatives vote: unclear alternatives, approval or contradictory
+        images require a scoped decision. For a composited direction the build reference is the composite
+        (role direction, <state>--<presentation>--<bp>--<theme>.png - the part placed into the real layout
+        chain), at desktop and mobile light; its part (role direction-content) is what the owner accepted.
+        THE ACCEPTED DRAW SOURCE IS THE BASE (owner ruling 2026-09-27): a part drawn with the real grammar
+        components carries its render source <part>.draw.tsx (role render-source) and fixture <part>.fixture.json
+        (role render-fixture) - the XBase the owner accepted, already type-checked against the grammar and
+        rendered in the product's CSS. Implement the shape's XBase (component.tsx) FROM that file: keep its
+        grammar components, props, variants and layout, move its copy into the i18n catalogs and wire the
+        connected X (index.tsx) and its slots. When the part's draw-render record names
+        source.grammar.upgradeOwed (grammarSource claude-dist@<v>), the drawing needs a newer
+        @starci/grammar than the product installs: this op owns bumping the product's dependency to at least
+        that version (within its declared range when inRange) before building the XBase."
+  - id: design
+    path: selected UI node index.yaml + its owned assets/*
+    purpose:
+      en: Read the accepted surface/direction/state and region-to-component map from interface.draw when
+        present. Re-resolve component packages from the actual consuming app, not an assumed
+        monorepo-root copy, and check exports/props/renderers/CSS plus the active family root and
+        effective token bindings against applicable knowledge. Report missing mapping, drift or a
+        material image/package conflict before copying it. Read the accepted region-level
+        realization map and preserve each `raster-asset` versus `code-native` decision; do not
+        override or rebuild Grammar to make an accepted generated approximation appear exact.
+  - id: shell
+    path: .starciwork/shell/index.yaml
+    purpose:
+      en: "The product's layout tree (work/layout-tree@1): the frontend's app/ directory as nodes - layouts
+        with the chrome component each renders and their navigation (keys, routes, message keys, labels per
+        locale), route groups, @slots, (.)intercepts, loading/error/not-found files - plus productLocale and
+        the demo personas. The tree holds one entry per app the frontend declares (`apps[]`); every accepted ui record's `app`,
+        `route`, `surface` and `routed` say which app's app/ files this build creates (`app` is the app the record names, or the one app of a single-app tree)."
+  - id: environment
+    path: .starciwork/_resources/environments/<environment>/resource.yaml
+    purpose:
+      en: shared
+  - id: workflow
+    path: shared
+    purpose:
+      en: shared
+  - id: profile
+    path: shared
+    purpose:
+      en: shared
+  - id: assetSources
+    path: all input draws + selected repository assets/design system + authorized source assets
+    purpose:
+      en: Inspect every image for icons, logos, photos, illustrations, textures and backgrounds. Find
+        actual reusable source assets first; verify fidelity, ownership, permitted use, variants and
+        source path. A screenshot is a design reference, not automatically a reusable production
+        asset. Do not fabricate asset URLs or silently omit artwork.
+  - id: op-loop
+    path: shared
+    purpose:
+      en: shared
+      vi: "Dữ liệu của vòng lặp op: bảng loại tệp sang tệp pattern, app ví dụ cho từng phía, và schema của cổng và bản tóm tắt đọc mà read-digest.mjs và gate.mjs dùng."
+writes:
+  - id: node
+    path: .starciwork/features/<feature>/impl/<repository>/<name>/index.yaml
+    fields:
+      - schema
+      - id
+      - title
+      - state
+      - repository
+      - owners
+      - revision
+      - proves
+      - verification
+      - verificationSource
+      - evidence
+      - blockedBy
+    content:
+      en: Read the existing selected scope, expected proof demands and .starciwork graph unchanged. Write
+        the work/implementation@1 record with its real owners, revision, proves and
+        verification/evidence here; actual observations, findings, commit mappings and remaining
+        cleanup belong to the evidence result, not record prose. Missing
+        refs/dependencies/acceptance require a reported gap or separately selected scope update;
+        never add/remove them to obtain pass.
+  - id: source
+    path: <app>/<write-ceiling>
+    content:
+      en: shared
+  - id: runningPage
+    path: <STARCI_JOB_SCRATCH>/captures/<name>.png
+    content:
+      en: The inspected screenshot of the implemented surface as actually served - agent data, kept in
+        scratch (never under the impl node's assets/) and filed by starci kernel report (captures/ is attached by
+        itself). The impl record's assets[] cites each {artifact, name, role, sha256} from the artifacts
+        starci kernel report returns.
+  - id: runningMarkup
+    path: <STARCI_JOB_SCRATCH>/captures/<name>.html
+    content:
+      en: The markup rendered by that same inspected surface - agent data, kept in scratch (never under
+        the impl node's assets/) and filed by starci kernel report with captures/.
+  - id: evidence
+    path: evidence/**
+    fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+    artifacts: [result.md, screens/**/*.png, runtime.json, measurements.json]
+    content:
+      en: "Retain one draws-review entry per input image with its stable reference, observed
+        screen/state/viewport, inspection result, linked implementation/captures and unresolved
+        gaps; account for every array entry, including explicit non-applicable references with
+        reasons. Retain an input map linking all accepted draws and their regions, business ACs,
+        architecture/API/state contracts and actual source paths; record the applicable knowledge
+        rule IDs/cases, per-rule observations, unresolved conflicts and visual deviations. For
+        repairs retain the original failure, cause, smallest owned repair and before/after
+        regression against unchanged expectations. Retain real test output and screenshot from the
+        implemented surface, actually opened/inspected. Include viewport/theme, observed
+        route/state, driver, served build and limitations; no fixture screenshot labelled product
+        proof. Operator-specific observed result in evidence/result.md: Map delivered
+        components/routes/client calls to ACs and state coverage; record actual source revision
+        separately from served render revision. This implement op owns lint, typecheck, relevant
+        tests/coverage, affected builds and Sonar. Resolve real repository scripts and CI
+        thresholds; record command, source tree/commit, result and sanitized logs. The lint, typecheck
+        and slice-spec proof is the op loop's gate.json (the gate step below); findings the base already
+        has are repository debt owed to code.refactor and measured by review.verify's whole-repository hfs
+        lint - a note, never an open item, and never refactored outside the grant. Run Sonar only
+        through `node <Source>/.claude/scripts/gates/sonar-local.mjs scan --cwd <app> --wait
+        --base <source commit recorded before this slice's first edit> --paths <owned paths,
+        comma-separated> --out <STARCI_JOB_SCRATCH>/checks/sonar.json --log <STARCI_JOB_SCRATCH>/checks/sonar.txt` attach both files at starci kernel report
+        (the specs of the changed or added source and the specs that import it - never the app's whole unit suite, owner 2026-09-29; the front end itself has no tests) in this same attempt: it scans against the local SonarQube the
+        stack declaration names (default the source host's dev stack), takes the project key, host
+        and token from that declaration and its custody, creates the project and its analysis
+        token when missing, and records the analysis/revision, the slice verdict, issue counts and
+        dashboard URL; never run a bare scanner or supply a token by hand. The Sonar proof is this
+        slice's own: outcome pass means no open blocker or critical issue and no to-review security hotspot on a line
+        the slice changed, its duplicated share of the changed lines within the duplication
+        threshold - the numbers are
+        knowledge/sonar-gate.yaml's alone. The gate is enforced at settle: the runtime re-reads the
+        attached sonar.json and refuses a done without outcome pass (sonar-gate-red, sonar-scan-refused,
+        sonar-proof-missing); a scan that could not run (outcome blocked, unavailable true: server
+        down, custody missing) is reported blocked, never done - the runtime records the explicit
+        sonar-unavailable why and tells the Supervisor. The
+        whole-project quality gate and debt outside the slice are recorded as projectGate, a note,
+        never a block and never an open item. Scanner
+        submission alone is not pass. Fix scoped failures and rerun affected checks. A
+        helper outcome blocked (server down, custody missing), a missing runner or coverage target
+        is blocked/not-run, never pass and never an owner credential ask; do not move this
+        responsibility to architecture, business or UAT. Reuse existing authorization and keep
+        secrets outside evidence. Every delivered surface
+        must additionally emit the runtime evidence bundle interface.audit reads: evidence/screens/**/*.png
+        captures one real served render per delivered route x state x viewport x theme cell;
+        evidence/runtime.json records per capture the served origin/environment revision, driver,
+        route/state actually opened, viewport/theme, probe result and limitations (HEAD is not
+        served proof); evidence/measurements.json records per capture the DOM/accessibility and
+        computed-style measurements used to prove rendered geometry, breakpoints, tokens and
+        interactive affordances. PNG-only handoff is incomplete evidence: cells without runtime and
+        measurement entries keep this op's outcome partial/blocked, never done."
+  - id: flows
+    path: evidence/flows.json
+    fields: [flows, codeRefs, runtime, assets]
+    content:
+      en: "Always return the FE handoff JSON, including standalone execution: flows with stable
+        id/title/entry/actor/preconditions, ordered steps {id,action,expected,uxChecks}, cleanup
+        obligations and actual sourcePaths; full codeRefs and observed runtime. Resolve actions and
+        expected results from accepted business scope without weakening them. This is input for
+        uat.verify, not a UAT pass. Use modules/kernel/verdict-contract.yaml output shape; missing
+        accepted behavior blocks readiness. Include the complete asset manifest; pending decorative
+        artwork stays explicitly deferred. Validate with the selected execution profile and complete
+        input draw IDs."
+  - id: assetManifest
+    path: evidence/assets.json
+    schema: starci/asset-manifest@1
+    fields:
+      - reviewedDrawIds
+      - items:[id,drawIds,usage,requiredForFlow,status,sourcePath,artifact,provenance,brief]
+    content:
+      en: "The full asset inventory: one entry per asset the accepted directions asked for, each naming
+        the directions behind it, where it appears, whether a business or UX criterion needs it,
+        whether it was reused, produced or deferred, the source path the delivered code imports, the
+        retained artifact and its provenance, and — while deferred — the brief a later operation
+        needs."
+  - id: realizationCheck
+    path: evidence/realization-check.json
+    schema: starci/realization-check@1
+    content:
+      en: Each accepted direction region mapped to its actual implementation, with the evidence that
+        proves the chosen raster-asset or code-native mode. interface.audit reads this file as its
+        realization map.
+  - id: read-digest
+    path: shared
+    content:
+      en: shared
+      vi: "Bản tóm tắt ĐỌC: các tệp sẽ sửa, bản đồ slot của chúng từ starci app explain, và mọi tệp pattern và ví dụ đã đọc kèm sha256."
+  - id: gate-proof
+    path: shared
+    content:
+      en: shared
+      vi: "Báo cáo cổng của vòng cuối: exit, commit gốc, head, các tệp đã đổi, số lỗi mới và lỗi có sẵn, và từng lỗi mới."
+steps:
+  - reads: [op-loop]
+    writes: [read-digest]
+    action:
+      en: "READ before coding (op loop, knowledge/op-gate.yaml): run starci gate read --root <app> --touch <every file the slice will create or change> --out $STARCI_JOB_SCRATCH/read-digest.json and read exactly what it lists, nothing wider - the knowledge/patterns/{be|fe}/*.yaml of each touched file kind, the matching example files of examples/<app>/{fe,be} and the slot map starci app explain prints per path (slot, tier, allowed imports, rules). Code only after this read; a file the slice comes to touch later is added with --touch and read the same way."
+      vi: "ĐỌC trước khi viết code (vòng lặp op, knowledge/op-gate.yaml): chạy starci gate read --root <app> --touch <mọi tệp slice sẽ tạo hoặc sửa> --out $STARCI_JOB_SCRATCH/read-digest.json và đọc đúng những gì nó liệt kê, không rộng hơn - các tệp knowledge/patterns/{be|fe}/*.yaml của từng loại tệp sẽ sửa, các tệp ví dụ cùng slot trong examples/<app>/{fe,be} và bản đồ slot mà starci app explain in cho từng đường dẫn (slot, tầng, import được phép, luật). Chỉ viết code sau bước đọc này; tệp phát sinh về sau được thêm bằng --touch và đọc theo cùng cách."
+  - reads:
+      - application-stacks
+      - repo
+    writes: [source]
+    action:
+      en: "CUT SEAM CONTRACT-FIRST (only when the packet carries context.cut; scripts/kernel/seam-policy.mjs,
+        modules/kernel/driver-loop.yaml enqueue.cutExecution seamContractFirst). As ordinal 1 of a cut of
+        more than one you are the seam: before anything else author its interface - types,
+        DTOs, ports/contracts and a stub implementation inside your owned paths - then publish it with
+        `starci kernel cut-seam --publish-interface --job <your job> --files <interface files>` so every
+        sibling ordinal starts on it at once; then finish the seam and keep the published signatures
+        stable (a change after publishing owes the siblings a reconcile). As a sibling (ordinal > 1)
+        whose packet carries context.cut.seamStub the seam has not landed: never wait for it and never
+        edit its paths - build against its published interface, or when none is published write the
+        minimal stub of what you need from it inside your own owned paths, named so the real seam
+        replaces it, and list every such assumption in the report's seamAssumptions
+        [{symbol, assumption, file?}]. When the seam lands the Kernel re-verifies your slice against it
+        (cut-seam-reconcile): a light re-check, never a redo."
+  - reads:
+      - application-stacks
+      - target
+      - business
+      - architecture
+      - draws
+      - design
+      - repo
+      - finding
+      - knowledge
+      - profile
+      - assetSources
+    writes: [evidence, runningPage, runningMarkup]
+    action:
+      en: "Collect the selected scope, business ACs, architecture/API contracts, current source and
+        applicable knowledge. Validate draws as an array and open every image; index each by actual
+        screen/state/viewport and source identity in draws-review and the input map. Build against a
+        composited direction's composite; composites are implement and audit evidence only, and any
+        direction image this op shows the owner is the drawn part. Where the accepted part has a <part>.draw.tsx,
+        start the XBase from that source (the draws read) rather than re-deriving it from the image; a deviation
+        from the accepted source is a declared delta with its reason, never a silent redraw. Resolve shared layouts, responsive variants, sequential states and ambiguous alternatives explicitly. For
+        repairs reproduce the original defect and preserve its evidence. Own preparation through
+        delivery: inspect readiness and reproduce the requested defect when applicable, partition
+        the selected work into cohesive changes and check callers before editing. Resolve
+        repository-local dependencies and bounded development runtime needs under the existing
+        scope. Shared library changes belong to the actual FE or BE package owner: include owner
+        tests, packaging/export compatibility and selected consumer integration proof in this same
+        implementation; never publish a package implicitly. Keep shared paths exclusive and report a
+        missing required external authority rather than inventing a helper. For a landing surface,
+        implement the accepted content, section sequence, assets and responsive interaction in the
+        selected frontend source. Draw is only needed when the request requires a new visual
+        decision; do not add a mandatory planning predecessor. Resolve the execution profile and
+        actual tool availability before selecting instruments; this does not switch the
+        model/runtime or spawn workers. Classify implementation feedback before stopping: routes,
+        component file layout, private state helpers, library calls and other reversible
+        source-local choices are owned here and do not require SRS/SDS expansion. A changed
+        observable outcome, actor permission, money or customer-data rule is an srs-gap; a missing
+        logical owner, contract, authority boundary, durable state/effect, compatibility, material
+        failure/recovery or quality mechanism is an sds-gap. Report a spec-affecting finding with
+        the exact observed fact, affected semantic IDs and smallest proposed delta; never edit
+        SRS/SDS in this op. CALL POINT (discovery, implementation or verification): when an observed
+        source/API/render/test fact proves the accepted SDS technically missing or contradictory
+        while business and SRS stay unchanged, report outcome blocked with blocker kind `sds-gap`
+        carrying that fact, the affected SDS ids and the smallest proposed delta. The kernel routes
+        it by modules/models/kinds.yaml route `sds-gap-revises-the-design` to
+        `architecture.revise` (operator architecture.decide) and reopens this op behind it; the
+        frontend worker never edits SDS and never calls another op. When reopened, start a fresh
+        frontend attempt from the revised SDS revision and rerun affected implementation, render
+        and quality checks. A business/SRS, owner or accepted-scope change is reported as `srs-gap`
+        or `authority` instead. Accepted draw assets do not waive applicable knowledge: implementation and
+        render comparison must satisfy both; expose conflicts and their owner instead of silently
+        copying a violating image, changing accepted design or weakening rules. Receive draws as one
+        ordered array of actual image references, including a one-image array when only one image is
+        supplied; never treat a single scalar or a caption as the array. Record a stable reference,
+        source revision/hash when available, screen, state, viewport and role for each entry in the
+        input map; infer only observable mappings and label unknowns. Preserve every entry and its
+        relation to other images; never use only the first image or silently omit inconvenient
+        states. An empty array is allowed only when the selected scope explicitly has no draw input;
+        a missing required array or unreadable image blocks the affected piece. Canonical design
+        refs/files must already be declared where required by the selected graph; report a binding
+        gap rather than changing the graph. Only require a separate visual direction if this task
+        selected one; an existing no-draw scope can establish its mapping directly from source."
+  - reads:
+      - target
+      - business
+      - architecture
+      - draws
+      - design
+      - repo
+      - knowledge
+    writes: [evidence, runningPage, runningMarkup]
+    action:
+      en: "Map every relevant region across all draws to routes, shared/owned components, API
+        reads/actions, states, ACs and actual knowledge rules/cases. Business governs behavior;
+        images express accepted visual intent within applicable knowledge and installed component
+        constraints. Preserve the accepted realization mode for every region: raster assets keep
+        exact identity, provenance, crop and responsive placement; code-native regions map to
+        semantic DOM, installed Grammar components, CSS layout/effects and repository-native SVG
+        icons. Record missing screens/states and cross-image, realization or knowledge conflicts; do
+        not average incompatible alternatives, invent behavior from pictures or weaken the selected
+        graph."
+  - reads:
+      - repo
+      - target
+      - business
+      - architecture
+      - draws
+      - design
+      - knowledge
+      - assetSources
+      - profile
+      - shell
+    writes: [source, assetManifest, realizationCheck]
+    action:
+      en: Implement the mapped screens and shared layout once using actual installed components, tokens
+        and repository conventions. Every screen lands at its App Router path in the layout tree, in the app its `app` names - a page
+        at app/<route>/page.tsx, a layout at app/<route>/layout.tsx, loading, error and not-found at their
+        special files, and a routed modal or drawer as BOTH the full page app/<route>/page.tsx and the
+        intercepting app/<parent>/@modal/(.)<segment>/page.tsx with its @modal/default.tsx, while a
+        non-routed overlay is component state of its host page with no file of its own. The chrome is
+        the layouts' - a screen-local sidebar, header, logo or locale switch is drift, and a new
+        destination is a change to the navigation registry the layout imports, with its labels in every
+        catalog. UI copy goes into the message files in every productLocale locale, the default first.
+        Apply scoped creation, refinement or the smallest defect repair;
+        retain cross-image consistency, responsive behavior, keyboard and focus. Follow applicable
+        knowledge even where literal image copying would violate it; unresolved material design
+        conflicts remain blocked. Never flatten code-native cards, panels, controls, typography,
+        system icons, layout, shadows or glows into screenshots. Never replace a required mascot,
+        illustration, photo or textured media asset with an improvised CSS drawing merely because
+        its silhouette is reproducible. Account for every asset visible in every input draw. Reuse a
+        verified matching asset or create/generate the required asset, inspect it and integrate its
+        actual source file. Claude with no image-generation capability may reserve a blank
+        decorative slot with a deferred brief; never use invented URLs, broken images or label
+        pending art complete. Functional asset requirements remain blocking. Record evidence/assets.json
+        even when the reviewed draws need no distinct assets. Write the frontend source summary only
+        to the owning impl/<repository>/<name>/index.yaml record. Running-page screenshots are cited
+        in that record's assets[] (blobs filed from STARCI_JOB_SCRATCH/captures); design PNGs remain in
+        ui/<name>/assets and UAT captures are the uat.verify run's artifacts. Reuse matching existing raster assets; otherwise
+        generate/create and inspect them with the actual permitted instrument, then integrate
+        dimensions, responsive variants, alt text and loading behavior. For Claude without image
+        generation, keep decorative slots blank with stable layout, no broken/empty src, and a
+        deferred brief {prompt,width,height,format,placement,placeholder:blank-reserved-slot}.
+        Deferred files/artifacts are null, never generated. Do not defer an asset necessary for
+        business/UX acceptance; retain that unmet criterion. When replacing deferred assets later,
+        update source, manifest, commit and affected render checks.
+  - reads:
+      - repo
+      - business
+      - architecture
+      - draws
+      - design
+      - knowledge
+    writes: [source]
+    action:
+      en: "Connect actual data reads/actions, validation, permissions and navigation for the mapped
+        journeys. Implement applicable loading, empty, error, denied, success and recovery states
+        from the accepted business/API contracts, including required states not depicted in draws.
+        Never guess endpoints, fake success or invent undisclosed business decisions. CALL POINT
+        (step 4): if an observed API integration or render-data defect blocks an already accepted
+        journey and is repairable without business changes, report outcome blocked with blocker
+        kind `shared-change` whose detail names the app's back end (`be/`), the back-end file
+        paths outside this op's allowlist, the defect evidence/problem, changeKind and the
+        unchanged businessRefs. The kernel routes it by the modules/models/kinds.yaml
+        `shared-change` routes to one scoped backend build and this op waits; it never edits
+        backend source and never calls another op. If no such defect exists, skip this call. If
+        the repair needs business/schema/authorization changes, report `srs-gap`, `sds-gap` or
+        `authority` with the missing decision instead. When resumed, inspect the landed backend
+        commits against the request - scope, business preservation, API compatibility,
+        implementation quality and commit verification - integrate them and continue to step 5.
+        Defects discovered in steps 5 or 6 return to this call point under the same permissions;
+        never create an implicit helper."
+  - reads:
+      - repo
+      - target
+      - business
+      - architecture
+      - draws
+      - design
+      - knowledge
+      - finding
+    writes: [source, evidence, runningPage, runningMarkup]
+    action:
+      en: Run relevant component/unit, interaction, type, lint and build checks for mapped ACs/states and
+        applicable knowledge, first creating exactly the owner paths and test paths a todo target
+        work.author wrote in planned mode names. For repairs retain before/after evidence for the original unchanged
+        expected assertion plus collateral regressions. Fix only within scope; keep failed or
+        untested required behavior visible. Fix scoped failures and rerun affected checks. Reuse
+        existing authorization and keep secrets outside evidence.
+  - reads:
+      - environment
+      - repo
+      - target
+      - draws
+      - design
+      - knowledge
+    writes: [source, evidence, runningPage, runningMarkup]
+    action:
+      en: Bind an authorized preview and observed served build. Open the implemented screens, drive
+        relevant controls and, after the final source mutation in this attempt, capture every
+        required route/screen/state/viewport/theme matrix cell represented by draws plus other
+        required acceptance states. Stamp every capture with source revision, served-build identity
+        and capture time; a capture made before the last edit is stale and cannot be handed to
+        interface.audit. A capture driver that signs in generates its test account's password per run or reads
+        it with testSecret(<name>, {repo}) from the repo's .starcistacks sops twin (scripts/uat/test-secret.mjs;
+        owner:push-scan-test-secrets-encrypted), never a literal. Open the captures and compare each mapped draw with its corresponding
+        rendered evidence and applicable knowledge rules. Record coverage per input image and all
+        deviations; no representative screenshot may stand in for unobserved screens. Repair within
+        scope and recheck affected tests, then recapture the complete selected audit matrix before
+        passing. interface.audit inspects these bytes later; it never creates or refreshes them.
+  - reads:
+      - repo
+      - target
+      - draws
+      - knowledge
+      - workflow
+    writes: [node, evidence, flows, assetManifest, realizationCheck, runningPage, runningMarkup]
+    action:
+      en: Review the owned diff and complete draws/AC/state/rule coverage; account for every input image
+        and preserve justified out-of-scope limitations without silently dropping requirements.
+        Record the changed paths, tested/served revisions, evidence and remaining gaps (never a commit of
+        your own - the runtime commits your green settle as the workflow's checkpoint). Complete only when required implementation and rendered proof pass. Independent full
+        UAT remains separate; stop. For workflow execution, Return outputs.flows in the original
+        journey order, preserving business actions/expectations and adding actual sourcePaths;
+        return full codeRefs including accepted backend support commits and the verified rendered
+        runtime. These outputs become UAT inputs unchanged. Submit the exact response to the kernel
+        gate; never self-advance. Never commit or stage - after required checks pass, report the
+        per-repository changed paths and the tested tree; the runtime commits a green settle as the
+        workflow's checkpoint. Preserve unrelated local changes; never bypass hooks or push. If no code
+        changed, return the verified existing commit and explain no change. Missing tested-tree proof
+        prevents a passing delivery.
+        Always write evidence/flows.json as the ready UAT handoff, even outside a named workflow; preserve
+        accepted journey order and expected results, bind source paths, real commits and the
+        observed served build. Validate with validateFEHandoff against the selected accepted
+        journeys before delivery. This handoff is conditional and does not change standalone or
+        named frontend response contracts. Include assets in evidence/flows.json and FE outputs alongside
+        flows/codeRefs/runtime; pass the exact manifest to UAT. The assets-accounted-for criterion
+        requires full draw coverage and real ready assets or explicitly allowed decorative
+        deferrals.
+  - reads: [op-loop]
+    writes: [gate-proof]
+    action:
+      en: "FORCE THE CHECKS after coding: run starci gate run --root <app> --changed <the files the slice changed> [--tests <the slice spec pattern>] --out $STARCI_JOB_SCRATCH/gate.json. FIX what it reports and run it again, at most params.gateRounds rounds: exit 0 is green; exit 1 lists the new findings (lint per file and rule, tsc per message, failing specs - a finding the base already has never counts); exit 2 means a tool could not run and is never green. Still red after the last round: report blocked with the exact findings of that gate.json. Never report done while the gate is red or could not run. REPORT with gate.json and read-digest.json attached."
+      vi: "ÉP CHẠY KIỂM TRA sau khi viết code: chạy starci gate run --root <app> --changed <các tệp slice đã đổi> [--tests <mẫu spec của slice>] --out $STARCI_JOB_SCRATCH/gate.json. SỬA những gì nó báo rồi chạy lại, tối đa params.gateRounds vòng: exit 0 là xanh; exit 1 liệt kê lỗi mới (lint theo tệp và luật, tsc theo thông điệp, spec thất bại - lỗi đã có trên commit gốc không bao giờ bị tính); exit 2 là một công cụ không chạy được và không bao giờ là xanh. Hết vòng cuối mà vẫn đỏ: báo blocked kèm đúng các lỗi trong gate.json đó. Không bao giờ báo done khi cổng đỏ hoặc không chạy được. BÁO CÁO kèm gate.json và read-digest.json."
+proofs:
+  - id: binding
+    requirement:
+      en: Run the record-class validator `starci runtime validate` and, on every record directory it writes, `starci runtime validate --strict`; every cited ID/path exists or is explicitly
+        proposed, required assertions are covered, input bindings are current, and an honest
+        not-run/fail cannot earn done.
+  - id: commit
+    requirement:
+      en: Never commit or stage. Inspect the exact working-tree diff and actual tests, report the changed paths and the
+        tested tree per repository, and separately retain integration/tested mappings; the runtime commits a green
+        settle as this op's checkpoint on wf-<workflowId>. Report no-change honestly.
+  - id: knowledge-compliance
+    requirement:
+      en: The input map names actual applicable knowledge rules/cases; source/render review records
+        observations for each and any draw conflict. Required rule violations or unresolved material
+        conflicts prevent completion; visual similarity never substitutes for compliance.
+  - id: regression
+    requirement:
+      en: For selected repairs, the original expected assertion has actual before/after observations and
+        affected collateral checks; preserve unresolved failures. For new work this repair-only
+        proof is explicitly not applicable.
+  - id: draws-coverage
+    requirement:
+      en: draws is an explicit image-reference array. Every entry was opened and has an observation and
+        screen/state/viewport mapping in draws-review; all required mapped outputs have
+        corresponding inspected render evidence. Missing/unreadable images, unreviewed entries,
+        unresolved alternatives and required coverage gaps cannot earn done. A declared no-draw
+        scope records an empty array honestly.
+  - id: input-grounding
+    requirement:
+      en: Every selected accepted draw asset was actually opened and its identity/revision mapped to
+        business ACs, architecture/API/state contracts and source. Missing or conflicting required
+        inputs remain blockers; absent unselected draw is explicit.
+  - id: render
+    requirement:
+      en: Actual implemented surface screenshot is retained, visually inspected and compared with selected
+        accepted draw inputs; deviations and affected rechecks are recorded; code-only delivery is
+        explicitly partial when this required capture cannot be made.
+  - id: implementation-quality
+    requirement:
+      en: Fix scoped failures and rerun affected checks. Sonar passes only as the sonar-local.mjs
+        attached sonar.json summary with scope slice and outcome pass for the tested commit, the whole-project gate is a note, never a
+        block. Reuse existing authorization and keep secrets outside evidence.
+  - id: planned-brand-tokens
+    requirement:
+      en: "Every brand colour token that declares a valueSource (a reference render or a ruling the brand.decide leg traced it to) is
+        a declaration this leg owes: it is written into the app theme under its brand token name with its brand value, and
+        `starci work brand <work-root> --source <repository-root> --stage verify` reports no planned-source-missing token.
+        A planned token the app theme still does not declare keeps this leg from done."
+    check: scripts/work/brand/brand.mjs
+  - id: shell-layout
+    requirement:
+      en: "`starci work shell-conformance <impl-record-dir>` exits 0 for the written
+        implementation record: re-scanning the real frontend app/, every routed ui record it builds has
+        its files at the matching path - layout.tsx, page.tsx, loading/error/not-found, and for a routed
+        overlay the full page plus an @slot/(.)segment intercept presenting it. A recorded layout file this
+        build changed is reported by the same run as LAYOUT_SOURCE_DRIFT for brand.decide to re-scan and
+        re-capture; every running-page capture the record cites is painted in the brand record's
+        colours (PALETTE_OFF_BRAND names a colour the brand does not declare, its area share and the nearest
+        token; PRIMARY_ABSENT when it stands in for the primary; scripts/work/brand/brand-palette.mjs); the
+        output is retained in evidence. A brand colour token that declares a valueSource is written into
+        the app theme under its brand token name with its brand value (and any utility class the brand
+        names for it), so `starci work brand <work-root> --source <repository-root> --stage
+        verify` binds it to the app source rather than to the reference render."
+    check: scripts/work/ui/shell-conformance.mjs
+  - id: asset-coverage
+    requirement:
+      en: "Every artwork slot the accepted directions declared has an entry in evidence/assets.json, that file
+        carries `schema: starci/asset-manifest@1` and holds the shape
+        modules/schemas/asset-manifest.schema.yaml declares, and no entry required for a business or
+        UX criterion is deferred."
+  - id: realization-fidelity
+    requirement:
+      en: "evidence/realization-check.json covers every accepted direction region. `raster-asset` regions bind
+        exact retained bytes/provenance and actual rendered placement; `code-native` regions bind
+        semantic DOM, installed Grammar, responsive CSS and repository-native SVG where applicable.
+        Any mode substitution is an explicit unresolved design conflict and cannot earn done.
+        evidence/realization-check.json carries `schema: starci/realization-check@1` and holds the shape
+        modules/schemas/realization-check.schema.yaml declares."
+  - id: op-gate
+    requirement:
+      en: "starci kernel settle re-reads the attached gate.json (exit 0 over the slice's changed files) and read-digest.json (a pattern file named for every touched file kind) and records the runtime check op-gate; a done without them, with a tool that could not run or with a new finding is refused, and the Kernel re-runs the same gate on the branch at landing."
+      vi: "starci kernel settle tự đọc lại gate.json đính kèm (exit 0 trên các tệp slice đã đổi) và read-digest.json (có tệp pattern cho mọi loại tệp đã sửa) rồi ghi check op-gate; done thiếu chúng, có công cụ không chạy được hoặc có lỗi mới đều bị từ chối, và Kernel chạy lại đúng cổng đó trên nhánh khi land."
+judge:
+  - by: machine
+    measures: [declared-checks, work-hygiene, op-gate, sonar-gate, contract-script, acceptance-trace]
+    proofs: [planned-brand-tokens, shell-layout, op-gate]
+    why: "settle re-reads the gate JSON and the scanner summary, and the brand-token and shell-layout checks are runtime scripts the settler re-runs; the rendered result is compared with the draws by the audit leg; the acceptance-trace measure records, in report mode until the first live run, which acceptance records of the scope the tests it ran cite"
+  - by: next-leg
+    leg: interface.audit
+    why: "interface.audit re-captures the rendered result and compares it with the accepted draws, the installed Grammar and the brand, and routes every drift back"
+  - by: next-leg
+    leg: review.verify
+    why: "the planned chain closes with review.verify, which re-runs the gate over the reviewed range and classifies every defect it finds without repairing the producer"
+blockers:
+  - code: APP_SHELL_UNSETTLED
+    condition:
+      en: The layout tree is absent, or an accepted ui record in scope
+        declares no route or surface, so there is no app/ path to build at. Report `blocked` with blocker
+        `brand-gap` naming the record; never build a chrome or pick a route of the screen's own to
+        proceed.
+  - code: DRAWS_INPUT_INVALID
+    condition:
+      en: draws is missing when required, is not an array, contains unreadable image references, or is
+        empty without an explicit no-draw scope. Name the affected entries.
+  - code: DRAWS_MAPPING_UNRESOLVED
+    condition:
+      en: Required screen/state/viewport coverage, approval or the relationship between images cannot be
+        resolved; report exact image entries and the missing decision.
+  - code: DRAW_KNOWLEDGE_CONFLICT
+    condition:
+      en: Accepted draw intent conflicts with applicable knowledge and cannot be reconciled within the
+        selected scope; identify the asset/region, actual rule/case and owner decision required.
+  - code: DESIGN_INPUT_UNRESOLVED
+    condition:
+      en: A selected accepted draw asset cannot be opened or conflicts with required business/architecture
+        inputs; report the exact source and decision needed.
+  - code: REALIZATION_MODE_CONFLICT
+    condition:
+      en: A required visual region lacks an accepted raster-asset/code-native classification, or
+        implementation would flatten semantic UI into imagery or replace required authored media
+        with an unapproved CSS/SVG approximation.
+  - code: UI_CONTRACT_UNKNOWN
+    condition:
+      en: Required business state, action API or component ownership is unresolved.
+  - code: RUNTIME_UNVERIFIED
+    condition:
+      en: No permitted runtime can prove the implemented surface/build; do not fabricate a screenshot.
+  - code: DECLARED_DEPENDENCY_UNMET
+    condition:
+      en: A declared prerequisite is not effectively done, or a required declared input/scope is missing.
+        Report node/resource IDs and propose a separately selected graph update when needed; never
+        run predecessors or weaken dependsOn/refs/required to proceed.
+placeholders:
+  feature: shared
+  app: shared
+  bound-paths: shared
+  write-ceiling: shared
+  environment: shared
+layoutPolicy:
+  checks: [starci-validate]
+policy:
+  # specsToggle: what this op does when the owner's config.yaml specs.<class> is false (scripts/route/spec-deferral.mjs):
+  # defer-leg = never dispatched, settled deferred; skip = runs without that class of test or coverage; not-counted = the gate does not demand it.
+  specsToggle: {unit: skip, e2e: skip}
+  qualityPolicy:
+    owner: interface.implement
+    checks: [lint, typecheck, tests, coverage, build, sonar]
+    requiredResult: pass
+    sonarGate: slice-new-code-pass-for-tested-revision
+    sonarProjectGate: note-never-block
+    sonarEnforcement: settle-refuses-done-without-pass-unavailable-is-explicit
+    opGate: gate-exit-0-for-tested-revision
+    missingRunner: blocked
+    canDelegateResponsibility: false
+  deliveryPolicy:
+    flows: always-required
+    order: accepted-journey-order
+    expected: preserve-business-acceptance
+    commit: actual-full-sha
+    runtime: observed-served-build
+    uat: separate-verification
+  assetPolicy:
+    owner: interface.implement
+    inventory: every-input-draw
+    strategy: reuse-then-create
+    output: assets
+    readyStatuses: [reused, generated]
+    deferredStatus: deferred
+    claudeFallback: blank-reserved-slot-with-brief
+    functionalAssetDeferral: false
+route:
+  nodeKinds: [implementation]
+  phase: [implement, implementation]
+  intent: [implement, frontend, ui, code]
+  prerequisites:
+    - interface.draw done
+    - architecture.decide settled pass (reviewed SDS seed; Work leaves remain todo)
+  riskHints: [source-edits]

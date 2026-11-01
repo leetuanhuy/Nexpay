@@ -1,0 +1,254 @@
+// op-prompt.mjs — the one [Op] prompt builder for every dispatch path (OPS-07).
+// cli.mjs dispatch and scripts/kernel/dispatch-op.mjs's dry-run/spawn preview render the same
+// contract text from the same packet shape, so the preview can never drift from the prompt a real
+// worker receives (shared-checkout rules, report filing and questions).
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { sha256 } from '../../engine/digest.mjs';
+import { safeRemove } from '../api/fs/safe-remove.mjs';
+import { artifactHoldReason } from '../machine/artifact-hold.mjs';
+import { OP_REPORT_OUTCOMES, BLOCKER_KINDS } from './report-envelope.mjs';
+import { ownerAnswerLine } from '../machine/owner-answers.mjs';
+import { renderPromptReads } from '../context/pack.mjs';
+import { renderGrammarContext } from './grammar-context.mjs';
+import { cutManifestPromptLines, seamPromptLines } from './seam-policy.mjs';
+import { resumePromptLines } from './resume-context.mjs';
+import { specsBriefLines, specsOf, verificationScopeLines } from '../route/spec-deferral.mjs';
+import { ownerLanguage, translator } from '../lib/i18n.mjs';
+import { tempRoot } from '../../engine/temp-root.mjs';
+import { capabilityPromptLines } from './op-prompt-capabilities.mjs';
+import { opVerbsOfBrief } from './op-prompt-verbs.mjs';
+import { renderRoleLines } from '../machine/roles-contract.mjs';
+import { judgePromptLine } from './op-judge.mjs';
+import { tracePromptLines } from './acceptance-trace.mjs';
+import { isLiteWorkRoot } from '../lib/work-edition.mjs';
+import { WORK_DIR_NAME } from '../lib/roots.mjs';
+
+// The Op's role (scope, never, clean up, reporting) is modules/kernel/roles.yaml#op; the prompt prints it from there.
+const VERDICT_CONTRACT = 'modules/kernel/verdict-contract.yaml';
+
+// An owned path as the worker reads it: bare when it lives in the worker's
+// checkout, rooted at its own checkout otherwise.
+const withoutTrailingDotSegment = (value) => value.endsWith('/.') ? value.slice(0, -2) : value;
+export const renderOwnedPath = (p, cwd) => (p.root && path.resolve(p.root) !== path.resolve(cwd)
+  ? withoutTrailingDotSegment(`${p.root.replaceAll('\\', '/')}/${p.path}`) : p.path);
+
+// Whether the op's brief (its manifest text) names `needle`: a machine line is printed only for the ops
+// whose contract uses it. An unreadable brief names nothing.
+const briefUses = (briefFile, needle) => { try { return fs.readFileSync(briefFile, 'utf8').includes(needle); } catch { return false; } };
+
+// The typed-log rule (scripts/kernel/typed-logs.mjs, modules/kernel/api.yaml log): the owner's console renders the
+// rows an op logs, never its terminal, so every step, command, edit, check and failure is one typed row.
+function loggingLines({ skillRoot, packet, jobLabel, repoLabel }) {
+  const wf = packet.context.workflow?.id ?? '<workflow-id>';
+  return [
+    `logging: the owner reads your work as TYPED LOG ROWS, not terminal text - log each step, command, file edit, check, test run, render and failure as it happens; --msg is one short line in owner_language, facts go in --data (JSON, at most 4 KB), bulk output goes in a file named in --refs:`,
+    `  starci kernel log --repo ${repoLabel} --workflow ${wf} --job ${jobLabel} --kind cmd.run --msg "${translator(packet.context.owner_language ?? ownerLanguage())('Run unit tests')}" --data '{"cmd":"npm test","exit":1,"durationMs":41200,"stdoutRef":"<path>"}'`,
+    `  kinds: step.start {name} | step.end {name, ok} (the runtime times the step from your step.start; log each when it happens, a duration you type is dropped) | cmd.run {cmd, exit, durationMs, stdoutRef?, output?} | file.edit {path, added, removed, diffRef?} | check.result {name, pass, evidenceRef?} | test.result {suite, passed, failed, failures:[{name, message, file}]} | render {artifactRef, label} | video {artifactRef, label} | trace {artifactRef} | decision {markdown} | narration {markdown} | error {code, message, hint}`,
+    `  owed at minimum: a step.start and a step.end around each step of your brief, and one cmd.run {cmd, exit, durationMs} per check command you put in report.checks (the same command string) - settle warns ${'LOG_TYPED_MISSING'} on your job when they are missing.`,
+    `  a browser run (Playwright via scripts/uat/uat-slots.mjs run) records video, trace.zip and screenshots; put operational recordings under STARCI_JOB_SCRATCH and attach them with starci kernel report. Work-record UAT proof stays at its required owned path.`,
+    `  send each typed row through starci kernel log. Put bulk output in STARCI_JOB_SCRATCH and name the file in --refs; submit any raw output that must be retained with starci kernel report --attach. Never log a credential, token, password or OTP; never log dispatch/report/settle rows (the runtime derives them).`,
+  ];
+}
+
+// A long owned-path list rides in a file, never inline: the prompt is the Orca worker-start --spec argv,
+// and Windows caps a command line at 32,767 characters. a product's workspace-provision leg
+// of 993 frozen paths (op-business.decide-cc63d20d87) failed the Task's creation with spawnSync ENAMETOOLONG on
+// every dispatch and sat behind owner gates (inc-826e077777de, inc-95fe7c597bd0). Past OWNED_INLINE_MAX
+// paths or OWNED_INLINE_CHARS characters the list is written one path per line to owned-paths.txt in the
+// job's scratch folder; the prompt names the file, the count and the first few.
+const OWNED_INLINE_MAX = 60;
+const OWNED_INLINE_CHARS = 6000;
+// THE SCRATCH CONTRACT: every job owns one directory outside every repository, under the OS temp directory; op
+// contracts call it STARCI_JOB_SCRATCH. Dispatch creates it fresh (ensureJobScratch), records it as
+// op_attempts.scratch_dir and writes its path into the prompt (worker-start owns the agent's environment); the op writes its report, raw check output, screenshots, videos, traces and patches
+// there; starci kernel report stores what it carries as blobs and deletes the directory (api-lib/report-evidence.mjs).
+export const JOB_SCRATCH_ROOT = 'starci-job-scratch';
+export const jobScratchDirOf = (repo, workflowId, jobId) => path.join(tempRoot(), JOB_SCRATCH_ROOT, sha256(`${path.resolve(repo)}\0${workflowId}\0${jobId}`));
+/** The job's scratch, created empty for a new dispatch: what an earlier attempt left there is removed first. */
+export function ensureJobScratch({ repo, workflowId, jobId, fresh = true }) {
+  const dir = jobScratchDirOf(repo, workflowId, jobId);
+  if (fresh) safeRemove(dir, { hold: artifactHoldReason });
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+/** The Kernel's own transient working directory for one workflow (background push results, scan output): OS temp,
+ * outside every repository; never agent data in .starciwork. */
+export const kernelScratchDirOf = (repo, workflowId, kind) => path.join(tempRoot(), 'starci-kernel-scratch', sha256(`${path.resolve(repo)}\0${workflowId}`).slice(0, 16), kind);
+const ownedPathsFileOf = (repo, workflowId, jobId, scratchDir = null) => path.join(scratchDir ?? jobScratchDirOf(repo, workflowId, jobId), 'owned-paths.txt');
+function ownedPathsLine({ paths, repo = null, workflowId = null, jobId = null, scratchDir = null }) {
+  if (!paths.length) return 'owned_paths: (per brief write-ceiling)';
+  const inline = paths.join(', ');
+  if (paths.length <= OWNED_INLINE_MAX && inline.length <= OWNED_INLINE_CHARS) return `owned_paths: ${inline}`;
+  const head = paths.slice(0, 10).join(', ');
+  if (!repo || !workflowId || !jobId) return `owned_paths: ${paths.length} paths (a real dispatch lists them in owned-paths.txt); first 10: ${head}`;
+  const file = ownedPathsFileOf(repo, workflowId, jobId, scratchDir);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${paths.join('\n')}\n`, 'utf8');
+  return `owned_paths: ${paths.length} paths, one per line in ${file} (read it before any write; the runtime uses this list to checkpoint your owned changes at green settle). First 10: ${head}`;
+}
+
+// packet: the dispatch packet both callers build ({op, brief, params?, context{...}, constraints}).
+// A standalone preview (dispatch-op.mjs) has no job, repo or bound workflow - jobId/repo may be null
+// and render as the <job-id>/<target-repo> placeholders a real dispatch would substitute.
+// contextPack: a resolved scripts/context/pack.mjs context; when given, the mandatory-reads block
+// enumerates its resolved file list instead of the fixed load order.
+/** One environment services row: `env/service state url[(status)][ - discovered X][ - action]`. */
+const serviceLine = (s) => `  - ${s.env}/${s.service} ${s.state} ${s.url}${s.status != null ? ' (' + s.status + ')' : ''}${s.discovered ? ' - discovered ' + s.discovered : ''}${s.action ? ' - ' + s.action : ''}`;
+
+/** The env-health block: what the runtime found, how to bring a service up, and the blocked-not-failed rule. */
+const environmentLines = (environment, repoLabel) => [
+  `environment: the runtime checked the stack this walk runs on before dispatch (scripts/uat/env-health.mjs) - ${environment.ready ? 'READY' : 'NOT READY'} at ${environment.checkedAt}:`,
+  ...environment.services.map(serviceLine),
+  ...(environment.remedies ?? []).map((r) => `  remedy: ${r}`),
+  `  Bring a down service up ONLY through: starci gate env-health serve --repo ${repoLabel} --env <id> --service <name> --cwd <checkout> [--url <probe>] -- <start command> (it registers the server so the next pre-step restarts it itself), then re-run starci gate env-health check and put its result in report.checks as name "env-health" with its exit code (0 ready, 3 not ready).`,
+  `  If the stack is still not ready, file outcome blocked with blocker kind environment - never failed: a walk on a dead stack proves nothing about the product. A probe-drift row is a stale declaration, not a failure.`,
+];
+
+/** The Kernel's local override of this op for this workflow (starci kernel op-override / graph-edit / redesign): additive only. */
+function kernelOverrideLines(o) {
+  if (!o || typeof o !== 'object') return [];
+  const out = [`kernel_override: your Kernel adapted this op for its workflow (additive; your brief and every gate still hold):`];
+  if (Number.isInteger(o.commandTimeoutMs)) out.push(`  commandTimeoutMs=${o.commandTimeoutMs} - a command may run this long. When your tool window is shorter, start a long validator (starci gate canon-scan, starci gate run, starci app lint) in the background writing to a file and poll that file until it is complete; a tool timeout is never a blocker by itself.`);
+  for (const n of o.notes ?? []) out.push(`  - ${n}`);
+  if (o.redesign?.brief) out.push(`  redesign brief (RCA ${o.redesign.brief.id ?? '-'}): ${JSON.stringify(o.redesign.brief).slice(0, 6000)}`);
+  return out.length > 1 ? out : [];
+}
+
+function productPromptLines({ repo, context }) {
+  const lite = Boolean(repo && isLiteWorkRoot(path.join(repo, WORK_DIR_NAME)));
+  let locale = '(unset - no shell or brand locale)';
+  if (context.product_locale) locale = context.product_locale.locale + ' (' + context.product_locale.source + ')';
+  else if (lite) locale = '(unset - no brand locale)';
+  const direction = lite ? '; lite .starciwork holds only workspace.yaml and brand/ (plus .gitignore); use the brand records for product direction'
+    : '; chrome, nav labels and the demo persona come from .starciwork/shell/index.yaml verbatim';
+  const lines = [`product_locale: ${locale} — every string a product user reads (UI copy, labels, sample data in prompts, message files) is written in this locale, never in owner_language${direction}`];
+  if (lite) lines.push('edition: lite — .starciwork/ is optional and holds only .gitignore, workspace.yaml and brand/** (drawing records, references and assets). Read workspace.yaml normally for project identity and repository roles. Skip the brief’s full-edition root index.yaml, shell/, features/, _resources/, uat/ and br/ reads, writes, steps and proofs; these paths are forbidden in lite. brand.decide uses brand/** and retains its brand drawing, reference and asset proofs.');
+  return lines;
+}
+
+export function buildOpPrompt({ skillRoot, packet, jobId = null, repo = null, priorFailures = [], cwd = repo, contextPack = null, scratchDir = null }) {
+  const jobLabel = jobId ?? '<job-id>';
+  const repoLabel = repo ?? '<target-repo>';
+  const owned = packet.context.owned_paths;
+  const unresolved = owned.filter((p) => p.unresolved);
+  // One entry per checkout root, labelled with its repository only when every owned path there names the same one.
+  const roots = [...owned.filter((p) => p.root).reduce((byRoot, p) => {
+    const key = path.resolve(p.root), seen = byRoot.get(key);
+    byRoot.set(key, { root: p.root, repository: seen && seen.repository !== (p.repository ?? null) ? null : (p.repository ?? null) });
+    return byRoot;
+  }, new Map()).values()];
+  const entrySkill = path.join(skillRoot, 'CONTEXT.md');
+  const brief = path.join(skillRoot, packet.brief);
+  const verdictContract = path.join(skillRoot, VERDICT_CONTRACT);
+  // The owner's config.yaml specs switches, read per prompt (spec-deferral.mjs): a class that is off overrides the
+  // brief's test, coverage and e2e steps for every op whose policy.specsToggle names that class.
+  const specs = specsOf({ skillRoot });
+  const specsLines = specsBriefLines({ skillRoot, op: packet.op, settings: specs, forced: Boolean(packet.context.specs_forced) });
+  return [
+  `[Op] ${packet.op} — one operation, one verdict. You are an ephemeral op agent spawned by the workflow kernel (job ${jobLabel}, attempt ${packet.context.attempt ?? 1}).`,
+  ...(packet.context.owner_answers?.length ? [
+    `owner_answers: these questions were ALREADY ANSWERED in this job's retry lineage (packet context.owner_answers). Each answer is binding input for`,
+    `  this attempt: apply it and record the decision with its answeredBy source. Do NOT ask it again — not reworded, not with the same options;`,
+    `  starci kernel report refuses such an ask (ask-already-answered). Ask only a genuinely new question the answer left open:`,
+    ...packet.context.owner_answers.map(ownerAnswerLine),
+  ] : []),
+  ...(packet.context.environment ? environmentLines(packet.context.environment, repoLabel) : []),
+  ...(packet.context.repair_for ? [
+    `repair_for: this job repairs what ${packet.context.repair_for.op} ${packet.context.repair_for.of} found (route ${packet.context.repair_for.route}, class ${packet.context.repair_for.class}). Its root-cause claim, evidence, counterCheck and expectedFix are packet context.repair_for.rootCause: confirm the claim against the code first (the counterCheck), fix it inside owned_paths, run the recheck the claim names if you can, and report done - ${packet.context.repair_for.op} runs again behind you.`,
+  ] : []),
+  ...kernelOverrideLines(packet.context.kernel_override),
+  ...(priorFailures.length ? [
+    `prior_attempt_failures: an earlier attempt of this same op settled fail on the kernel checks below.`,
+    `  They are your authoritative residual defects — verify and repair them first; records already on`,
+    `  disk are prior attempts' output you must check, not license to file done. Re-filing another`,
+    `  attempt's report or claiming done without new authored writes is an automatic fail:`,
+    ...priorFailures.map((f) => `  - [${f.name}] ${f.evidence}`),
+  ] : []),
+  ...renderRoleLines('op'),
+  ...resumePromptLines(packet.context.resume_from),
+  ...(contextPack
+    ? renderPromptReads(contextPack)
+    : [
+      `MANDATORY LOAD ORDER — read before any action:`,
+      `  1. ${entrySkill} — canonical Source runtime load order (the routed repository may not contain .claude)`,
+      `  2. ${brief} — your contract. It declares your reads, writes, steps, proofs and blockers.`,
+      `  3. ${verdictContract} — what your return must look like`,
+    ]),
+  `  shared evidence and path policy: read ${path.join(skillRoot, 'modules', 'ops', '_common.yaml')} before writing outputs or filing your report.`,
+  `source_runtime: ${skillRoot}`,
+  `target_repository: ${repoLabel}`,
+  `brief: ${brief}  (your contract — never renegotiate it)`,
+  ...[judgePromptLine(packet.op, skillRoot)].filter(Boolean),
+  ...tracePromptLines(packet.op, skillRoot),
+  ...(packet.context.selected_op ? [`selected_op: mode=${packet.context.selected_op.mode ?? '(single contract)'} — the immutable effective contract is packet context.selected_op.contract. Read it with starci kernel op-contract --json before acting; completionProfile, steps, reads, writes and proofs come only from it. Sibling execution modes grant no authority.`] : []),
+  ...specsLines,
+  ...verificationScopeLines({ settings: specs }),
+  ...(packet.params ? [`params: ${Object.entries(packet.params).map(([k, v]) => k + '=' + JSON.stringify(v)).join(' ')} — the resolved tunables for this dispatch; use these values, never a number you read in prose`] : []),
+  `workflow: ${packet.context.workflow?.id ?? '(unbound — packet preview)'} goal_revision=${packet.context.workflow?.goal_revision ?? '(unbound)'} goal_identity=${packet.context.workflow?.goal_identity ?? '(unbound)'}`,
+  `owner_language: ${packet.context.owner_language ?? ownerLanguage()} — every string the owner reads (ask text, option and pick labels, owner-facing summaries) is written in this language in plain words; canonical records stay English`,
+  ...productPromptLines({ repo, context: packet.context }),
+  ...(packet.context.owner_delegation ? [`owner_delegation: the owner delegated ask answers to ${packet.context.owner_delegation.asks} until ${packet.context.owner_delegation.until} (config.yaml delegation); an answer receipt with answeredBy ${packet.context.owner_delegation.asks} inside that window IS the owner's answer, except for the excluded classes ${JSON.stringify(packet.context.owner_delegation.excludes)} which stay owner-only`] : []),
+  `records: ${packet.context.records.join(', ') || '(none bound)'}`,
+  ...renderGrammarContext(packet.context.grammar),
+  ...(packet.context.cut ? [`cut: ${packet.context.cut.id} ordinal=${packet.context.cut.ordinal}/${packet.context.cut.total} — this job owns only this bounded SAME-op slice; never widen to sibling slices`] : []),
+  ...seamPromptLines({ cut: packet.context.cut, jobLabel, api: path.join(skillRoot, 'scripts', 'kernel', 'cli.mjs'), repoLabel }),
+  ...cutManifestPromptLines(packet.context.cut?.manifest),
+  ...(roots.length ? [`writes_in: ${roots.map((p) => path.resolve(p.root) + (p.repository ? ' (repository ' + p.repository + ')' : '')).join(', ')} — each owned path below is relative to your checkout ${cwd} unless it is written rooted at another checkout; edit it in the checkout that holds it`] : []),
+  ownedPathsLine({ paths: [...new Set(owned.filter((p) => !p.unresolved).map((p) => renderOwnedPath(p, cwd)))], repo, workflowId: packet.context.workflow?.id ?? null, jobId, scratchDir }),
+  `   only owned_paths may be modified; anything else is out of scope.`,
+  `shared_checkout: other ops of this workflow edit and build in this same worktree while you run (modules/kernel/api.yaml conventions.sharedCheckout).`,
+  `  never git commit, reset, rebase, stash, clean, switch, checkout or restore, never push: the runtime is the only committer - when your op settles green it commits exactly your owned paths as the workflow's checkpoint (scripts/kernel/workflow-checkpoint.mjs); a commit of yours, or a change outside your owned paths, refuses your settle.`,
+  `  dependencies: npm install runs under the repository's dependency lock; never npm ci or delete node_modules while other workflows run (the guard refuses it) - report blocked environment instead.`,
+  `  never create a git worktree, junction, symlink or hard link anywhere (git worktree add, mklink, New-Item -ItemType Junction/SymbolicLink, ln): work in this checkout with its own node_modules - a private worktree linked into the live repository deleted 674 live files when it was removed; report a need for another tree, never make one.`,
+  `  your git and npm are the runtime guard: a refusal prints "starci guard: refused ..." and exits 3 - report the need, never work around it.`,
+  ...(packet.context.goal ? [`goal: the owner's goal (revision ${packet.context.goal.revision}) is packet context.goal.statement - read it with starci kernel op-contract --json; never read the ledger for it.`] : []),
+  ...(unresolved.length ? [`unresolved_owned_paths: ${unresolved.map((p) => p.path + ' (' + (p.repository === 'not-app-relative' ? 'not app-relative' : 'repository ' + p.repository + ' is not bound') + ')').join(', ')} — report blocked with kind authority; never guess a root`] : []),
+  `constraints: lease=${packet.constraints.lease ?? '(none)'} model=${packet.constraints.model} budget=${packet.constraints.budget ?? '(unset)'}`,
+  `machines: check names in your brief (layoutPolicy.checks, proofs) are executable canonical validators — run them verbatim, never invent placeholder commands (e.g. a made-up validate function):`,
+  `  when any validator may exceed 25 s, launch its exact command in the background with stdout, stderr and exit status written under STARCI_JOB_SCRATCH; poll the exit-status file until it appears, then read stdout and record the actual exit code in report.checks. Keep polling across command windows rather than treating a terminal timeout as a validator result.`,
+  `  starci-validate → starci runtime validate <work-root-or-record-dir> [--json]`,
+  `    a run wider than your owned_paths (the whole feature, the Work root) adds --owned <your owned paths, comma-separated>: a refused finding in a record outside them moves to outOfScope - another owner's pre-existing finding, named in your report (rootCause when it blocks your result) and never a reason to report blocked or failed. Only an in-scope refusal is yours.`,
+  `  starci-stacks-check → checkApplicationStacks({repoRoot,environment,deploymentModelFile}) in ${path.join(skillRoot, 'scripts', 'gates', 'stacks-gate.mjs')}`,
+  `  starci-starcistacks-check → starci gate starcistacks <repo-root> [--new when this leg creates the repository] [--admitted-at <op-contract admission.admittedAt>] [--json] — the stack declaration's services block (sonar, ...); read it before asking for any credential`,
+  `  starci-read-digest → starci gate read --root <app> --touch <every file the slice will create or change> --out <STARCI_JOB_SCRATCH>/read-digest.json — the op loop's READ (knowledge/op-gate.yaml): the digest names every READ input filed for this op plus the slot files of --touch; read what it lists before coding, attach read-digest.json`,
+  `  starci-gate → starci gate run --root <app> --changed <the files you changed> [--tests <your specs' pattern>] --out <STARCI_JOB_SCRATCH>/gate.json — the op loop's CHECK: exit 0 green, 1 new findings (fix and rerun, up to params.gateRounds rounds, then blocked), 2 a tool could not run (never done); attach gate.json. Enforced at settle (op-gate) and re-run at landing`,
+  `  starci-read-digest (deciding and authoring ops) → starci gate read --root <app> [--touch <the records or documents you will write>] [--knowledge <other knowledge/ files your decision cites>] --out <STARCI_JOB_SCRATCH>/read-digest.json — READ the standard before deciding or writing: the digest names every READ input filed for this op whatever --touch says; attach read-digest.json and list this exact command in report.checks (the runtime re-runs it to observe the READ; a report with only the attached digest is refused). Enforced at settle (op-proof read-knowledge) for the ops knowledge/op-gate.yaml opProofs names`,
+  `  starci-doc-gate → starci gate run --scope docs [--tree <app>/.starciwork] --out <STARCI_JOB_SCRATCH>/doc-gate.json — the document gate (doc-language, work-surfaces, work-deep, example-work, contract-cites, json-exceptions); attach doc-gate.json. Enforced at settle (op-proof doc-gate)`,
+  `  independent-critic (the ops whose judge field declares a runtime Critic) → nothing to run: when you report done the runtime runs the independent Critic (another provider, Critic tier) over your decision records itself, once per version of them; a failed critique is the failure your next attempt is given, and a verdict file you attach is ignored`,
+  `  starci-test-world-run → starci gate test-world --root <app> --project e2e|integration [--tests <path pattern>] --out <STARCI_JOB_SCRATCH>/test-world-run.json — runs the world project on @starci/test-world and the preset's world runner and judges the specs (useTestWorld apps for e2e, modules for integration; outage through world.infra.<svc>.cut()/restore(); no hand-rolled docker, DataSource, process.env or sleep); attach it. Enforced at settle (op-proof test-world)`,
+  `  starci-unit-run → starci gate unit --root <app> --out <STARCI_JOB_SCRATCH>/unit-run.json — the whole unit project with per-service coverage (100 on each metric) and the kit judgment of each service spec (Test.createTestingModule over the @starci/jest-preset doubles); attach it. Enforced at settle (op-proof unit-kit)`,
+  `  starci-release-proof → starci release proof --repo <released repository> --base <first commit of the release range>^ --out <STARCI_JOB_SCRATCH>/release-proof.json — release-app-installs, check-canon-pins with the content digest, the merge guard over the range and npm run check, none skipped; attach it. Enforced at settle (op-proof release)`,
+  `  review-defects → write <STARCI_JOB_SCRATCH>/review-defects.json {"schema":"starci/review-defects@1","defects":[{"id","title","class":"business|non-business","caughtBy":"<check that caught it, or null>","missingCheck":{"check","rule","detail"} when non-business and no check caught it}]} — every defect review.verify finds; attach it. Enforced at settle (op-proof review-defects)`,
+  `  hfs-lint → starci app lint --cwd <app> --format json through the app's own install — the whole-repository lint measurement (review.verify, a refactor's full-regression-final); interface.audit/draw/asset run it with --changed <the files they audit or produce>, and security.verify over the inspected slice; each saves it as <STARCI_JOB_SCRATCH>/lint.json and attaches it (op-proof fe-lint, security-lint). security.verify also attaches <STARCI_JOB_SCRATCH>/security-findings.json {"schema":"starci/security-findings@1","findings":[{"rule","code","path","line","severity","reachability"}]} carrying every security canon finding of the lint by rule`,
+  ...capabilityPromptLines({ skillRoot, op: packet.op }),
+  ...opVerbsOfBrief(brief),
+  ...(briefUses(brief, '--isolate') ? [`  sonar → starci gate sonar scan --cwd <absolute repository root> --wait --isolate --base <commit before your first edit> --paths <owned paths> --out <STARCI_JOB_SCRATCH>/checks/sonar.json --log <STARCI_JOB_SCRATCH>/checks/sonar.txt; attach both outputs with starci kernel report. Enforced at settle: done needs outcome pass in that sonar.json; a blocked scan (unavailable true) is reported blocked, never done`] : []),
+  `  a check you cannot execute is reported as environment/unavailable evidence — a placeholder result is NOT proof of an upstream defect.`,
+  `  a repository-wide gate (typecheck, lint, tests over the whole tree) red ONLY on files you did not change and that import nothing you changed, while your scoped runs pass, is another op's defect: record that check with its real exitCode and "failing":["path[:line]", ...] plus rootCause {node:"<the op that owns that file, or its workflow>", self:false, category:"shared-change", claim, evidence:[the failing line]}; it is never an open item, never partial, never a blocker, and it never turns an otherwise green done into anything else (modules/ops/_common.yaml Bounded finish and blockers (d)). The api attributes it to the peer whose commit left it and routes it there.`,
+  `persistence: workflow state lives in the ledger, reached only through the api commands below (op-contract, report) — never open, query or copy a ledger file; the api refuses kernel verbs from an op terminal (inc-360891316369). Product changes live under owned_paths; transient operational output lives under STARCI_JOB_SCRATCH.`,
+  // Every limit below is the exact rule validateOpReport enforces (scripts/kernel/report-envelope.mjs):
+  // stated here so a worker's first report passes without a corrective second commit.
+  `reporting: write a transient starci/op-report@1 JSON envelope under STARCI_JOB_SCRATCH; starci kernel report stores the only durable report copy in the ledger:`,
+  `  {"schema":"starci/op-report@1","outcome":"${OP_REPORT_OUTCOMES.join('|')}","summary":"<=600 chars (required)","files":["unique paths under owned_paths"],"checks":[{"name","command","exitCode":<integer>,"phase":"before|after|verify (default after)","evidence":"<=400 chars","unavailable":<true only when the checker could not run at all>,"stdoutPath":"<scratch file if captured>","stderrPath":"<scratch file if captured>","outputPath":"<scratch JSON if captured>"}],`,
+  `   "open":["unfinished items"] when partial, "question":{"text","options":[],"recommended":<0-based index into options>,"recommendedReason":"<=600 chars"} when ask, "blocker":{"kind":"${BLOCKER_KINDS.join('|')}","detail"} when blocked,`,
+  `   "head":"<7-40 hex sha of git rev-parse HEAD>": the commit your checks ran on (you never commit; review.verify: the head it verified - the finish lands only that exact head, and an op checkpointed while you ran makes it stale), "credentialPending":["<env var or custody key name>"],`,
+  `   "rootCause":{"node":"<op, op#instance, or Work record id e.g. impl.<feature>.<repo>.<name>>","self":<boolean>,"category","claim":"<=600 chars","evidence":["<=400 chars"],"counterCheck","expectedFix","recheck","op":"<build op owning the fix, e.g. backend.implement>","files":["repo paths the fix touches"]} when the failure is another node's output (node, category, claim, evidence required) - the runtime routes a repair to that owner instead of re-running you,`,
+  `   "failureClass":"environment|tool|findings|product|deterministic|transient" on failed: environment = the stack under test was not up, tool = a checker could not run, product = the thing you verified is wrong (name its owner in rootCause), transient = a flake a plain re-run may clear; only transient and tool are retried as-is,`,
+  `   "claims":[{"paths":["proof files it covers; none = all"],"frs":["fr.<feature>.<name>"],"cases":["ANATOMY-2 case-1"],"shapes":["XBase#state"],"specs":["<spec path>"]}] naming what your proof files verified}`,
+  `  only these fields exist: schema, outcome, run, task, dispatch, from, summary, files, checks, open, question, blocker, branch, head, credentialPending, rootCause, claims, failureClass.`,
+  `  run/task/dispatch/from are stamped by the api — never write another job's identity.`,
+  `  A check command must be re-runnable by the runtime AFTER starci kernel report deletes your scratch: never cite STARCI_JOB_SCRATCH, a starci-job-scratch or a temp/isolated-copy path in report.checks[].command (the settler re-runs it, gets TARGET_MISSING and fails your done). Validate the real tree path (e.g. starci runtime validate .starciwork --json --strict --owned <your record paths>); a private isolated copy is evidence you describe in prose, not a declared check. Do not declare a check with a non-zero exitCode as a done claim.`,
+  `  STARCI_JOB_SCRATCH, wherever this contract names it, is your job-private OS-temp directory outside every repository: ${scratchDir ? scratchDir.replaceAll('\\', '/') : 'the scratch starci kernel op-contract names'} - a path you write out, not an environment variable. Write raw check stdout, stderr, JSON output, patches, screenshots, videos, traces and DOM snapshots there, never in .starciwork. starci kernel report puts every file it carries in the blob store and deletes the scratch; a Work record cites that output by artifact id + sha256 (the ids starci kernel report returns), never by a path.`,
+  `  In report.checks keep each real command and the exitCode the shell returned (the runtime re-runs the checks it owns and never trusts a declared exit); set unavailable:true only for a checker that could not run (missing tool, host down) - that is infra, not red; set stdoutPath, stderrPath and outputPath to the corresponding scratch files so the ledger links them to the check run. Attach raw output with --attach <absolute-path-under-STARCI_JOB_SCRATCH>, one per file or directory (a directory attaches every file under it): evidence/ (your evidence folder), runs/<runId>/ (a UAT run), captures/ and interface-audit.json are read by their place; starci kernel report answers with every artifact {id, name, sha256} for evidence.yaml to cite. Include other raw artifacts the result needs in the same submission. Do not list scratch paths in report.files, which names authored owned_paths.`,
+  ...loggingLines({ skillRoot, packet, jobLabel, repoLabel }),
+  `completion: starci kernel report sends your one Orca worker_done for you, after it filed the report (none for an ask): when your Orca worker preamble carries a --dispatch-capability flag, pass its dcap_ value as starci kernel report --dispatch-capability <that value> (never write it into a file or a report); a preamble without one needs nothing extra. Never send worker_done or any orchestration message yourself, whatever your Orca worker preamble says: a worker_done before the report row exists releases you with nothing filed. After starci kernel report answers, stay idle; never quit or exit the agent (the runtime releases your terminal).`,
+  `questions: a question for the owner is outcome ask filed with starci kernel report, then end your turn. An Orca orchestration ask reaches only the Kernel (technical guidance inside this contract) and never the owner (inc-b944cbaef24b).`,
+  `  Write <STARCI_JOB_SCRATCH>/report.json as UTF-8 (Node fs.writeFileSync, or PowerShell Out-File -Encoding utf8); Windows PowerShell Set-Content turns every non-ASCII letter into '?' and the api refuses it. File it with its attachments:`,
+  `  node ${path.join(skillRoot, 'scripts', 'kernel', 'cli.mjs')} report --repo ${repoLabel} --job ${jobLabel} --report <STARCI_JOB_SCRATCH>/report.json [--attach <absolute-scratch-file> ...]`,
+  `  read your contract the same way: node ${path.join(skillRoot, 'scripts', 'kernel', 'cli.mjs')} op-contract --repo ${repoLabel} --job ${jobLabel}`,
+  `returns: {verdict: pass|fail|blocked, evidence: [...paths], suspicion?: string} — contract: ${verdictContract}`,
+  `Return verdict + evidence paths. Cite suspicion instead of fixing out of scope — a wrong spec is a blocker, not a guess.`,
+  ].join('\n');
+}

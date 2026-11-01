@@ -1,0 +1,15 @@
+# allowlist.yaml — the ONE explicit allowlist of the runtime (schema modules/schemas/allowlist.schema.yaml).
+#
+# Every exception a runtime check keeps lives in one named section here, each entry carrying the reason it
+# exists; a reader loads its section through scripts/lib/allowlist.mjs (readAllowlist(kind)) and nothing
+# else. Every section only shrinks: an entry goes when the exception it names is gone, and no second
+# allowlist, baseline, pending or entries file is allowed (scripts/checks/check-one-allowlist.mjs).
+schema: starci/allowlist@1
+
+# Reserved: the export-to-reader exceptions of the symbol-graph check land here; shrink-only once populated.
+export-used: []
+
+# The findings of the sonar-rules self-check (scripts/checks/check-sonar-rules.mjs) that main carried when the gate landed: rule, file, a
+# fingerprint of the flagged node, its occurrence number and, for cognitive complexity, the score it may not exceed. Not a suppression
+# list: a finding that is not listed is red, a listed finding that is gone is red too, so the section only shrinks.
+sonar-rules: []

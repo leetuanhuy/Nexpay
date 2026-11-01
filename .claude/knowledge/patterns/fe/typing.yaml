@@ -1,0 +1,247 @@
+schema: starci/knowledge-source@1
+id: fe.typing
+title: Typing
+purpose: |
+  Given a frontend value, contract or boundary, which type expresses it? Wire, feature and presentation contracts are
+  distinct, and wire types are generated from be/contracts.
+appliesTo:
+  - frontend
+family: fe
+provenance:
+  reviewedAt: 2026-09-29
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/patterns/fe/transport.yaml
+    - https://www.typescriptlang.org/tsconfig
+  limitations: |
+    Static checks do not establish behavior. The compiler flags come from `@starci/tsconfig/next.json` through the managed
+    `fe/tsconfig.json`; an app never lowers one.
+rules:
+  - id: FE-TYPING-1
+    title: type for shapes
+    kind: mandatory
+    hfsRules: [R22]
+    requirement: |
+      Props and data shapes use `export type`. Hook params may use `export interface`. `fe/tsconfig.json` extends
+      `@starci/tsconfig/next.json` (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`, `noFallthroughCasesInSwitch`,
+      `allowJs: false`) and lowers no flag. Grammar uses type throughout.
+    rationale: |
+      One default keeps declarations uniform, and one flag set makes every app read the same.
+    cases:
+      - id: case-1
+        when: "Props and data shapes"
+        write: 'export type Turn = { readonly id: string; readonly role: "user" | "assistant" }'
+      - id: case-2
+        when: "Hook params"
+        write: "export interface UseQuerySalesSummarySwrParams { token?: string }"
+      - id: case-3
+        when: "Intersection"
+        write: "export type RecommendationCardData = Recommendation & { readonly title?: string }"
+    verification:
+      automated:
+        - HFS_TS_STRICT
+        - FE_TYPE_ESCAPE
+      manual: []
+    relatedExamples: []
+
+  - id: FE-TYPING-2
+    title: readonly on every field
+    kind: mandatory
+    hfsRules: [R22, R110]
+    requirement: |
+      Props fields, nested objects, collections and tuple keys are readonly.
+    rationale: |
+      Props are inputs, and mutation of an input is a bug the type system can stop.
+    cases:
+      - id: case-1
+        when: "Props field"
+        write: 'readonly measure?: "form" | "formCompact"'
+      - id: case-2
+        when: "Nested object"
+        write: "readonly action: { readonly href: string; readonly label: string }"
+      - id: case-3
+        when: "Collection"
+        write: "readonly turns: ReadonlyArray<Turn>, readonly states: Readonly<Record<ChatState, string>>"
+      - id: case-4
+        when: "Tuple key"
+        write: "_key: readonly [string, string]"
+    verification:
+      automated:
+        - HFS_TS_STRICT
+        - FE_TYPE_ESCAPE
+        - FE_PROPS_MUTABLE
+      manual:
+        - Resolve an imported or inherited props shape and require readonly fields at the declaring source.
+    relatedExamples: []
+
+  - id: FE-TYPING-3
+    title: Literal unions, not booleans, for state
+    kind: mandatory
+    hfsRules: [R65, R92]
+    requirement: |
+      Component state and mode vocabularies are string-literal unions with exported inventories. Truly binary flags use is or
+      has booleans. Grammar closed vocabularies use unions plus `as const` maps.
+    rationale: |
+      A union names every drawn shape, and a boolean pair permits combinations nobody drew.
+    cases:
+      - id: case-1
+        when: "Component state"
+        write: 'export type HandoffBlockState = "prepared" | "sent" | "returned": shapes only, no data status'
+      - id: case-2
+        when: "Inventory of the union"
+        write: "export const HANDOFF_BLOCK_STATES: ReadonlyArray<HandoffBlockState> = [...] beside the type"
+      - id: case-3
+        when: "Flag that is truly binary"
+        write: "readonly isLoading?: boolean, readonly isPartial?: boolean"
+    verification:
+      automated:
+        - FE_SIZE_AND_STATE_BUDGET
+        - FE_LIST_KEY
+        - FE_EFFECT_CLEANUP
+        - FE_SWALLOWED_ERROR
+        - FE_CONSOLE_CALL
+        - FE_COMPONENT_API
+        - FE_COMPONENT_WORLD_OWNERSHIP
+        - FE_WORLD_OWNER_RENDER_BOUNDARY
+        - FE_CONNECTED_BLOCK_RENDER_PAIR
+        - FE_PURE_REACHES_DATA
+        - FE_PURE_WORLD_HOOK
+        - FE_PURE_WORLD_IMPORT
+      manual: []
+    relatedExamples: []
+
+  - id: FE-TYPING-4
+    title: Arrays
+    kind: mandatory
+    hfsRules: [R22]
+    requirement: |
+      Array types use `Array<T>` or `ReadonlyArray<T>`, never `T[]`. Frozen literals use `as const`.
+    rationale: |
+      One spelling removes a review comment.
+    cases:
+      - id: case-1
+        when: "Any array type"
+        write: "ReadonlyArray<string>, Array<T> (lint @typescript-eslint/array-type with the generic option)"
+    verification:
+      automated:
+        - HFS_TS_STRICT
+        - FE_TYPE_ESCAPE
+      manual: []
+    relatedExamples: []
+
+  - id: FE-TYPING-5
+    title: Inferred and declared
+    kind: mandatory
+    hfsRules: [R22]
+    requirement: |
+      Component returns are inferred. Helper returns are declared when primitive. Hook returns are inferred from the data
+      client generic. Async utilities declare their Promise return. Narrowed literals use `as const` in switch results.
+    rationale: |
+      Declare what documents a boundary; infer what the compiler already knows.
+    cases:
+      - id: case-1
+        when: "Component return"
+        write: "inferred; no JSX.Element annotation"
+      - id: case-2
+        when: "Helper return"
+        write: "declared when primitive: (state: ChatState): boolean =>"
+      - id: case-3
+        when: "Narrowed literal"
+        write: 'return { mode: "signIn" as const, step: "code" as const } so a switch returns a union, not string'
+    verification:
+      automated:
+        - HFS_TS_STRICT
+        - FE_TYPE_ESCAPE
+      manual: []
+    relatedExamples: []
+
+  - id: FE-TYPING-6
+    title: No casts
+    kind: mandatory
+    hfsRules: [R18, R52, R22]
+    requirement: |
+      Double casts, `as GraphqlResult<T>` and any cast of a response are forbidden; `@ts-ignore` and `@ts-expect-error` do
+      not exist. A component that ignores its props declares no parameter; `void props`, an underscore
+      parameter and a cast are not used.
+    rationale: |
+      A cast asserts what the compiler cannot verify, and a generated wire type makes it unnecessary.
+    cases:
+      - id: case-1
+        when: "A response"
+        write: "use the generated wire type from modules/api; do not cast a response"
+      - id: case-3
+        when: "A component takes no input"
+        write: "Declare it with no parameter (export const EmptyState = () => ...); never void props or an unused props parameter."
+    verification:
+      automated:
+        - HFS_INLINE_SUPPRESSION
+        - FE_WIRE_GENERATED
+        - HFS_TS_STRICT
+        - FE_TYPE_ESCAPE
+      manual: []
+    relatedExamples: []
+
+  - id: FE-TYPING-7
+    title: Enums
+    kind: mandatory
+    hfsRules: [R52, R26]
+    requirement: |
+      Feature and presentation vocabulary uses string-literal unions or discriminated objects. Generated or wire enums remain
+      inside the transport adapter and are mapped to feature and view vocabulary. A presentational props contract does not
+      runtime-import a transport enum.
+    rationale: |
+      A wire enum in presentation couples every screen to a backend rename.
+    cases:
+      - id: case-1
+        when: "Component vocabulary"
+        write: "never an enum; a string-literal union"
+      - id: case-2
+        when: "A GraphQL or provider enum"
+        write: "Keep the generated enum in modules/api, then map it at the owning hook or module boundary to a presentation literal."
+    verification:
+      automated:
+        - FE_WIRE_GENERATED
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+      manual: []
+    relatedExamples: []
+
+  - id: FE-TYPING-8
+    title: Wire, feature and presentation contracts are distinct
+    kind: mandatory
+    hfsRules: [R52, R23, R26, R92]
+    requirement: |
+      Schema-derived result and variable types and typed operation documents belong to the transport boundary and are
+      generated from `be/contracts/` by the root `codegen` into the ignored `__generated__/`. A feature owns framework-neutral input,
+      result, failure and view models. A mapper translates wire values to that feature contract. Presentation consumes resolved
+      feature and view types; Grammar consumes only product-agnostic visual contracts. A handwritten wire type does not exist.
+    rationale: |
+      Protocol, feature and presentation contracts evolve at different boundaries.
+    cases:
+      - id: case-1
+        when: "GraphQL codegen"
+        write: "Use the generated TypedDocumentNode documents and result and variable types in modules/api."
+      - id: case-2
+        when: "A feature exposes authentication state"
+        write: "Export feature-owned AuthMode, AuthFailure and view types, not GraphQL response types."
+      - id: case-3
+        when: "A pure visual needs a provider choice"
+        write: "Accept a feature or view literal union and map it to the provider enum in the data adapter."
+    verification:
+      automated:
+        - FE_WIRE_GENERATED
+        - HFS_CONTRACT_SNAPSHOT_DRIFT
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+        - FE_COMPONENT_API
+        - FE_COMPONENT_WORLD_OWNERSHIP
+        - FE_WORLD_OWNER_RENDER_BOUNDARY
+        - FE_CONNECTED_BLOCK_RENDER_PAIR
+        - FE_PURE_REACHES_DATA
+        - FE_PURE_WORLD_HOOK
+        - FE_PURE_WORLD_IMPORT
+      manual:
+        - Confirm generated wire types do not become the feature or presentation source of truth.
+    relatedExamples: []

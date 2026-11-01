@@ -1,0 +1,207 @@
+schema: starci/knowledge-source@1
+id: be.comment
+title: Comment
+purpose: |-
+  Given a backend declaration or statement, does it carry a comment, where does it sit and what does it say? Comments
+  state responsibility and consequence, never the name, and never switch a rule off.
+appliesTo:
+  - backend
+family: be
+provenance:
+  reviewedAt: 2026-09-30
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/rules.yaml
+    - knowledge/patterns/be/naming.yaml
+    - owner-locked BE convention 2026-09-30
+  limitations: |-
+    A lint rule proves that a comment exists and has the right form. Whether it explains the actual consequence is agent
+    review.
+rules:
+  - id: BE-COMMENT-1
+    title: Every export has a docblock, placed after the decorators
+    kind: mandatory
+    hfsRules: [R89]
+    requirement: |-
+      Every export carries a docblock. On a decorated class the block sits between the class decorators and
+      `export class`.
+    rationale: |-
+      The docblock is what an editor shows at every call site.
+    cases:
+      - id: case-1
+        when: A resolver
+        write: |-
+          @Resolver()
+          /**
+           * GraphQL door of placeOrder for the current customer.
+           */
+          export class PlaceOrderResolver
+      - id: case-2
+        when: A module
+        write: |-
+          @Module({ imports: [CheckoutModule] })
+          /** Registers the GraphQL transport of the checkout feature. */
+          export class CheckoutGraphqlModule
+      - id: case-3
+        when: An undecorated export
+        write: |-
+          /** Plain application request for placing an order. */
+          export type PlaceOrderRequest
+    verification:
+      automated:
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+      manual: []
+    relatedExamples: []
+  - id: BE-COMMENT-2
+    title: The docblock states responsibility and invariant, not the name
+    kind: mandatory
+    hfsRules: [R89]
+    requirement: |-
+      Docblocks explain why a declaration exists, what must not happen, who throws it or why a field is nullable. They
+      never restate the name.
+    rationale: |-
+      A restated name adds noise and hides the missing reason.
+    cases:
+      - id: case-1
+        when: Why a field is nullable
+        write: '`order` is null when the credit check refuses, because the result carries the refusal in `reason` instead of throwing.'
+      - id: case-2
+        when: What must not happen
+        write: 'Fails the request when the order id is unknown, because downstream must not settle a ghost order.'
+      - id: case-3
+        when: Who throws it
+        write: 'Thrown by `QuotaService.consume` when no allowance remains in any sliding window.'
+    verification:
+      automated:
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+      manual:
+        - Review whether the docblock says something the name does not.
+    relatedExamples: []
+  - id: BE-COMMENT-3
+    title: Methods and fields
+    kind: mandatory
+    hfsRules: [R89, R109]
+    requirement: |-
+      Methods and declared class, interface and type fields carry non-empty responsibility docblocks. Generic parameters
+      have named `@template` documentation. Parameter and return explanations and cross-references are added where
+      useful.
+    rationale: |-
+      Public surface without a stated responsibility cannot be reviewed.
+    cases:
+      - id: case-1
+        when: A method
+        write: |-
+          /**
+           * Places the order and reserves stock.
+           * @param input - The plain order input.
+           * @returns The placed order id, or the refusal reason.
+           */
+      - id: case-2
+        when: A field
+        write: '/** Stable error code that transports map to a status. */ readonly code: string'
+    verification:
+      automated:
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+        - BE_MEMBER_DOC_MISSING
+      manual:
+        - Review responsibility, useful parameter and return explanation and cross-reference meaning.
+    relatedExamples: []
+  - id: BE-COMMENT-4
+    title: Enum members are each documented
+    kind: mandatory
+    hfsRules: [R89]
+    requirement: |-
+      Every enum member has a docblock.
+    rationale: |-
+      A serialized value needs its meaning stated where it is defined.
+    cases:
+      - id: case-1
+        when: An enum
+        write: |-
+          /** Order accepted and waiting for payment. */
+          Open = "open",
+          /** Payment settled; the order is final. */
+          Settled = "settled"
+    verification:
+      automated:
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+      manual: []
+    relatedExamples: []
+  - id: BE-COMMENT-5
+    title: Line comments are prose about why
+    kind: mandatory
+    hfsRules: [R89]
+    requirement: |-
+      Prose line comments sit above code and their first ASCII letter is lowercase. Recognized triple-slash compiler
+      references are structured metadata. An agent reviews whether the prose explains a consequence that motivates the
+      code.
+    rationale: |-
+      A comment that says what the next line does adds nothing; the reason and the consequence are what the code cannot say.
+    cases:
+      - id: case-1
+        when: A guard
+        write: '// reject unauthenticated callers up front, because orders are per-customer'
+      - id: case-2
+        when: A constraint
+        write: '// idempotent add, because a second row would violate UQ_order_lines_order_sku'
+    verification:
+      automated:
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+      manual:
+        - Review why the prose is needed and whether it explains the actual consequence.
+    relatedExamples: []
+  - id: BE-COMMENT-6
+    title: Block comments for multi-paragraph reasoning inside a body
+    kind: mandatory
+    hfsRules: [R89]
+    requirement: |-
+      Reasoning block comments inside a function body open with a capitalized first ASCII letter. Multi-paragraph
+      reasoning uses a block. Claim, evidence and corrected history where applicable are content reviewed by an agent.
+    rationale: |-
+      A claim with its evidence lets the next reader trust or replace the code.
+    cases:
+      - id: case-1
+        when: A non-obvious decision
+        write: |-
+          /*
+           * Either identifier addresses the same object, because the synchronizer writes both keys.
+           * An earlier reading refused anything but the display id; that was wrong about the bucket.
+           */
+    verification:
+      automated:
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+      manual:
+        - Review the claim, the evidence and the useful corrected history.
+    relatedExamples: []
+  - id: BE-COMMENT-7
+    title: What a comment never contains
+    kind: mandatory
+    hfsRules: [R18, R89, R96]
+    requirement: |-
+      Comments stay ASCII with no emoji or AI symbols. There is no inline suppression of any kind: no `eslint-disable`,
+      no `@ts-ignore`, no `@ts-expect-error`, no escape annotation. A rule that is wrong is changed in `.claude`, never
+      switched off in a file. No restated-name docblocks.
+    rationale: |-
+      An inline switch makes a rule a convention. HFS has no exception mechanism, so the only fix is the code or the
+      rule.
+    cases:
+      - id: case-1
+        when: Non-ASCII
+        write: Identifiers, string literals, comments and test titles are English; the source rules for Vietnamese letters, AI symbols and emoji fail otherwise; Vietnamese text lives only in `messages/` catalogs and in the `be/src/tests/fixtures/i18n/` fixtures slot.
+      - id: case-2
+        when: A suppression
+        write: 'A line like `eslint-disable-next-line` fails HFS_INLINE_SUPPRESSION; fix the code.'
+    verification:
+      automated:
+        - HFS_INLINE_SUPPRESSION
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+        - HFS_DOC_NOT_ENGLISH
+      manual: []
+    relatedExamples: []

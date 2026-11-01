@@ -1,0 +1,47 @@
+#!/usr/bin/env node
+// Deep map WRAP WT5: lane worktrees are listed by Orca; merged, clean and idle stay git facts.
+// worktree-ps.mjs — the calls.yaml `worktree-ps` call as a callable function.
+// Internal entry: spawned by scripts/machine/worktree-orca.mjs; not invoked directly.
+// Args: [--limit <n>]
+// Every worktree Orca knows across its covered hosts, with what the GC judges ownership and liveness by: the comment
+// (the runtime's ownership stamp), liveTerminalCount and lastActivityAt. A page that is truncated or omits a host proves
+// nothing about a tree it does not list (scripts/lib/orca-orphans.mjs psCoverage).
+// Returns {ok, worktrees: [{id, repoId, hostId, path, branch, comment, isMainWorktree, liveTerminalCount, lastActivityAt,
+// status}], truncated, omittedHostIds, error, hostUnavailable}.
+import { orcaCall } from './lib.mjs';
+import { arg } from '../../lib/cli-arg.mjs';
+
+/** Rows asked per page: above any host's real count, so a page is complete unless Orca says it truncated it. */
+const PS_LIMIT = 10000;
+
+/**
+ * Read cross-host worktree accounting with ownership comments, activity, and host coverage metadata.
+ * GC must check truncated and omittedHostIds before concluding that an unlisted tree is absent;
+ * normalized counts alone establish neither runtime ownership nor safe removal.
+ * @param {object} [input] - Optional inventory limit forwarded to Orca.
+ * @returns {object} ok, normalized rows, truncation/omitted-host facts, error, and hostUnavailable.
+ */
+export function worktreePs({ limit = PS_LIMIT } = {}) {
+  const r = orcaCall('worktree-ps', { limit });
+  const rows = Array.isArray(r.result?.worktrees) ? r.result.worktrees : [];
+  return {
+    ok: r.outcome === 'ok',
+    worktrees: rows.map((w) => ({
+      id: w.worktreeId ?? w.id ?? null, repoId: w.repoId ?? null, hostId: w.hostId ?? 'local', path: w.path ?? null,
+      branch: w.branch ? String(w.branch).replace(/^refs\/heads\//, '') : null, comment: typeof w.comment === 'string' ? w.comment : '',
+      isMainWorktree: w.isMainWorktree === true, liveTerminalCount: Number(w.liveTerminalCount) || 0, lastActivityAt: Number(w.lastActivityAt) || null,
+      status: w.status ?? null,
+    })),
+    truncated: r.result?.truncated === true,
+    omittedHostIds: Array.isArray(r.result?.hostScope?.omittedHostIds) ? r.result.hostScope.omittedHostIds.map(String) : [],
+    error: r.error,
+    hostUnavailable: r.hostUnavailable === true,
+  };
+}
+
+if (process.argv[1]?.endsWith('worktree-ps.mjs')) {
+  const n = Number(arg(process.argv.slice(2), 'limit'));
+  const out = worktreePs(Number.isFinite(n) && n > 0 ? { limit: n } : {});
+  console.log(JSON.stringify(out, null, 2));
+  process.exit(out.ok ? 0 : 1);
+}

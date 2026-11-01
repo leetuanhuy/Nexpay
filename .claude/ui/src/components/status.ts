@@ -1,0 +1,85 @@
+import type { UiState } from '../contract';
+import { t } from '../i18n/t';
+
+/** Status vocabulary produced by ui/api/pipeline.mjs and used by every surface. */
+export type Status = 'success' | 'running' | 'settling' | 'queued' | 'paused' | 'stopped' | 'retry' | 'failed' | 'blocked' | 'awaiting-owner' | 'planned' | 'deferred' | 'external' | 'dropped' | 'rejected' | 'warning' | 'unknown';
+/** Colour family. One tone = one token set in style.css ([data-tone=…]). */
+export type Tone = 'success' | 'running' | 'queued' | 'failed' | 'warning' | 'skipped' | 'owner';
+
+/** The colour family each status is drawn in, so one status always looks the same on every surface. */
+export const statusTone: Record<Status, Tone> = {
+  success: 'success', running: 'running', settling: 'running', queued: 'queued', retry: 'warning',
+  paused: 'warning', stopped: 'skipped',
+  failed: 'failed', blocked: 'failed', 'awaiting-owner': 'owner', planned: 'queued', deferred: 'skipped', external: 'skipped', dropped: 'skipped', rejected: 'skipped', warning: 'warning', unknown: 'queued',
+};
+
+/** The translated word shown for each status. */
+export const statusLabels: Record<Status, string> = {
+  success: t('Passed'), running: t('Running'), settling: t('settling'), queued: t('Queued'), retry: t('Waiting to retry'),
+  paused: t('Paused'), stopped: t('Stopped'),
+  failed: t('Failed'), blocked: t('Blocked'), 'awaiting-owner': t('Awaiting the owner'), planned: t('Not reached yet'), deferred: t('Deferred'), external: t('External'), dropped: t('Dropped'), rejected: t('Rejected at handoff'), warning: t('Warning'), unknown: t('Unknown'),
+};
+
+/** Statuses that are "live" (animated dot). */
+export const liveStatuses = new Set<Status>(['running', 'settling']);
+
+/** Maps a row's display state (including the two attempt-only ones) to the status vocabulary the chips speak. */
+export const statusFromUi = (ui: UiState | 'awaiting-owner' | 'rejected'): Status => {
+  switch (ui) {
+    case 'awaiting-owner': return 'awaiting-owner';
+    case 'rejected': return 'rejected';
+    case 'ok': case 'done': return 'success';
+    case 'running': return 'running';
+    case 'waiting': return 'queued';
+    case 'warn': return 'warning';
+    case 'bad': return 'failed';
+    case 'unknown':
+    default: return 'unknown';
+  }
+};
+
+/** The verdict chip. `ui` is v_op_history.ui (or a brief's status): 'awaiting-owner' / 'rejected' win over the raw verdict (docs/why.md). */
+export const statusFromVerdict = (verdict: string | null | undefined, open = false, ui?: string | null): Status => {
+  if (ui === 'awaiting-owner') return 'awaiting-owner';
+  if (ui === 'rejected') return 'rejected';
+  if (verdict === 'pass') return 'success';
+  if (verdict === 'blocked') return 'blocked';
+  if (verdict === 'fail' || verdict === 'partial') return 'failed';
+  if (verdict === 'dropped' || verdict === 'cancelled') return 'dropped';
+  return open ? 'running' : 'unknown';
+};
+
+/** An Op's self-reported outcome (report) — shown separately from the verdict. */
+export const statusFromOutcome = (outcome: string | null | undefined): Status => {
+  if (outcome === 'done') return 'success';
+  if (outcome === 'blocked') return 'blocked';
+  if (outcome === 'failed') return 'failed';
+  if (outcome === 'partial' || outcome === 'ask') return 'retry';
+  return 'unknown';
+};
+
+/** Maps a check's recorded status to a chip status; a skipped check reads as deferred and an unavailable one as waiting to retry. */
+export const statusFromCheck = (status: string | null | undefined): Status => {
+  if (status === 'pass') return 'success';
+  if (status === 'fail' || status === 'error') return 'failed';
+  if (status === 'skipped') return 'deferred';
+  if (status === 'unavailable') return 'retry';
+  return 'unknown';
+};
+
+/** Maps a unit's lifecycle state to a chip status, treating reported units as still running and deciding ones as settling. */
+export const statusFromUnit = (state: string): Status => {
+  switch (state) {
+    case 'done': return 'success';
+    case 'running': case 'reported': return 'running';
+    case 'deciding': return 'settling';
+    case 'failed': return 'failed';
+    case 'dropped': return 'dropped';
+    case 'planned': return 'planned';
+    case 'queued': return 'queued';
+    default: return 'unknown';
+  }
+};
+
+/** CSS custom property for a tone's ink colour, for SVG fills/strokes. */
+export const toneVar = (tone: Tone, part: '' | '-bg' | '-line' = '') => `var(--status-${tone}${part})`;

@@ -1,0 +1,640 @@
+schema: starci/knowledge-source@1
+id: be.test
+title: Test
+purpose: |-
+  Given a backend unit, where does its spec live, how is the subject built, what does it assert and what does it leave
+  alone? Four test kinds exist by folder. The spec-required roles of `ruleParams.be.unitRoles` owe a unit spec beside them
+  (any other `ruleParams.be.logicRoles` file of a measured slot may have one), and the unit run measures the logic roles of
+  the `coverage: required` slots at 100 per file (R204). Integration, e2e and contract run by hand.
+appliesTo:
+  - backend
+family: be
+# The slot ids this topic teaches (knowledge/hfs/slots.yaml); scripts/gates/read-digest.mjs inverts these
+# into the READ-step slot -> pattern-topic map (knowledge/op-gate.yaml kinds), each slot's topics in index.yaml order.
+slots: [be.cli, be.tests, be.root-e2e]
+provenance:
+  reviewedAt: 2026-09-30
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/slots.yaml
+    - knowledge/hfs/rules.yaml
+    - knowledge/patterns/be/folder.yaml
+    - owner-locked BE convention 2026-09-30
+    - owner-locked unit test standard (lane UT)
+    - packages/jest-preset/README.md
+    - https://docs.nestjs.com/fundamentals/testing
+    - https://jestjs.io/docs/configuration
+  limitations: |-
+    A green spec proves what it exercised. A mocked manager is not database isolation, and a stubbed module is not
+    registration evidence. Which behavior needs a test is decided from the effect and the failure risk, never from a
+    file count.
+
+    Policy 2026-09-29. Write or update the spec of the source you add or change, even when the goal does not ask for it,
+    and run only those specs and the specs that import them. The whole unit suite runs only at push. E2E runs only when
+    asked.
+rules:
+  - id: BE-TEST-1
+    title: Placement, kinds and topology
+    kind: mandatory
+    hfsRules: [R12, R47, R48, R149, R112]
+    requirement: |-
+      Four test kinds exist and the folder and the file suffix always agree. A unit spec sits beside its subject as
+      `<name>.<role>.spec.ts`: REQUIRED beside every file of a spec-required role of `ruleParams.be.unitRoles` of
+      knowledge/hfs/slots.yaml (`<name>.service.spec.ts` beside every `<name>.service.ts`, `<name>.cli.spec.ts` beside a cli
+      command `<name>.cli.ts` of `be.cli` — an action runner, cli.yaml) and beside a webhook or realtime door that has no
+      service of its own (`<provider>.webhook.spec.ts`, `<channel>.gateway.spec.ts`, `<channel>.subscription.spec.ts`); OPTIONAL
+      beside any other file of a `ruleParams.be.logicRoles` role inside a slot whose `coverage` is `required` (a policy, a
+      client, a guard, a mapper: it owes 100 per file, not a spec of its own, so it may also be covered through its service's
+      spec). Any other `*.spec.ts` outside the `be.tests.e2e`, `be.tests.integration`,
+      `be.tests.contract` and `be.tests.world` slots is a finding (R47 `unit-test-colocated`), including specs in apps.
+      Integration is `be/src/tests/integration/<capability>/*.integration-spec.ts` (capability modules on the real infrastructure,
+      no HTTP door of ours, through `useTestWorld({ modules })`; real peer apps the client calls join as `apps`; every integration
+      of `src/modules/integrations/<provider>/` has one, R112). E2E is `be/src/tests/e2e/<area>/*.e2e-spec.ts` (through
+      `useTestWorld({ apps })`). Contract is `be/src/tests/contract/<provider>/*.contract-spec.ts` (provider sandboxes, failing
+      without sandbox config). `be/src/tests/world/` is the only test infrastructure (`global-setup.ts`, `global-teardown.ts`,
+      `use-test-world.ts`, `fakes/<provider>/` network-edge fakes of external SaaS with `failNext`, `replayWebhook`, `delay`,
+      and `test-world.config.ts`, the declaration of the test-world library, `export const { useTestWorld, useSandbox } = defineTestWorld({ stack, stacks, fakes, ... })`); every service of the
+      app's own stack (`.starcistacks/<env>`) runs real in the world, started or attached (warm-stack mode) by the
+      library behind toxiproxy, with images and versions read from the stack at run time; `be/src/tests/fixtures/` holds typed
+      doubles and builders. There is no `live/` folder and no `be/src/tests/e2e/world`. One `be/jest.config.js` uses the
+      preset `@starci/jest-preset` and declares exactly four projects: `unit`, `integration`, `e2e` and `contract`. The unit
+      project maps no module into the `be.tests.world`, `be.tests.integration`, `be.tests.e2e` or `be.tests.contract` slots. Scripts are `test` (unit), `test:integration`,
+      `test:e2e` and `test:contract`, each of the last three entered through `starci gate run --root <app> --tests <name>`;
+      `test:contract` is never part of `test` or `test:e2e`. Integration, e2e and contract run by hand: none of their specs,
+      code or dependencies enters husky, lint-staged, the default typecheck, coverage, or an automatic CI
+      trigger; a kept e2e workflow is `workflow_dispatch` only. `be/tsconfig.json` excludes the trees of `be.tests.world`,
+      `be.tests.integration`, `be.tests.e2e` and `be.tests.contract`, `be/src/tests/tsconfig.json` backs `typecheck:tests`,
+      and coverage and `test` read the unit project only (BE-TEST-13).
+    rationale: |-
+      One placement rule makes discovery mechanical, and keeping integration, e2e and contract out of the automatic gates keeps the routine
+      gates fast and deterministic while the manual gates still refuse to run on code that does not type check.
+    cases:
+      - id: case-1
+        when: Unit
+        write: 'commission.service.spec.ts beside commission.service.ts; run.cli.spec.ts beside features/cli/migrate/subs/run.cli.ts'
+      - id: case-2
+        when: Integration
+        write: be/src/tests/integration/inbox/claim-once.integration-spec.ts calling useTestWorld({ modules }) and asserting rows through world.db
+      - id: case-3
+        when: E2E
+        write: be/src/tests/e2e/checkout/place-order.e2e-spec.ts calling useTestWorld({ apps }) with globalSetup in be/src/tests/world/
+      - id: case-4
+        when: Projects
+        write: 'be/jest.config.js is `module.exports = require("@starci/jest-preset").starciJestConfig()`, declaring the projects unit, integration, e2e and contract, with no second jest config and no per-lane script.'
+      - id: case-5
+        when: Type checking
+        write: '`typecheck` covers app, unit specs and fixtures at pre-push and CI; `typecheck:tests` runs `tsc -p be/src/tests/tsconfig.json` and `test:integration`, `test:e2e` and `test:contract` depend on it, so they never run on code that does not compile.'
+    verification:
+      automated:
+        - HFS_E2E_IN_AUTOMATIC_GATE
+        - BE_TEST_TOPOLOGY
+        - BE_CONTRACT_UNGUARDED
+        - BE_UNIT_SPEC_NOT_STAGED
+        - BE_SPEC_QUALITY
+        - BE_CLI_COMMAND_SHAPE
+        - BE_INTEGRATION_SPEC_MISSING
+      manual:
+        - Record which transport, service, database and external boundary an e2e run actually exercised.
+    relatedExamples: []
+  - id: BE-TEST-2
+    title: Build the subject through the Nest testing module, providers only
+    kind: mandatory
+    hfsRules: [R48, R85, R281]
+    requirement: |-
+      A unit spec of every declared logic role, including a policy, mapper, guard or integration client, builds its subject
+      with `Test.createTestingModule({ providers: [Service, { provide: TOKEN, useValue: double },
+      ...] }).compile()` and takes the subject with `moduleRef.get(Service)`. There is no `new` of the service, no `imports: [...]`
+      of a real module, no `overrideProvider` and no `overrideModule`: the module holds the subject and its doubles and nothing
+      else, so dependency injection resolves the same constructor parameters that production resolves. The spec calls the
+      service's public methods and asserts the returned outcome or the state the doubles recorded; it never calls a protected
+      hook and never reads source code with `fs` or a regular expression to assert an architecture rule (architecture is lint).
+    rationale: |-
+      A subject built by hand can drift from its real constructor and decorators. Building it through the testing module keeps the
+      spec on the real injection contract, and refusing `imports` and `overrideProvider` keeps the module from quietly growing into
+      a partial application.
+    cases:
+      - id: case-1
+        when: A real module is tempting
+        write: 'list the doubles as providers instead: `imports: [PurchaseModule]` and `overrideProvider(TOKEN)` are findings (spec-builds-with-testing-module, spec-no-module-mock)'
+      - id: case-2
+        when: The call
+        write: 'await service.accrue(params); assert the returned Outcome with toSucceedWith or toBeRefused, never a protected hook'
+    verification:
+      automated:
+        - BE_SPEC_QUALITY
+        - BE_RAW_INJECT
+        - BE_SPEC_FORM_ALL_ROLES
+      manual:
+        - Review that a double matches the real dependency contract.
+    relatedExamples: [service-spec]
+  - id: BE-TEST-3
+    title: The providers list equals the constructor dependencies
+    kind: mandatory
+    hfsRules: [R48, R85]
+    requirement: |-
+      A unit spec injects only what the service constructor needs. The providers other than the subject equal the constructor
+      dependencies exactly: a missing provider and an extra provider are both findings. Each token comes from a constructor
+      `Inject*()` custom decorator declared in the owner's `<cap>.decorators.ts` (R85), and every `Inject*()` token is exported so a
+      spec can provide it. A dependency the service does not hold (the clock that belongs to `fakeCache(clock)`, an outbox the
+      service never touches) is not provided.
+    rationale: |-
+      A provider the constructor does not ask for hides a dependency the service lost, and a missing one is a spec that only
+      passes because the framework failed to resolve nothing. Equality of the two lists makes the constructor the single source.
+    cases:
+      - id: case-1
+        when: Constructor with an entity manager and a clock
+        write: 'providers: [CommissionService, { provide: PRIMARY_ENTITY_MANAGER, useValue: entityManager }, { provide: CLOCK, useValue: clock }] and nothing more'
+      - id: case-2
+        when: Constructor with a cache and a Keycloak admin wrapper
+        write: 'providers: [MemberProfileService, { provide: CACHE, useValue: cache }, { provide: KEYCLOAK_ADMIN, useValue: keycloakAdmin }]; the clock is owned by fakeCache(clock), not provided'
+      - id: case-3
+        when: A token a spec must provide
+        write: 'export const CLOCK: unique symbol = Symbol("CLOCK") in the owner, reached by the constructor through InjectClock() in clock.decorators.ts'
+    verification:
+      automated:
+        - BE_SPEC_QUALITY
+        - BE_RAW_INJECT
+      manual: []
+    relatedExamples: [service-spec]
+  - id: BE-TEST-4
+    title: Doubles come from the kit; the ban list
+    kind: mandatory
+    hfsRules: [R48, R72, R79, R83]
+    requirement: |-
+      Doubles come only from `@starci/jest-preset` (package root exports): `mockEntityManager`, `fakeTransaction`, `fakeCache`,
+      `fakeLock`, `recordingEventBus`, `recordingQueueOutbox`, `fakeInbox`, `FakeClock`, `fakeIds`, `mock<T>()`, `builder` and the Outcome matchers (`toBeRefused`,
+      `toSucceedWith`). A `useValue` for a known infrastructure token comes from its matching kit double: `CACHE` -> `fakeCache`,
+      `*ENTITY_MANAGER` -> `mockEntityManager`, `CLOCK` -> `FakeClock`, `EVENT_BUS` -> `recordingEventBus`, `QUEUE_OUTBOX` -> `recordingQueueOutbox`, `INBOX` -> `fakeInbox`, lock, lease, fence and hold
+      -> `fakeLock`, ids -> `fakeIds`, options tokens -> `builder(...)` or a plain literal, everything else -> `mock<T>()`.
+      `mockEntityManager({ method: [Entity, result] })` is typed against the entity (`query: [sql, rows]`; a list of pairs answers
+      several calls), every method is a `jest.fn`, and any unstubbed method throws an error naming it, so the absence of a stub
+      proves the absence of that database call; `create(Entity, plain)` works unstubbed. `fakeTransaction(em)` runs
+      `em.transaction(work)` with a scoped view and records `outcomes`, `commits`, `rollbacks`, `committedWrites` and
+      `rolledBackWrites`. `fakeCache(clock)` is a behavioural cache (JSON round trip, TTL from the clock, `has`, `ttlOf`, `keys`).
+      `fakeLock(clock)` has acquire, contention, release, expiry and fence (`isHeld`, `holderOf`, `fenceOf`). `recordingEventBus()`
+      exposes `events` (deduplicated by event name and event id), `writes` and `entries` with `inTransaction`; `recordingQueueOutbox()` exposes `jobs`, `jobsOf(queue)` and `entries`. The ban list: no cast of
+      any kind (`as X`, `as never`, `as unknown as`, `x!`), no ambient clock (`Date.now()`, an argument-less `new Date()`), no
+      `jest.mock` of an own module or of a third-party library, no `process.env`, no ad-hoc `jest.fn` object standing in for an
+      EntityManager, and no `fs` read of source.
+    rationale: |-
+      One double per kind of dependency means a stale spec fails to compile instead of staying green through a cast, and the
+      strict fakes make an unexpected call a test failure rather than a silent `undefined`.
+    cases:
+      - id: case-1
+        when: Entity manager
+        write: 'const entityManager = mockEntityManager({ findOne: [Accrual, null], query: ["select 1", []] }); expect(entityManager.save).not.toHaveBeenCalled()'
+      - id: case-2
+        when: Time and ids
+        write: 'const clock = new FakeClock("2026-01-01T00:00:00.000Z"); clock.advance(300_000); const ids = fakeIds()'
+      - id: case-3
+        when: Cache and lock
+        write: 'const cache = fakeCache(clock); expect(cache.ttlOf(key)).toBe(300); const lock = fakeLock(clock)'
+      - id: case-4
+        when: Everything else
+        write: 'const keycloakAdmin = mock<KeycloakAdminService>(); keycloakAdmin.findMember.mockResolvedValue(member)'
+      - id: case-5
+        when: The outcome
+        write: 'expect(outcome).toBeRefused("COMMISSION_SELF_REFERRAL"); expect(outcome).toSucceedWith(accrual)'
+    verification:
+      automated:
+        - BE_SPEC_QUALITY
+        - BE_TYPE_ESCAPE
+        - BE_AMBIENT_CLOCK
+        - BE_UNNAMED_DATA_ACCESS
+      manual:
+        - Review that a double matches the real dependency contract.
+    relatedExamples: []
+  - id: BE-TEST-5
+    title: Dependency kind, double and mandatory cases
+    kind: mandatory
+    hfsRules: [R48, R47, R79]
+    requirement: |-
+      Every service spec covers the mandatory cases of each dependency kind its constructor holds, with the double the table names.
+      The table is built from every constructor of the two product codebases it was calibrated on (574 services and 67 services). Cases that apply to every
+      method: input boundaries (0, empty, max, rounding), paging and ordering, every declared Outcome, every domain throw and an
+      idempotent re-run. Together these equal 100% branch coverage.
+    rationale: |-
+      A fixed list of cases per dependency kind turns "write a good test" into a checklist, so the branches a service takes on
+      its dependencies are the branches its spec proves.
+    cases:
+      - id: case-1
+        when: 1. Named EntityManager
+        write: 'Double: mockEntityManager (throws on unstubbed methods). Cases: found / not found / ownership `where` / take+order / exact write fields / nothing written on refusal / DB error handling.'
+      - id: case-2
+        when: 2. Transaction runner
+        write: 'Double: fakeTransaction(). Cases: commit / rollback when the body throws, with no side effects / outbox written inside the transaction.'
+      - id: case-3
+        when: 3. Options tokens (~50 `Inject*Options`)
+        write: 'Double: REAL values from builders. Cases: every flag branch / optional integration absent / boundary values.'
+      - id: case-4
+        when: 4. Clock and id
+        write: 'Double: FakeClock, fakeIds(). Cases: before, at and after deadlines / expiry / ordering.'
+      - id: case-5
+        when: 5. CommandBus / QueryBus
+        write: 'Double: mock<>. Cases: exact command and payload dispatched / nothing dispatched on refusal / a failed command mapped to an Outcome.'
+      - id: case-6
+        when: 6. Same-capability services
+        write: 'Double: mock<T>(). Cases: every Outcome the dependency can return.'
+      - id: case-7
+        when: 7. Other capabilities' ports (`*_PORT`, `*_STORE`, `*_RAIL`, `ModuleAuthorityPort`)
+        write: 'Double: mock<Port>(). Cases: allowed / refused / unavailable.'
+      - id: case-8
+        when: 8. External-client wrappers (Keycloak token/JWKS/admin, SePay, PayOS, VNPAY, Qdrant, embedding, OpenRouter, mail drivers, DataGit, S3/MinIO, ClamAV, OIDC HTTP, n8n, openclaw, helm/kube steps)
+        write: 'Double: mock<Wrapper>(). Never mock the raw library (keycloak-admin-client, axios, ioredis, aws-sdk); the wrapper in `integrations/*` is its single owner. Cases: success / missing / malformed / timeout-unavailable / duplicate / partial. The wrapper''s own spec (when the wrapper is a `*.service.ts`) doubles its transport token (`HTTP_CLIENT` or the raw-lib token owned by that wrapper) and uses payload fixtures. Cases: 404, 401, 5xx, timeout, bad JSON, each mapped to an Outcome (404 -> missing, timeout/5xx -> unavailable).'
+      - id: case-9
+        when: 9. Cache (`REDIS_CACHE_MANAGER`, `MEMORY_CACHE_MANAGER`, `CacheService`, PKCE and OTP stores)
+        write: 'Double: fakeCache(clock). Cases: hit / miss / TTL expiry / not cached on error / invalidation / per-user key.'
+      - id: case-10
+        when: 10. Lock, fence, hold (`INSTANCE_WRITER_FENCE`, `CHALLENGE_GRADING_HOLD`, capacity reservation)
+        write: 'Double: fakeLock(). Cases: acquired / contended / released on error / expiry.'
+      - id: case-11
+        when: 11. Scheduler, queue, outbox, Kafka, `*TransitionEmitter`
+        write: 'Double: recordingEventBus(), recordingQueueOutbox(). Cases: emitted exactly once / nothing emitted on refusal / idempotency key present.'
+      - id: case-12
+        when: 12. Request context (`ACTING_LEARNER`, `InjectRequest`, `CURRENT_PLAN_CONTEXT`, `Locale`, `MessageCatalogMap`)
+        write: 'Double: REAL values from builders. Cases: owner / other / admin / anonymous / each locale.'
+      - id: case-13
+        when: 13. Framework
+        write: 'Double: `Reflector` is the REAL class in providers; `DiscoveryService` uses mock. Cases: metadata present / absent.'
+      - id: case-14
+        when: 14. Multi-providers and registries (reconciler arrays, `ReadonlyMap`, `*RegistryService`)
+        write: 'Double: arrays or maps of mock<T>(). Cases: empty / one / many / unknown key / duplicate.'
+      - id: case-15
+        when: 15. Primitive tokens (bucket, collection, instance id)
+        write: 'Double: REAL values. Cases: blank or boundary values where the service branches on them.'
+      - id: case-16
+        when: 16. Saga steps (`InstallChartStep`, `MintSecretsStep`, ...)
+        write: 'Double: mock<Step>(). Cases: all steps in order / step N fails, so earlier steps are compensated in reverse / re-run is idempotent.'
+    verification:
+      automated:
+        - BE_SPEC_QUALITY
+        - BE_TEST_TOPOLOGY
+        - BE_CONTRACT_UNGUARDED
+        - BE_UNIT_SPEC_NOT_STAGED
+        - BE_AMBIENT_CLOCK
+      manual:
+        - Confirm each constructor dependency of the service has its mandatory cases in the spec, not only a call count.
+    relatedExamples: []
+  - id: BE-TEST-6
+    title: Two canonical examples to mirror
+    kind: mandatory
+    hfsRules: [R48, R47]
+    requirement: |-
+      Write a service spec in the shape of the two owner-approved example specs (example reference `service-spec`).
+      `invoice.service.spec.ts` builds `InvoiceService` through the testing module and provides ONLY its constructor dependencies
+      (entity manager, clock, inbox, event bus, options), uses `fakeTransaction(mockEntityManager(...))` stubs whose absence proves
+      no extra database call, and asserts the success outcome, the refusal of an over-limit total and the replay of a duplicate
+      together with the transaction and the published events. `session.service.spec.ts` builds `SessionService`, which reads
+      through a cache and a provider client, and provides ONLY `CACHE`, `KEYCLOAK`, `LOGGER` and `IDS` (the clock belongs to
+      `fakeCache(clock)`, not to the service), asserts the cache TTL through the cache double and the refusal of an unknown token.
+      Every service spec meets the per-file coverage law of BE-TEST-13 (R47, R204) for its service. Test names are English
+      sentences.
+    rationale: |-
+      Two concrete specs fix the reading of every other rule: which doubles, what is provided, what a stub's absence proves.
+    verification:
+      automated:
+        - BE_SPEC_QUALITY
+        - BE_TEST_TOPOLOGY
+        - BE_CONTRACT_UNGUARDED
+        - BE_UNIT_SPEC_NOT_STAGED
+      manual: []
+    relatedExamples: [service-spec]
+  - id: BE-TEST-7
+    title: The feature tier is thin, so only the spec-required roles need unit specs
+    kind: mandatory
+    hfsRules: [R87, R88, R48, R149, R203]
+    requirement: |-
+      The spec-required roles of `ruleParams.be.unitRoles` (`*.service.ts`, a cli command of `be.cli`) owe a unit spec; every
+      other feature-tier file is thin (R203 `BE_FEATURE_THIN`, eslint-be `feature-thin`), so there is nothing in it to
+      unit-test. A file of a feature-tier slot whose role is in `ruleParams.be.thinRoles` maps its parameters and makes ONE
+      delegating call into `modules/` (a service, the command or query bus, the event bus, a queue producer): no branch, loop,
+      ternary, `try` or `throw` and no computation. All business logic lives in `modules/**`, and orchestration (step order,
+      compensation, claim, fencing, retry) lives in `platform/*` (saga, jobs, event-bus, queue). A cli command is not a thin
+      transport: it is an action runner, R88 does not apply to it, and its spec proves the delegation (cli.yaml). A service of
+      the feature tier (the saga orchestrator) is thin too — and still owes its `<name>.service.spec.ts`, which asserts the
+      delegation. The feature layer is proved by integration and e2e (saga e2e covers every compensation path, R173; the job
+      scenarios cover claim, fencing and re-dispatch), never by unit specs, and it is never measured. A unit spec of a handler,
+      resolver, controller, consumer, mapper, entity, module or composition is a finding (R47 `unit-test-colocated`).
+    rationale: |-
+      A branch that hides in a door is a branch no unit spec reaches. Keeping the feature shape mechanical moves every decision
+      into `modules/**`, where a `coverage: required` slot measures it at 100 per file.
+    cases:
+      - id: case-1
+        when: A command handler
+        write: 'protected override async process(command: PlaceOrderCommand): Promise<PlaceOrderResult> { return this.orderService.place(command.params) }'
+      - id: case-2
+        when: A resolver
+        write: 'return this.commandBus.execute(new PlaceOrderCommand({ request: toPlaceOrderRequest(input), principal }))'
+      - id: case-3
+        when: A decision is tempting in transport
+        write: 'move the `if`, the loop and the EntityManager use into the service and test it in <name>.service.spec.ts'
+    verification:
+      automated:
+        - BE_CQRS_SHAPE
+        - BE_READONLY_BOUNDARY
+        - BE_TRANSPORT_SHAPE
+        - BE_SPEC_QUALITY
+        - BE_CLI_COMMAND_SHAPE
+        - BE_FEATURE_THIN
+      manual:
+        - Review that a mapper called by transport holds no business rule.
+    relatedExamples: []
+  - id: BE-TEST-8
+    title: Pure helpers are covered through their services
+    kind: mandatory
+    hfsRules: [R48, R47, R149]
+    requirement: |-
+      A pure helper or decide function that a service calls has no spec of its own. Its branches are reached through the service
+      spec, so the service's per-file 100% coverage includes them. A helper that needs its own spec to reach 100% is doing a
+      service's work and moves into a `*.service.ts`.
+    rationale: |-
+      One spec per service keeps discovery mechanical and stops a helper from being tested alone while its real caller is not.
+    cases:
+      - id: case-1
+        when: A decide function
+        write: 'decide-accrual.ts is imported by CommissionService; its branches are exercised by commission.service.spec.ts and it has no decide-accrual.spec.ts'
+    verification:
+      automated:
+        - BE_SPEC_QUALITY
+        - BE_TEST_TOPOLOGY
+        - BE_CONTRACT_UNGUARDED
+        - BE_UNIT_SPEC_NOT_STAGED
+        - BE_CLI_COMMAND_SHAPE
+      manual: []
+    relatedExamples: []
+  - id: BE-TEST-9
+    title: What is asserted
+    kind: mandatory
+    hfsRules: [R48, R47, R281]
+    requirement: |-
+      Assert the refusal code or error code, ordering of side effects, returned rows, persisted state and the `where` that holds
+      ownership, as relevant. Test titles are English sentences that state the behavior (BE-CONVENTION 1.16); whether title
+      and assertions describe the required behavior is agent review.
+      Every unit test contains a behavior or state assertion. A test with zero assertions, or only `toBeDefined()` existence
+      checks, does not prove the subject's behavior.
+    rationale: |-
+      Assertions on type, code and state prove behavior. Message strings and call counts alone do not.
+    cases:
+      - id: case-1
+        when: The error
+        write: 'await expect(service.open(params)).rejects.toMatchObject({ code: "PURCHASE_OFFER_NOT_FOUND" })'
+      - id: case-2
+        when: Ordering of side effects
+        write: 'an unstubbed save on mockEntityManager proves nothing was written after a refused credit check'
+      - id: case-3
+        when: A typed outcome
+        write: 'expect(await service.open(params)).toBeRefused(PurchaseErrorCode.AlreadyOwned)'
+      - id: case-4
+        when: Phrasing
+        write: 'it("refuses a learner who already owns the offer", ...)'
+    verification:
+      automated:
+        - BE_SPEC_QUALITY
+        - BE_TEST_TOPOLOGY
+        - BE_CONTRACT_UNGUARDED
+        - BE_UNIT_SPEC_NOT_STAGED
+        - BE_SPEC_FORM_ALL_ROLES
+      manual:
+        - Review that titles and assertions describe the required behavior.
+    relatedExamples: []
+  - id: BE-TEST-10
+    title: What is not asserted
+    kind: mandatory
+    hfsRules: [R48]
+    requirement: |-
+      Do not ship call-only specs, e2e steps that only check a success flag, sleep-based waits (wait with `waitFor` deadlines),
+      guard overrides, provider or DI overrides under `be/src/tests`, live model calls in e2e, or branched outcomes inside one flow step. The e2e canon rules apply to `be/src/tests/e2e/**` through `lint`.
+    rationale: |-
+      A test that cannot fail for the wrong reason is not evidence, and time-based waiting hides races.
+    cases:
+      - id: case-1
+        when: A call alone
+        write: a spec that only proves a mock was invoked fails no-call-only-spec
+      - id: case-2
+        when: A success flag instead of state
+        write: an e2e step asserts the persisted row, not a success flag
+      - id: case-3
+        when: Elapsed time
+        write: poll for state; never sleep in a flow
+      - id: case-4
+        when: A provider call
+        write: only a contract spec under be/src/tests/contract/<provider>/ may call a provider sandbox
+      - id: case-5
+        when: Branching
+        write: one step proves one outcome
+    verification:
+      automated:
+        - BE_SPEC_QUALITY
+      manual: []
+    relatedExamples: []
+  - id: BE-TEST-11
+    title: Names
+    kind: mandatory
+    hfsRules: [R48]
+    requirement: |-
+      The outer suite names the service class under test. Nested suites name the public methods or scenarios.
+      Layout of calls and imports is Prettier's concern and is not a test rule.
+    rationale: |-
+      A failure names the subject it measures.
+    cases:
+      - id: case-1
+        when: describe
+        write: 'describe("CommissionService", () => { ... })'
+    verification:
+      automated:
+        - BE_SPEC_QUALITY
+      manual: []
+    relatedExamples: []
+  - id: BE-TEST-12
+    title: Integration and e2e boot the real world
+    kind: mandatory
+    hfsRules: [R32, R47, R48, R272]
+    requirement: |-
+      Integration and e2e specs boot through `useTestWorld`; the unit kind has no module of its own beyond BE-TEST-2. An e2e boots
+      the real apps through `useTestWorld({ apps })` against the app's own stack running real (Postgres, Redis, Keycloak
+      with its realm imported, a mail host, k3s through k3d with a local registry when the app drives Kubernetes; `global-setup.ts`
+      attaches to a warm stack that answers and otherwise starts its own, and `global-teardown.ts` stops only what it started),
+      runs the real migrations once in `global-setup.ts` over the same connection list the cli migrate command reads (cli.yaml), fakes only external SaaS the
+      team does not operate at the network edge (`world.fake.<provider>`), fails a real service on purpose through
+      `world.infra.<service>.latency(ms)`, `.cut()` and `.restore()` (toxiproxy), overrides no provider or DI token and never a
+      guard, authenticates through an identity fixture that issues real tokens, asserts persisted state and waits with `waitFor`
+      deadlines. Full proves app composition with that e2e boot; lite uses `starci app check --wiring` to compile the Nest module
+      graph with doubles (R272). Both fail when a module or provider is missing, and an app has no spec of its own.
+      Database doubles establish local behavior only; transaction, lock and crash claims need the real store
+      (an integration spec). Configuration is substituted at the owned config boundary by passing options, never by patching
+      `process.env`.
+    rationale: |-
+      A hand-assembled module can pass while the real app cannot start. The edition's boot proof checks the actual app
+      composition; integration and full's e2e world prove behavior against real backing services.
+    cases:
+      - id: case-1
+        when: An e2e boots the app
+        write: 'const world = useTestWorld({ apps: { core: { module: AppModule } } }); the world starts the app on real Postgres and Redis'
+      - id: case-2
+        when: An external service in e2e
+        write: 'const world = useTestWorld({ apps: { core: { module: AppModule } } }); world.fake.payos.failNext(); await world.fake.payos.replayWebhook(payload)'
+      - id: case-3
+        when: Config
+        write: 'pass parsePurchaseConfig(EnvSource of a plain object) output as options; do not set process.env'
+      - id: case-4
+        when: A real service of the stack fails
+        write: 'await world.infra.postgres.cut(); await world.waitFor("api answers 503", ...); await world.infra.postgres.restore(); await world.infra.keycloak.latency(6_000)'
+      - id: case-5
+        when: A stack service that is stateless GPU or model compute
+        write: 'fakes/inference/ plus stacks: { inference: { fakedBy: "inference", reason: "Serves a GPU model" } } in test-world.config.ts; a database, cache, identity provider, mail host or queue is never faked'
+    verification:
+      automated:
+        - BE_APP_COMPOSITION_ONLY
+        - BE_APP_BUSINESS_ROLE
+        - BE_TEST_TOPOLOGY
+        - BE_CONTRACT_UNGUARDED
+        - BE_UNIT_SPEC_NOT_STAGED
+        - BE_SPEC_QUALITY
+        - BE_APP_BOOT_PROOF_MISSING
+      manual:
+        - Confirm the edition's boot proof fails when a module or provider of the app is missing.
+    relatedExamples: []
+  - id: BE-TEST-13
+    title: Coverage is per-file 100 on the logic roles of the measured slots, from one derivation
+    kind: mandatory
+    hfsRules: [R11, R47, R204, R273]
+    requirement: |-
+      ts-jest runs with `diagnostics: false` in every project (`isolatedModules: true` comes from `@starci/tsconfig`); types are checked once, by `typecheck`
+      and `typecheck:tests`. What the unit project measures is derived once from the slot manifest (scripts/hfs/coverage-scope.mjs): every
+      `<name>.<role>.ts` of a `ruleParams.be.logicRoles` role inside a slot whose `coverage` field is `required` — the logic of
+      `be/src/modules/**` (domain, integrations, platform, projections) — is held at 100 per file on lines, branches, functions and
+      statements; every other file is measured never. `starci app sync` renders the derivation into the managed `be/jest.config.js` as
+      `starciJestConfig({ coverage: { roots, roles, excludes } })`; `test` runs the unit project
+      with `--coverage` and fails below the threshold. The unit project overlays `isolatedModules: false` and `importHelpers: true`
+      on `be/tsconfig.json` and the app root `package.json` lists `tslib` in its devDependencies, so neither the `design:paramtypes`
+      guards TypeScript emits under isolated modules nor inlined decorator helpers add branches: counts measure only source. The managed jest config and preset render all of this; an app
+      never edits the coverage settings — a hand edit of the rendered file is drift (R204 `HFS_COVERAGE_SCOPE_DRIFT`) — and no file carries an inline coverage ignore.
+      `starci app check --coverage-from be/coverage/lcov.info` checks 100 percent lines, functions and branches for every
+      tracked logic file in that same edition-derived scope. A missing source record or unavailable metric is a failure.
+      The report lists the measured files and those outside the scope, including features, cli and webhooks; a passing
+      coverage report proves only the measured scope.
+    rationale: |-
+      The modules' logic is the only place decisions live (BE-TEST-7: the feature tier is thin and never measured, and
+      declaration or composition files carry nothing a branch could hide in), so a per-file 100 on exactly the measured files is
+      a meaningful bar. A denominator of the whole source tree rewards trivial files and hides an untested branch behind an average.
+    cases:
+      - id: case-1
+        when: The transform
+        write: 'transform: { "^.+\\.ts$": ["ts-jest", { diagnostics: false }] } supplied by @starci/jest-preset'
+      - id: case-2
+        when: Coverage denominator and threshold
+        write: 'coverageProvider: "v8" and one glob-keyed coverageThreshold of { lines: 100, branches: 100, functions: 100, statements: 100 } per measured root (a glob key is applied to each file on its own): the rendered be/jest.config.js is `module.exports = require("@starci/jest-preset").starciJestConfig({ coverage: { roots, roles, excludes } })` and `starci app sync` writes it — never edited by hand (R204)'
+      - id: case-3
+        when: The gate
+        write: '"test": "jest --selectProjects unit --coverage" fails when any measured file is below 100 in any metric'
+    verification:
+      automated:
+        - HFS_SONAR_CONFIG
+        - BE_TEST_TOPOLOGY
+        - BE_CONTRACT_UNGUARDED
+        - BE_UNIT_SPEC_NOT_STAGED
+        - HFS_COVERAGE_SCOPE_DRIFT
+        - HFS_COVERAGE_BELOW
+      manual:
+        - Confirm a new service or cli command ships its spec in the same change and the unit project stays at 100.
+    relatedExamples: []
+  - id: BE-TEST-14
+    title: Sonar and Codecov judge the same measured scope, from the one derivation
+    kind: mandatory
+    hfsRules: [R11, R204]
+    requirement: |-
+      The unit run (`starci gate unit --root <app>`) writes `be/coverage/lcov.info` (the jest preset's lcov reporter) and both coverage services import
+      it with ONE scope, the measured files of BE-TEST-13: `sonar-project.properties` has `sonar.javascript.lcov.reportPaths=be/coverage/lcov.info` and
+      `sonar.coverage.exclusions` listing every file the scope does not measure (SonarQube has no coverage inclusions: starci app sync renders the complement
+      of the `coverage: required` slots and their `ruleParams.be.logicRoles` roles, fe/** included) and no other coverage key; the managed `codecov.yml` holds the measured roots at
+      100 on the project and the patch, plus one Codecov component per service app and one `platform`, each held at 100. CI uploads that lcov to Codecov with GitHub's OIDC token (`use_oidc`, no secret). starci app sync
+      renders the scope into the three files from the one derivation of scripts/hfs/coverage-scope.mjs (check-examples-ci renders the example apps'), so they can never drift: a hand edit of any of them is R204 `HFS_COVERAGE_SCOPE_DRIFT`. The Sonar gate
+      (`knowledge/sonar-gate.yaml`) holds coverage at 100 overall and on new code, and the runtime judges it per file: one measured
+      file below 100 fails. The feature tier, declaration and composition files, tests and fe/ are never coverage targets.
+    rationale: |-
+      One denominator everywhere: the unit project's per-file 100 on the measured files (BE-TEST-13), the Sonar dashboard and Codecov show
+      the same number for the same files, so a gap in any one logic file is visible and blocking wherever it is read.
+    cases:
+      - id: case-1
+        when: sonar-project.properties
+        write: 'sonar.javascript.lcov.reportPaths=be/coverage/lcov.info and sonar.coverage.exclusions = the complement of the measured files (fe/** included), no other coverage key; starci app sync renders the file'
+      - id: case-2
+        when: CI
+        write: 'the workflow runs `starci gate unit --root <app>` (which enforces per-file 100 and writes the lcov) and uploads be/coverage/lcov.info with codecov/codecov-action with use_oidc (job permission id-token: write; no secret and no secret-guarded skip)'
+      - id: case-3
+        when: codecov.yml
+        write: 'project and patch status target 100% on the measured roots, plus one component per service app and one `platform`, each held at 100; starci app sync renders the file from the same scope as Sonar'
+    verification:
+      automated:
+        - HFS_SONAR_CONFIG
+        - HFS_COVERAGE_SCOPE_DRIFT
+      manual: []
+    relatedExamples: []
+  - id: BE-TEST-15
+    title: Spec prose is English
+    kind: mandatory
+    hfsRules: [R89, R78]
+    requirement: |-
+      Everything in a spec is English: identifiers, `describe` and `it` names, comments and fixture strings. Vietnamese appears only in
+      i18n message catalogues and in fixtures whose purpose is localized text (and in the `*_vi` fields the failure-code catalog
+      requires).
+    rationale: |-
+      One language keeps failure output searchable and reviewable by every contributor and agent.
+    cases:
+      - id: case-1
+        when: A test name
+        write: 'it("refuses a self referral without touching the database", ...)'
+    verification:
+      automated:
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+        - BE_USER_COPY_LITERAL
+      manual: []
+    relatedExamples: []
+  - id: BE-TEST-16
+    title: Test data builders
+    kind: mandatory
+    hfsRules: [R98, R99, R100, R101, R89]
+    requirement: |-
+      Test data is arranged by builders. A builder lives in `be/src/tests/fixtures/builders/<area>.builder.ts` (slot
+      `be.tests.fixtures.builders`), one file per area, shared by every spec of that area. The file name is exactly `<area>.builder.ts`;
+      a `*.repository.ts`, `*.fixture.ts` or `*.factory.ts` file is a finding anywhere, and a `*.builder.ts` outside that folder is a
+      finding; so is any other module of the test tree that exports a function creating persisted rows through an EntityManager (R97). Two kinds exist. (a) Pure object builders, for example `commissionRow(overrides)` and `accrueInput(overrides)`: they
+      return typed objects with valid defaults, the spec overrides only what matters, and unit specs use them as inputs and as
+      `mockEntityManager` results. (b) Persisting builders, for example `orderBuilder(world.db.primary).pending().build(overrides)`: they
+      insert real rows through the entity classes, create their own parent chain, and integration and e2e specs use them to arrange
+      state. Rules: (a) no spec hand-builds a long row chain or writes a raw INSERT/UPDATE/DELETE or a direct `save`, `insert`,
+      `upsert`, `update`, `delete` or `remove` on an EntityManager, DataSource or QueryRunner (reading stays allowed, since a spec
+      asserts persisted state), and no spec builds the same persistence entity as an object literal twice; rows go through builders. (b) Builders, and every file under `be/src/tests`, run with database constraints ON: no FK disabling, no
+      `session_replication_role`, no `DISABLE TRIGGER`, no deferred or dropped constraints. (c) Builders arrange data only and never
+      assert: no `expect`, no jest globals. (d) Defaults are deterministic: fixed ids or `fakeIds`, fixed dates, no `Date.now()`,
+      no argument-less `new Date()`, no `Math.random()`, `randomUUID()` or `crypto.random*`, unless seeded. (e) Raw SQL inside a builder is
+      allowed only when the area has no entity classes, and it goes in `<area>.sql.ts` beside the builder once canon-be 2.0.0 permits it.
+    rationale: |-
+      A row chain written by hand in each spec drifts from the schema and hides which value the test depends on. One builder per area
+      gives every spec the same valid defaults, a builder that fails when the entity changes, and specs that name only the field that
+      matters. Constraints stay on so an invalid arrangement fails at the builder instead of passing on an impossible database.
+    cases:
+      - id: case-1
+        when: A unit spec needs an input and a stored row
+        write: 'em = mockEntityManager({ findOne: [Commission, commissionRow({ status: "accrued" })] }); await service.accrue(accrueInput({ paid: 1000 }))'
+      - id: case-2
+        when: An e2e or integration spec needs an order in a state
+        write: 'const order = await orderBuilder(world.db.primary).pending().build({ total: 500 })'
+      - id: case-3
+        when: A builder needs a timestamp or an id
+        write: 'const CREATED_AT = new Date("2026-01-01T00:00:00.000Z"); ids from constants or fakeIds(), never Date.now() or randomUUID()'
+      - id: case-4
+        when: A spec needs a row inserted
+        write: 'never `await world.db.primary.query("INSERT INTO orders ...")` or `em.save(Order, ...)` in the spec; extend the area builder'
+    verification:
+      automated:
+        - BE_TEST_BUILDER_HOME
+        - BE_TEST_ROW_BY_BUILDER
+        - BE_TEST_CONSTRAINTS_ON
+        - BE_TEST_BUILDER_ARRANGES
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+      manual:
+        - Confirm a persisting builder creates its parent chain through entity classes and that no unit spec builds a long object literal by hand where a builder exists.
+    relatedExamples: []

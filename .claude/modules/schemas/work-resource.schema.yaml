@@ -1,0 +1,299 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:work:resource:1
+type: object
+additionalProperties: false
+description: "One piece of typed custody a UAT flow resolves before it runs - the environment it walks
+  against, the disposable identity it signs in with, or the fixture that seeds its prerequisites. The three
+  kinds share a file because they share the one property that matters: each names where something real
+  lives without carrying it. An environment names origins and probes rather than a running stack, an
+  identity names a sealed custody path rather than a password, and a fixture names its seed files rather
+  than the rows. A flow's `environment`, `fixtures[]` and its accounts.yaml `identity` refs are edges into
+  this family and must resolve to a resource of the matching kind."
+required:
+  - schema
+  - id
+  - kind
+  - owner
+  - revision
+properties:
+  schema:
+    const: work/resource@1
+    $ref: "urn:work:common:1#/$defs/familyDiscriminator"
+  id:
+    type: string
+    pattern: ^(?:environment|identity|fixture)(?:\.[a-z0-9]+(?:-[a-z0-9]+)*){2,}$
+    description: "The resource's stable id, prefixed by its kind: <kind>.<workspace>.<name>; example
+      environment.full-app.dev. The prefix is part of the id so that a uat-flow's `environment` field
+      pointing at a fixture is a malformed reference on sight rather than a type error discovered at run
+      time."
+  kind:
+    enum:
+      - environment
+      - identity
+      - fixture
+    description: Which of the three custodies this is. It is authored as well as encoded in the id because
+      the gate resolves an edge by kind, and a single value it can read is better than a prefix it must
+      parse.
+  owner:
+    $ref: "urn:work:common:1#/$defs/slug"
+    description: The repository accountable for this resource, by the name workspace.yaml gives it. A
+      resource nobody owns is one nobody rotates, reseeds or takes down.
+  revision:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: What version of the underlying thing this record describes - the rendered stack
+      configuration, the sealed secrets file, the seed directory, each with the date or tag it was true at.
+      It is what lets a reader tell a resource that has been kept current from one that was written once.
+  target:
+    type: object
+    additionalProperties: false
+    description: Where an environment actually is. It is the environment kind's whole point - a walk needs
+      an address, and an address written into the flow instead of here would be copied per flow.
+    properties:
+      compose:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: The compose file whose services this environment's ports and origins come from, so the
+          two cannot drift without the file moving.
+      origins:
+        type: object
+        minProperties: 1
+        propertyNames:
+          $ref: "urn:work:common:1#/$defs/slug"
+        additionalProperties:
+          $ref: "urn:work:common:1#/$defs/prose"
+        description: The reachable origin per service, keyed by the service's own name. The keys are open
+          because which services a product runs is the product's business, not this schema's.
+  configuration:
+    type: object
+    additionalProperties: false
+    description: How this environment was rendered, so that a reader can regenerate it rather than
+      reverse-engineer it from what happens to be running.
+    properties:
+      renderedFrom:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: The declarative source the rendered configuration was produced from.
+      rendered:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: The rendered artifact itself, by path.
+      ports:
+        type: object
+        minProperties: 1
+        propertyNames:
+          $ref: "urn:work:common:1#/$defs/slug"
+        additionalProperties:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        description: The port each service listens on, keyed by the service's own name. Recorded because a
+          probe and a walk that disagree about a port fail in a way that reads as the product being down.
+      start:
+        type: object
+        minProperties: 1
+        propertyNames:
+          $ref: "urn:work:common:1#/$defs/slug"
+        additionalProperties:
+          type: object
+          additionalProperties: false
+          required:
+            - command
+          properties:
+            command:
+              $ref: "urn:work:common:1#/$defs/prose"
+              description: The command line that starts this service natively, as the environment's own
+                lifecycle runs it (npm run dev -w @nivo/app).
+            cwd:
+              $ref: "urn:work:common:1#/$defs/prose"
+              description: The directory it runs in, relative to the owning repository.
+        description: How the environment pre-step (scripts/uat/env-health.mjs check --restart) starts a
+          service it finds down or hung, keyed by the service's own name. Optional - without it the runtime
+          restarts only a server it started itself through env-health serve, and a walk that finds a service
+          down starts it through serve so the next pre-step can. It is the place's lifecycle, so it is
+          authored here once rather than improvised by every walk.
+  probes:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    description: The checks that say whether this environment is actually up, before a walk blames the
+      product for a stack that never started.
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - method
+        - target
+        - expect
+      properties:
+        id:
+          $ref: "urn:work:common:1#/$defs/slug"
+          description: A short name for what this probe establishes, so a failure names the missing service
+            rather than a URL.
+        method:
+          $ref: "urn:work:common:1#/$defs/slug"
+          description: How the probe is performed - http-get and its siblings. It is a closed-ish slug
+            rather than free prose because a probe nobody can execute is a sentence.
+        target:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: What is probed, exactly as the probe addresses it.
+        expect:
+          type: integer
+          description: The status that counts as ready. It is stated because a probe with no expectation
+            passes on any answer, including the answer that the service exists but is serving the wrong
+            thing.
+  allowedEffects:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/prose"
+    description: What a run is permitted to do to this environment, and by omission what it is not. It is
+      authored on the environment rather than on each flow because the limit belongs to the place, and a
+      per-flow copy is a per-flow chance to widen it.
+  disposable:
+    const: true
+    description: Marks an identity as throwaway. It is only ever true, because a non-disposable identity is
+      a real person's credential and does not belong in a tracked tree at all - the absence of the key is
+      not a weaker claim, it is a record of a different kind.
+  custody:
+    type: object
+    additionalProperties: false
+    required:
+      - provider
+    if:
+      properties:
+        provider:
+          const: none
+      required:
+        - provider
+    then:
+      properties:
+        sealed: false
+    else:
+      required:
+        - sealed
+    description: Where an identity's secret actually lives. The record names the sealed file and how to
+      open it; it never holds the value, because the tree is tracked and readable and outlives any rotation.
+    properties:
+      provider:
+        $ref: "urn:work:common:1#/$defs/slug"
+        description: "The identity provider that issues this identity. The value `none` is the one form for an
+          identity that holds no secret at all (an anonymous visitor, a non-secret fixture actor): it carries no
+          `sealed` key, and any other provider must name its sealed file."
+      realm:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: The provider's own realm or tenant, taken from the file the provider actually imports
+          rather than from the project's name. The two are easy to confuse and a probe against a realm that
+          does not exist fails quietly.
+      sealed:
+        type: string
+        pattern: ^\.starcistacks/[a-z0-9]+(?:-[a-z0-9]+)*/secrets/[a-z0-9]+(?:-[a-z0-9]+)*\.enc$
+        description: "The encrypted custody file, by app-relative path: exactly
+          .starcistacks/<env>/secrets/<slug>.enc (.starcistacks sits at the app root beside .starciwork, be/ and fe/; the side form be/.starcistacks/... is refused), a sops (age) file, where <slug> is the identity or resource
+          slug. This is the only location a sealed secret has; the Work tree holds this record and never the
+          sealed file or any plaintext value. The schema has no not-sealed-yet form: an identity whose secret is
+          not sealed yet still names the path it will be sealed at, and the validator reports the path as an
+          absent input until uat.verify writes it."
+      decryptWith:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: How the sealed file is opened, naming the key's own custody and never the key.
+  roles:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/slug"
+    description: The roles this identity can present. A flow's accounts.yaml names one of these, so a role
+      the sealed file never seeded is a resolution failure rather than a sign-in that mysteriously fails.
+  schemaFiles:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/prose"
+    description: The files that create the structure a fixture seeds into, by path. Kept apart from
+      `seedFiles` because creating a table and filling it fail differently and are re-run differently.
+  seedFiles:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/prose"
+    description: The files that insert the prerequisite rows, by path and in the order they are applied.
+  preconditions:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/prose"
+    description: What must already be true for this fixture to seed cleanly, stated so a run that fails
+      halfway can be diagnosed against the list rather than against the database.
+  namespace:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: The predicate that identifies run-owned rows, so cleanup deletes what the run created and
+      nothing beside it. It is one expression rather than a convention in prose, because cleanup that
+      guesses its own scope eventually guesses wrongly against real data.
+  details:
+    type: object
+    minProperties: 1
+    propertyNames:
+      type: string
+      pattern: ^[a-z][A-Za-z0-9]*$
+    additionalProperties:
+      oneOf:
+        - $ref: "urn:work:common:1#/$defs/prose"
+        - type: boolean
+    description: Kind-specific facts that do not generalise across the three custodies - a fixture's
+      idempotency and what it deliberately never seeds, an identity's reuse rule, an environment's runtime.
+      The keys are open because what is worth saying differs per provider, and closing them here would
+      force every new fact into a general field that does not mean it.
+  refs:
+    $ref: "urn:work:common:1#/$defs/refs"
+  blockers:
+    $ref: "urn:work:common:1#/$defs/blockers"
+  change:
+    $ref: "urn:work:common:1#/$defs/change"
+  extensions:
+    $ref: "urn:work:common:1#/$defs/extensions"
+allOf:
+  - if:
+      properties:
+        kind:
+          const: environment
+      required:
+        - kind
+    then:
+      required:
+        - target
+        - probes
+      properties:
+        target: true
+        probes: true
+    description: An environment with no address and no probe cannot be walked against or checked for
+      readiness, which are the only two things a flow asks of it.
+  - if:
+      properties:
+        kind:
+          const: identity
+      required:
+        - kind
+    then:
+      required:
+        - disposable
+        - custody
+      properties:
+        disposable: true
+        custody: true
+    description: An identity that does not say it is disposable, or that does not name where its secret is
+      sealed, is either a real credential or an unusable one.
+  - if:
+      properties:
+        kind:
+          const: fixture
+      required:
+        - kind
+    then:
+      required:
+        - seedFiles
+      properties:
+        seedFiles: true
+    description: A fixture with no seed file seeds nothing; the rows would have to come from somewhere a
+      re-run cannot reproduce.

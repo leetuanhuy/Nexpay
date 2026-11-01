@@ -1,0 +1,209 @@
+schema: starci/knowledge-source@1
+id: fe.i18n
+title: Frontend internationalization
+purpose: |-
+  Given text a user can read, where does it live and how does it reach the screen? One pattern in every app, including a
+  single-language app: next-intl, a [locale] route segment, default locale vi, localePrefix as-needed, routing decided in
+  proxy.ts.
+appliesTo:
+  - frontend
+family: fe
+# The slot ids this topic teaches (knowledge/hfs/slots.yaml); scripts/gates/read-digest.mjs inverts these
+# into the READ-step slot -> pattern-topic map (knowledge/op-gate.yaml kinds), each slot's topics in index.yaml order.
+slots: [fe.modules.i18n, fe.package.i18n]
+provenance:
+  reviewedAt: 2026-10-13
+  sources:
+    - knowledge/hfs/fe-stack.yaml
+    - knowledge/hfs/README.md
+    - knowledge/hfs/slots.yaml
+    - https://next-intl.dev/docs/routing/setup
+    - https://next-intl.dev/docs/routing/middleware
+    - https://nextjs.org/docs/app/api-reference/file-conventions/proxy
+  limitations: |-
+    Static checks prove that no display text is written outside the catalog, that the files exist and that the catalogs
+    have the same key set. They do not prove that translations are correct or idiomatic; the product owner and the UI
+    evidence review copy.
+rules:
+  - id: FE-I18N
+    title: next-intl is the one i18n library, with its formatter for numbers, dates and currency
+    kind: mandatory
+    hfsRules: [R244]
+    requirement: |-
+      Copy reaches the screen through next-intl only (useTranslations, getTranslations in a server route file) and numbers,
+      dates, relative times and currency through its formatter (useFormatter); the catalogs are
+      modules/i18n/messages/{vi,en}.json (FE-I18N-1). i18next, react-i18next, next-i18next, react-intl and lingui are
+      refused, and a string literal on screen is FE_I18N_LITERAL.
+    rationale: |-
+      One library keeps one catalog, one plural syntax and one formatter per locale.
+    cases:
+      - id: case-1
+        when: A toast label
+        write: 'const t = useTranslations("toast"); messages.successTitle = t("successTitle") in modules/toast/hooks.ts (starci-academy)'
+      - id: case-2
+        date: "2026-10-13"
+        source: owner
+        when: "Owner ruling 2026-10-13: a front end formatted money with toLocaleString"
+        write: Format it with the next-intl formatter in the active locale.
+    verification:
+      automated:
+        - FE_STACK_FORBIDDEN
+      manual: []
+    relatedExamples: []
+  - id: FE-I18N-1
+    title: One placement in every app
+    kind: mandatory
+    hfsRules: [R59, R02, R54]
+    requirement: |-
+      Every app uses `next-intl` with the route segment `app/[locale]/`, `defaultLocale` `vi` and `localePrefix`
+      `as-needed`, so the default locale is served without a prefix and other locales with one. `modules/i18n/` holds
+      `config.ts` (the locale list and default), `routing.ts` (`defineRouting`), `navigation.ts` (`createNavigation`),
+      `request.ts` (`getRequestConfig`) and `messages/<locale>.json`. `next.config.ts` wraps the config with the next-intl
+      plugin pointing at `modules/i18n/request.ts` and turns on `experimental.rootParams`. `request.ts` reads the request
+      locale as `const requested: unknown = await locale()` with `import { locale } from "next/root-params"`, never as the
+      `requestLocale` parameter of `getRequestConfig`, which next-intl 4.13 deprecates. An app with one
+      language still uses `next-intl` with one locale and the same files; there is no copy-module variant.
+    rationale: |-
+      Decision (the pinned next-intl on Next 16.1): the `requestLocale` parameter of `getRequestConfig` is deprecated, and the only
+      replacement the installed types and runtime offer is `next/root-params`, which Next still gates behind
+      `experimental.rootParams`. No stable, non-deprecated API reads the `[locale]` segment, so the flag is adopted and this
+      is the one sanctioned form. Next 16.3 makes root params default and only warns about the flag; when the pinned Next
+      reaches it, drop the flag and keep the import.
+
+      One placement lets tooling, agents and checks find and check every catalog the same way, and a single-language app can
+      add a language without restructuring.
+    cases:
+      - id: case-1
+        when: The routing
+        write: 'export const routing = defineRouting({ locales: ["vi", "en"], defaultLocale: "vi", localePrefix: "as-needed" })'
+      - id: case-2
+        when: The proxy
+        write: 'fe/apps/<app>/src/proxy.ts is `export default createMiddleware(routing)` with `export const config = { matcher: ["/((?!api|_next|.*[.].*).*)"] }`; middleware.ts is not used on Next 16.'
+      - id: case-3
+        when: A layout
+        write: 'app/[locale]/layout.tsx sets `<html lang={locale}>` and wraps children in NextIntlClientProvider with only the needed namespaces.'
+      - id: case-4
+        when: A single-language landing app
+        write: 'routing.locales is ["vi"], messages/vi.json exists, and the same modules/i18n files are present.'
+      - id: case-5
+        when: The request locale
+        write: 'request.ts is `getRequestConfig(async () => { const requested: unknown = await locale(); const resolved = hasLocale(routing.locales, requested) ? requested : routing.defaultLocale; return { locale: resolved, messages } })` with `import { locale } from "next/root-params"`; next.config.ts sets `experimental: { rootParams: true }`.'
+    verification:
+      automated:
+        - FE_I18N_PLACEMENT
+        - FE_I18N_NAVIGATION
+        - FE_I18N_FORMATTER
+        - HFS_SLOT_REQUIRED_MISSING
+        - HFS_MIN_INSTANCES
+        - HFS_REQUIRED_FILE_MISSING
+        - HFS_ROOT_ENTRY_MISSING
+        - HFS_APPS_REQUIRED
+        - HFS_APP_LAYOUT_INVALID
+        - HFS_README_TITLE_INVALID
+        - HFS_README_DESCRIPTION_INVALID
+        - HFS_README_SECTION_MISSING
+        - HFS_README_SECTION_ORDER
+        - HFS_README_DEVELOPMENT_INCOMPLETE
+        - HFS_README_WORK_POINTER_MISSING
+        - HFS_README_PRIVATE_URL
+        - HFS_README_BADGE_NOT_LIVE
+        - FE_ROUTE_FILES_THIN
+        - FE_NEXT_CONVENTIONS
+        - FE_PAGE_METADATA_MISSING
+        - FE_ROUTE_ONE_PAGE
+        - FE_ROUTE_DRAWING_DECISION
+        - FE_ROUTE_CLIENT_BOUNDARY
+        - FE_ROUTE_CLIENT_HOOK
+        - FE_ROUTE_DEFAULT_EXPORT
+      manual:
+        - Confirm the root path serves the default locale without a redirect to a 404.
+    relatedExamples: []
+  - id: FE-I18N-2
+    title: No display text outside the catalog
+    kind: mandatory
+    hfsRules: [R58, R18, R286]
+    requirement: |-
+      No display text is written in source at any tier: blocks, pages, layouts, composites, branches, leaves, overlays and
+      route files, including JSX text, `aria-label`, `title`, `placeholder`, `alt` and copy objects, in any language. Text
+      comes from `useTranslations` or `getTranslations` (or resolved labels handed down from the connected half). There is
+      no escape annotation and no inline switch. Validation call arguments, including Zod messages, and toast titles
+      and descriptions use next-intl translations; neither display literals nor untranslated message keys are passed
+      as their copy.
+    rationale: |-
+      A single escape hatch turns the rule into a comment convention. With none, every string is translatable and
+      checkable, and the lint has one job.
+    cases:
+      - id: case-1
+        when: JSX text
+        write: 'const t = useTranslations("sales.summary"); <Text>{t("title")}</Text>'
+      - id: case-2
+        when: An attribute
+        write: '<Icon aria-label={t("close")} />'
+      - id: case-3
+        when: A server component
+        write: 'const t = await getTranslations("sales.summary")'
+      - id: case-4
+        when: A schema message
+        write: 'z.string().min(1, t("sales.send.errors.fingerprintRequired")) in the connected form hook.'
+    verification:
+      automated:
+        - FE_I18N_LITERAL
+        - HFS_INLINE_SUPPRESSION
+        - FE_COPY_IN_CALL
+        - FE_NO_ALERT
+        - FE_ICON_INLINE_SVG
+      manual:
+        - Review that keys name the meaning, not the current wording.
+    relatedExamples: []
+  - id: FE-I18N-3
+    title: Catalogs share one key set
+    kind: mandatory
+    hfsRules: [R60, R106]
+    requirement: |-
+      The catalogs of all locales have exactly the same keys: no missing and no extra key. A key the source reads with a
+      literal exists in every locale, and a key that nothing reads is deleted. Catalogs are split by namespace, and a
+      client component receives only its picked namespaces.
+    rationale: |-
+      A missing key shows up in production as raw key text.
+    cases:
+      - id: case-1
+        when: A new string
+        write: Add the key to messages/vi.json and messages/en.json in the same change.
+    verification:
+      automated:
+        - FE_I18N_CATALOG
+        - FE_I18N_KEYS
+      manual: []
+    relatedExamples: []
+  - id: FE-I18N-4
+    title: Locale-aware navigation and metadata
+    kind: mandatory
+    hfsRules: [R54, R59, R57]
+    requirement: |-
+      Links and redirects use the helpers of `modules/i18n/navigation.ts` (`Link`, `redirect`, `useRouter`) with hrefs from
+      `modules/routes`, so the locale prefix is always right. `generateMetadata` in each page reads its title and description
+      from the catalog for the active locale. Locale switching is a navigation to the same path in another locale.
+    rationale: |-
+      Hand-built hrefs drop the locale prefix and break the as-needed default.
+    cases:
+      - id: case-1
+        when: A link
+        write: 'import { Link } from "@/modules/i18n/navigation"; <Link href={routes.sales.summary()} />'
+    verification:
+      automated:
+        - FE_ROUTE_FILES_THIN
+        - FE_NEXT_CONVENTIONS
+        - FE_PAGE_METADATA_MISSING
+        - FE_ROUTE_ONE_PAGE
+        - FE_ROUTE_DRAWING_DECISION
+        - FE_ROUTE_CLIENT_BOUNDARY
+        - FE_ROUTE_CLIENT_HOOK
+        - FE_ROUTE_DEFAULT_EXPORT
+        - FE_I18N_PLACEMENT
+        - FE_I18N_NAVIGATION
+        - FE_I18N_FORMATTER
+        - FE_OWNER_REACHABLE
+        - FE_ROUTE_HARDCODED
+        - FE_HREF_RESOLVES
+      manual: []
+    relatedExamples: []

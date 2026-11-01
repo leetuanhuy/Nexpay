@@ -1,0 +1,22 @@
+group: runtime
+verb: doctor
+owner: runtime
+runtimeSide: host
+summary: verify installed payload, public entry custody and local runtime capabilities
+impl:
+  script: scripts/install/install.mjs
+  args:
+    - doctor
+flags:
+  - name: quick
+    type: boolean
+    summary: check install integrity without runtime capability checks
+exit:
+  "0": the selected local diagnostic checks passed
+  "1": installed integrity or a selected runtime capability failed
+  "2": bad usage
+json: none
+examples:
+  - starci runtime doctor --cwd <repo> --quick
+editions:
+  - full

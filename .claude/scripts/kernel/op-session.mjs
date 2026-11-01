@@ -1,0 +1,248 @@
+// op-session.mjs — per-op agent-session identity and release at settle.
+//
+// Host housekeeping ("per-op session release at settle", STORAGE-PROMPT item
+// 8): when `starci kernel settle` closes an op, that op's own agent session files move
+// to the session archive root right away instead of piling up under
+// ~/.claude/projects and the Codex session homes.
+//
+// The dispatch record already identifies the agent — payload
+// provider/agent/model, the orca/managed agentTerminalHandle, the contract's
+// worktree and the op-dispatched event time — so the session file itself is
+// what this module recovers: under the agent's own session home, created
+// inside the job's dispatch window, and ATTRIBUTED by content to the job (the
+// worker's prompt names its durable job id on the first line). Attribution is
+// the safety bound: the live kernel's own session, a sibling op's session in
+// the same project dir and the owner's own sessions never contain this job's
+// id and are never moved — a skipped release just leaves the file for the
+// age-based housekeeping sweep.
+//
+// Hard rules honoured here:
+//   - the live kernel's own session is never touched: kernel-kind jobs are
+//     never released, and a kernel session file never carries an op's job id;
+//   - a session whose terminal is still open is never moved: the same
+//     terminal liveness settle/dedupe read (terminal-show) gates the archive;
+//   - settle never fails on the release: every early exit is a recorded
+//     {released:false, reason} and the archiver itself is optional
+//     (scripts/housekeeping/hk-sessions.mjs, loaded lazily).
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { parseJson } from '../lib/json.mjs';
+import { latestContractOf } from '../machine/contract-version.mjs';
+import { archiveRoot as archiveRootOf } from '../machine/home.mjs';
+import { orcaCodexHome } from '../agent/trust.mjs';
+import { terminalShow } from '../api/orca/terminal-show.mjs';
+import { TERMINAL_GONE_CODES } from '../lib/orca-terminal.mjs';
+import { isSpecRun } from '../lib/env.mjs';
+import { agentOfJob } from '../lib/job-agent.mjs';
+
+// A worker's session file exists before the op-dispatched event lands (the
+// terminal launch precedes prompt send and attestation), so the identity
+// window opens this far before the event.
+export const SESSION_LEAD_MS = 30 * 60 * 1000;
+// Only the head of a session file is scanned for the job id: the dispatch
+// preamble is the worker's first user message.
+const SESSION_GREP_BYTES = 256 * 1024;
+
+/** The project-dir slug an agent CLI derives from a cwd: every non-alphanumeric becomes '-'. */
+const sessionProjectSlug = (cwd) => String(path.resolve(cwd)).replace(/[^A-Za-z0-9]/g, '-');
+
+/**
+ * The session homes the runtime already knows, re-rooted the way
+ * scripts/agent/trust.mjs trustTargets re-roots them for specs
+ * (STARCI_AGENT_TRUST_HOME): claude <home>/.claude (or CLAUDE_CONFIG_DIR),
+ * codex CODEX_HOME + <home>/.codex + Orca's codex-runtime-home. Under NODE_TEST_CONTEXT without the re-root the lookup is
+ * refused — a spec process never scans the owner's real sessions.
+ */
+export function sessionHomes({ env = process.env, platform = process.platform, home = os.homedir() } = {}) {
+  const root = env.STARCI_AGENT_TRUST_HOME || null;
+  if (!root && isSpecRun(env)) return { skipped: 'test-env-unrooted' };
+  const h = root || home;
+  const codexHomes = [];
+  const add = (dir) => { if (dir && !codexHomes.some((d) => path.resolve(d).toLowerCase() === path.resolve(dir).toLowerCase())) codexHomes.push(path.resolve(dir)); };
+  if (!root) add(env.CODEX_HOME);
+  add(path.join(h, '.codex'));
+  add(root
+    ? orcaCodexHome({ env: { APPDATA: path.join(root, 'AppData', 'Roaming'), XDG_CONFIG_HOME: path.join(root, '.config') }, platform, home: root })
+    : orcaCodexHome({ env, platform, home }));
+  return {
+    claude: !root && env.CLAUDE_CONFIG_DIR ? path.resolve(env.CLAUDE_CONFIG_DIR) : path.join(h, '.claude'),
+    codex: codexHomes,
+  };
+}
+
+/** Directories an agent's session files for `cwd` live under (claude keys sessions by project dir). */
+function sessionDirsFor(agent, cwd, homes) {
+  if (agent === 'claude') return [{ dir: path.join(homes.claude, 'projects', sessionProjectSlug(cwd)), match: (f) => f.endsWith('.jsonl') }];
+  return [];
+}
+
+const createdMs = (stat) => (stat.birthtimeMs > 0 ? stat.birthtimeMs : stat.mtimeMs);
+
+/** True when the file's head (the worker's first message) names `needle`. */
+const mentions = (file, needle) => {
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const buf = Buffer.alloc(SESSION_GREP_BYTES);
+      const n = fs.readSync(fd, buf, 0, SESSION_GREP_BYTES, 0);
+      return buf.subarray(0, n).includes(String(needle));
+    } finally { fs.closeSync(fd); }
+  } catch { return false; }
+};
+
+const candidatesIn = (dir, match, { sinceMs, untilMs }) => {
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const out = [];
+  for (const name of names) {
+    if (!match(name)) continue;
+    const file = path.join(dir, name);
+    let stat = null;
+    try { stat = fs.statSync(file); } catch { continue; }
+    if (!stat.isFile()) continue;
+    const created = createdMs(stat);
+    // Outside the job's dispatch window it cannot be this job's session.
+    if (created < sinceMs) continue;
+    if (untilMs != null && created > untilMs) continue;
+    out.push({ file, createdMs: created });
+  }
+  return out;
+};
+
+/** A directory's entry names, [] when it cannot be read. */
+const dirList = (dir) => { try { return fs.readdirSync(dir); } catch { return []; } };
+
+// Codex keys sessions by date, not by project: <home>/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl
+// under every Codex home the runtime knows (CODEX_HOME, ~/.codex, Orca's codex-runtime-home).
+const codexSessionCandidates = (homes, window) => {
+  const out = [];
+  for (const home of homes.codex) {
+    const root = path.join(home, 'sessions');
+    for (const year of dirList(root).filter((d) => /^\d{4}$/.test(d)))
+      for (const month of dirList(path.join(root, year)).filter((d) => /^\d{2}$/.test(d)))
+        for (const day of dirList(path.join(root, year, month)).filter((d) => /^\d{2}$/.test(d)))
+          out.push(...candidatesIn(path.join(root, year, month, day), (f) => f.endsWith('.jsonl'), window));
+  }
+  return out;
+};
+
+/**
+ * The session files a job's agent may own: created inside the dispatch
+ * window, each flagged `matched` when its head names the job id — the
+ * attribution settle archives on and every other session fails.
+ */
+function sessionCandidates({ agent, cwds = [], sinceMs, untilMs = null, homes, jobId }) {
+  if (!agent || !homes || homes.skipped || sinceMs == null) return [];
+  let found = agent === 'codex'
+    ? codexSessionCandidates(homes, { sinceMs, untilMs })
+    : cwds.flatMap((cwd) => sessionDirsFor(agent, cwd, homes)).flatMap(({ dir, match }) => candidatesIn(dir, match, { sinceMs, untilMs }));
+  const seen = new Set();
+  found = found.filter((c) => {
+    const key = path.resolve(c.file).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  for (const c of found) c.matched = jobId ? mentions(c.file, jobId) : false;
+  return found;
+}
+
+/** The op's dispatch-bound worktree plus the ledger repo: the cwds its session can be filed under. */
+const sessionCwdsOf = (db, job, repo) => {
+  const cwds = [];
+  try {
+    const context = parseJson(latestContractOf(db, job.job_id)?.context_json);
+    if (typeof context?.worktree === 'string') cwds.push(path.resolve(repo, context.worktree));
+  } catch { /* contract context is optional */ }
+  cwds.push(path.resolve(repo));
+  return [...new Set(cwds)];
+};
+
+/**
+ * The job's session identity as the runtime can learn it: {agent, cwds,
+ * dispatchedAt, files:[{file, matched}], resolvedAt} — or a `reason` when the
+ * agent/home does not resolve (devin keeps everything in sessions.db, which
+ * housekeeping handles when no devin.exe runs; it is never moved here).
+ */
+export function sessionIdentityOf(db, job, payload, repo, { env = process.env, home = os.homedir(), now = Date.now() } = {}) {
+  const agent = agentOfJob(payload);
+  const identity = { agent, resolvedAt: now };
+  if (!agent) return { ...identity, reason: 'agent-unknown' };
+  if (agent === 'devin') return { ...identity, reason: 'sessions-db-owned' };
+  const homes = sessionHomes({ env, home });
+  if (homes.skipped) return { ...identity, reason: homes.skipped };
+  const cwds = sessionCwdsOf(db, job, repo);
+  const dispatchedAt = db.prepare("SELECT MAX(created_at) at FROM events WHERE entity_id=? AND kind='op-dispatched'").get(job.job_id)?.at ?? null;
+  const sinceMs = (dispatchedAt ?? job.updated_at ?? now) - SESSION_LEAD_MS;
+  const files = sessionCandidates({ agent, cwds, sinceMs, homes, jobId: job.job_id });
+  return { ...identity, cwds, dispatchedAt, files: files.map((f) => ({ file: f.file, matched: f.matched === true })) };
+}
+
+/** The hk-sessions archiver, lazy: its lane lands it; an absent module skips, never fails. */
+const sessionArchiver = async (env) => {
+  try {
+    const mod = await import(env.STARCI_HK_SESSIONS_MODULE ?? new URL('../housekeeping/hk-sessions.mjs', import.meta.url).href);
+    return typeof mod.archiveSessionFiles === 'function' ? mod.archiveSessionFiles : null;
+  } catch { return null; }
+};
+
+/** The terminal-liveness gate reason, or null when the session may move. */
+const terminalGate = ({ handle, env, show }) => {
+  if (handle && env.ORCA_TERMINAL_HANDLE === handle) return 'caller-terminal';
+  if (!handle) return null;
+  let shown = null;
+  try { shown = show({ terminal: handle }); } catch { shown = null; }
+  if (shown?.ok && shown.connected === true) return 'terminal-still-open';
+  const gone = shown?.ok === true || (shown?.hostUnavailable !== true && TERMINAL_GONE_CODES.has(shown?.errorCode));
+  if (gone) return null;
+  return shown?.hostUnavailable ? 'orca-unavailable' : 'terminal-unreadable';
+};
+
+/** The attributed session files: identity matches plus the payload's learned list that still exists. */
+const attributedFiles = (identity, payload) => {
+  const attributed = new Set(identity.files.filter((f) => f.matched).map((f) => f.file));
+  // The identity observe already learned stands too (session files are stable once created).
+  for (const f of Array.isArray(payload?.session?.files) ? payload.session.files : [])
+    if (f?.matched && typeof f.file === 'string') { try { if (fs.existsSync(f.file)) attributed.add(f.file); } catch { /* gone */ } }
+  return [...attributed];
+};
+
+/**
+ * Release the settled job's own session files to the archive root.
+ * {released:true, files, archiveRoot} or {released:false, reason, files?} —
+ * never throws, never touches the kernel's or another session's files:
+ *   - job is not an op (a kernel job's own session is never archived);
+ *   - the worker's terminal still reads connected (or cannot be read at all);
+ *   - no file inside the dispatch window names the job id.
+ * `beforeArchive({agent, files})` runs once the files are attributed and before they move (settle-tail reads the
+ * session's token usage there, scripts/kernel/usage-record.mjs; its failure never blocks the release).
+ * `show`/`archive` are the spec seams; `archive` defaults to
+ * scripts/housekeeping/hk-sessions.mjs archiveSessionFiles(paths, {archiveRoot, agent, apply:true}).
+ */
+export async function releaseSettledSession({ db, job, payload, repo, env = process.env, home = os.homedir(), archiveRoot = null, show = terminalShow, archive = null, beforeArchive = null, now = Date.now() } = {}) {
+  const agent = agentOfJob(payload);
+  if (job.kind !== 'op') return { released: false, agent, reason: 'not-an-op-job' };
+  if (!agent) return { released: false, agent, reason: 'agent-unknown' };
+  if (agent === 'devin') return { released: false, agent, reason: 'sessions-db-owned' };
+  if (sessionHomes({ env, home }).skipped) return { released: false, agent, reason: 'test-env-unrooted' };
+  // A session whose terminal is still open is never moved — the same
+  // terminal-handle liveness the settle/dedupe code reads gates the archive.
+  const handle = payload?.managed?.agentTerminalHandle ?? payload?.orca?.agentTerminalHandle ?? job.worker_id ?? payload?.launchTerminal?.handle ?? null;
+  const skip = (reason, extra = {}) => ({ released: false, agent, reason, handle, ...extra });
+  const gate = terminalGate({ handle, env, show });
+  if (gate) return skip(gate);
+  const identity = sessionIdentityOf(db, job, payload, repo, { env, home, now });
+  const files = attributedFiles(identity, payload);
+  if (!files.length) return skip(identity.files.length ? 'unattributed-session' : 'no-session-file', { cwds: identity.cwds, candidates: identity.files.length });
+  const root = env.STARCI_SESSION_ARCHIVE_ROOT ?? archiveRoot ?? archiveRootOf({ env });
+  const run = archive ?? await sessionArchiver(env);
+  if (!run) return skip('archiver-unavailable', { files, archiveRoot: root });
+  try { beforeArchive?.({ agent, files }); } catch { /* a usage read never blocks the release */ }
+  try {
+    const result = run(files, { archiveRoot: root, agent, apply: true });
+    return { released: true, agent, cwds: identity.cwds, files, archiveRoot: root, archived: result ?? null };
+  } catch (error) {
+    return skip(String(error?.message ?? error), { files, archiveRoot: root });
+  }
+}

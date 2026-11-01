@@ -1,0 +1,28 @@
+schema: starci/orca-capabilities@1
+exclusiveHost: true
+topology: workflow-kernel-to-operation-agents
+roles:
+  workflowKernel:
+    attestedTerminal: required
+    location: workflow-worktree
+    lifetime: workflow
+  operationAgent:
+    nativeAgent: required
+    location: own-job-worktree
+    lifetime: operation-attempt
+    concurrency: modules/models/runtimes.yaml runtimes.<pool>.maxParallel
+isolation:
+  worktreeBoundary: job
+  agentBoundary: operation-attempt
+  nestedAgentInsideOperation: forbidden
+communication:
+  allowed:
+    - kernel-to-own-operation
+    - operation-to-own-kernel
+  forbidden:
+    - operation-to-operation
+identity:
+  role: immutable-task-display-name
+  provider: native-agent-icon-plus-supervised-dispatch-receipt
+  terminalTitle: mutable-ui-metadata-canonicalized-after-readiness-and-before-release
+  activity: sidebar-subtitle-or-native-activity-title

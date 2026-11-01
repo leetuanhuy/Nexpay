@@ -1,0 +1,134 @@
+schema: starci/module-goal-define@1
+id: goal.define
+
+# ============================================================================
+# DEFINE-GOAL — the intake ritual. One owner prompt becomes ONE durable goal row
+# in the external project runtime ledger PLUS the derived ideal op chain, and ONE pending
+# inbox entry (the queue). Chat is ephemeral; the ledger is the only thing that
+# survives restarts, worktree deletion and agent death. Nothing downstream may
+# read the goal from chat history — only from the ledger.
+# ============================================================================
+
+about:
+  en: >-
+    Native goal intake selected by the explicit StarCi entry or an authorized native job contract.
+    Ordinary chat requests do not enroll a workflow. After read-only context assessment, an exact
+    goal draft and derived operation plan need owner acceptance before persistence.
+    Define-goal derives the goal AND the ideal op chain (via
+    scripts/route/route-plan.mjs backward-chaining through
+    modules/goal/legality.yaml), freezes both into the ledger and queues the
+    workflow. A [Kernel] claims queued goals from the inbox — never from a
+    prompt string held in a terminal.
+
+actor: explicitly selected owner StarCi entry or an authorized native job holding its bound authority
+executable: scripts/goal/define-goal.mjs
+
+input:
+  prompt: the raw owner text, verbatim — recorded for provenance
+  repo: >-
+    single-repo mode: the repository root identifying the project's external runtime ledger
+    (defaults to cwd). Mutually exclusive with project.
+  project: >-
+    project mode: a name resolved through
+    <source>/.workspaces/projects/<name>/work.json
+    (starci/workspace-binding@2), where <source> is the repository containing
+    this .claude, or STARCI_SOURCE_ROOT when set. repository.pathFromSource resolves to one app
+    repository; its sides.be and sides.fe folders are cold-scanned by --plan.
+    The app owns the project ledger: the goal persists to
+    the external runtime ledger resolved for the app repository, never a copied worktree database
+    or the host repo's ledger. Mutually exclusive with repo.
+  title: optional short name; derived from the prompt when absent
+  routing_bias: >-
+    Normalized owner intent: prefer/avoid pool strings or concrete selectors,
+    optional hard require selector, roles (default op), and optional exact-attempt
+    reserveOverride. Invalid JSON, hard constraints and conflicts are refused before
+    persistence. An override may be recorded only from the owner context, never a
+    delegated/provisional definition. It does not authorize other scopes or waive
+    authentication, provider exhaustion, role floors or effect evidence.
+  plan: >-
+    dry-run flag. Prints the plan table and writes nothing: STATE (one line per
+    role summarizing that role's own repository from scripts/goal/assess.mjs
+    --repo <each repo in scope> --json — files, loc, test framework, starciwork
+    present — degrading to 'assess unavailable' when the script is absent or
+    fails, never blocks), GOAL text, OP CHAIN (the derived legs, each mapped to
+    a cold tier estimate easy=15m / medium=45m / hard=90m, labelled 'estimate
+    is cold'; `underivable (kernel will derive at boot)` with route-plan's
+    reason when it forms no chain; an `assumed:` line per variable the owner
+    repository's Work root settles out of band — route-plan --work, per
+    legality.yaml settledOutOfBand), WILL-WRITE list and the resolved ledger path. The explicitly selected entry shows
+    the exact draft, plan and intended persistence/start actions to the owner; accepted approval
+    binds identity, content, plan and scope. Only that accepted re-run without --plan
+    is the run that persists.
+  revise: >-
+    Optional existing workflow_id. Revision mode never creates another
+    workflow: --plan reads the latest append-only goal revision and emits a
+    starci/goal-revision-preview@1 with the exact rev+1, stable goal identity,
+    op-chain diff, live-kernel state and a machine-actionable approval command.
+    Sharing a project ledger with another workflow is reported as custody, not
+    inferred as a scope conflict; concrete owned-path overlap decides conflict.
+  approve_revision: >-
+    The content-bound token from revisionPreview.approval. It may be supplied
+    only after the owner replies exact `ok` to that preview. A missing, stale or
+    mismatched token refuses the revision before opening a write transaction.
+  provision_grants: >-
+    A public starci/provision-grants@1 JSON file names prepared immutable provider plans by
+    operation id and digest, each bound to one op in this derived chain. The plan displays their
+    action, target and grant-list digest. Initial owner persistence requires that exact digest
+    through --approve-provision-grants; a revision includes the selected list in its native
+    approval token. An explicit empty list revokes grants. Supervisor and provisional entries
+    cannot issue grants. Execution separately verifies current goal revision, filed native
+    attempt/dispatch identity and exact prepared plan through scripts/gates/provision-authority.mjs.
+
+derives:
+  goal_markdown: the goal statement rendered from the prompt
+  goal_identity: sha256(markdown) — the identity every later generation must match
+  op_chain: 'route-plan output when its status is ok: ordered op legs with per-leg produces/consumes plus edges [[fromLeg, toLeg], ...] over leg labels (op or op#instance); stored in goals.json — the kernel re-derives at boot and diffs, never trusts it blindly. Any other status stores opChain null plus underivable {status, reason}.'
+  derived_plan: 'goals.json.derivedPlan {legs: [{op, instance?, params?}], edges, derivedFrom: route-plan, derivedAt} from the same ok chain; scripts/route/plan-edges.mjs planEdgesOf reads its edges (the linear leg chain when a plan has none), and starci kernel plan replaces it'
+  assess: 'per-repo cold signals from scripts/goal/assess.mjs (--repo <p> [--repo <p2>] --json); plan-only, advisory, null when unavailable'
+
+writes:
+  create:
+    - table: workflows
+      row: {workflow_id, title, created_at, ledger_mode, phase: 'queued'}
+    - table: goals
+      row: {workflow_id, revision: 0, goal_identity, markdown, json: {derivedFrom, opChain, derivedPlan?, underivable?, routing_bias}}
+    - table: inbox
+      row: {workflow_id, kind: 'goal', key: workflow_id, payload_json: {prompt, at}, status: 'pending'}
+      note: THE QUEUE. pending = unclaimed; start-workflow claims it atomically.
+  revision:
+    - table: goals
+      row: '{same workflow_id, revision: latest+1, same goal_identity, markdown, json: {derivedFrom, opChain, derivedPlan, routing_bias, revision}, amendment_json: owner approval receipt}'
+      note: Append-only; scripts/goal/accept-revision.mjs holds scripts/goal/workflow-lock.mjs through acceptance and the ledger transaction; prior revisions retain their original history.
+    - table: inbox
+      row: '{same workflow_id, kind: goal-revision, key: workflow_id:revision, payload_json: {baseRevision, revision, goalIdentity, approvalToken, opChain}, status: pending}'
+      note: Wakes the existing workflow contract; only older pending goal-revision notifications are marked superseded with explicit revision lineage; other pending inputs remain unchanged.
+    - table: events
+      row: '{kind: goal-revised, payload: {previousRevision, revision, goalIdentity, opChainDiff, kernelResume}}'
+
+guarantees:
+  - 'crash before ledger write → nothing happened; re-enter the prompt'
+  - 'crash after ledger write → goal sits queued until a kernel claims it'
+  - 'no agent memory is part of correctness'
+  - 'revision preview is read-only; only its owner-approved, content-bound token may append rev+1'
+  - 'a live Kernel remains parked on divergence before approval and may only resurvey after the approved goals + inbox + event transaction commits'
+
+rules:
+  - 'goal row written BEFORE inbox row — a queue entry without its goal is refused'
+  - 'define-goal never dispatches — it only queues'
+  - 'one prompt → one workflow; amendments → goals.revision+1 via goal.revise'
+  - 'when the workflow finishes, the goal is finished (workflows.phase=finished, inbox consumed) — a completed goal leaves the queue forever'
+  - '--project and --repo are mutually exclusive; --project binds the ledger to the app repository, not the host'
+  - 'the flow is context → read-only plan → owner acceptance → persist: --plan writes nothing; selection, silence and generic instructions never accept an unclear goal'
+  - 'approval binds goal identity, content, derived plan and authority; unchanged accepted scope proceeds without another gate, while material scope changes require new acceptance'
+  - 'an intended startup must be included in the accepted plan or approved separately; native workflow ingress validates persisted acceptance before host effects'
+  - 'revision approval retains its native content-bound token and exact owner ok gate'
+  - 'revision preserves workflow_id and goal_identity, increments revision by exactly one, records explicit lineage, and never duplicates the workflow or kind=goal inbox row'
+  - 'finished/archived workflows and revisions with open operation jobs are refused; checkpoint or settle the operations first'
+  - 'same project ledger is not a conflict predicate; only explicit owned-path/effect overlap or live custody constraints may block execution'
+
+returns:
+  workflow_id: the durable id start-workflow binds to
+  op_chain: the derived legs (advisory — kernel re-derives on boot)
+  queued: true
+  revision_preview: 'revision mode + --plan only: starci/goal-revision-preview@1 including approval.token and approval.command'
+  revised: 'revision mode after approved token: true, with the same workflow_id and goal_identity at rev+1'

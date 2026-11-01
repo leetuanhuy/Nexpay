@@ -1,0 +1,275 @@
+schema: starci/knowledge-source@1
+id: be.architecture-check
+title: Enforceable backend architecture boundaries
+purpose: |-
+  Define the backend responsibility tiers, the one dependency direction between them, the thin application composition root
+  and the one module shape. Every rule here is judged by the architecture machine of @starci/hfs, which reads the tiers and
+  the direction matrix from knowledge/hfs/slots.yaml and never keeps a path list of its own.
+appliesTo:
+  - backend
+family: be
+# The slot ids this topic teaches (knowledge/hfs/slots.yaml); scripts/gates/read-digest.mjs inverts these
+# into the READ-step slot -> pattern-topic map (knowledge/op-gate.yaml kinds), each slot's topics in index.yaml order.
+slots: [be.app, be.app.api, be.app.worker, be.app.cli, be.feature]
+provenance:
+  reviewedAt: 2026-09-30
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/slots.yaml
+    - knowledge/hfs/rules.yaml
+    - docs/architecture.md
+    - owner-locked BE convention 2026-09-30
+    - https://docs.nestjs.com/modules
+    - https://www.typescriptlang.org/docs/handbook/modules/reference.html
+  limitations: |-
+    Static TypeScript dependency analysis does not prove Nest dependency-injection identity, provider scope, runtime
+    registration, transaction boundaries or business behavior. The e2e run that boots the real apps through `useTestWorld({ apps })` and the
+    behavior evidence separately prove registration. The selected repository's manifests, tsconfig and resolved package
+    exports are the resolution authority.
+rules:
+  - id: BE-ARCHITECTURE-1
+    title: Dependency direction follows the tier matrix
+    kind: mandatory
+    hfsRules: [R26, R27, R28, R30]
+    requirement: |-
+      Imports follow one matrix. An app may import features, domain, platform, integrations and packages. A feature may import
+      domain, platform, integrations and packages, and never another feature. A domain capability may import other domain
+      capabilities (acyclic), platform, integrations and packages. An integration may import platform and packages only. A
+      platform capability may import platform (acyclic) and packages only. An `import type`, a re-export, a static dynamic-import
+      literal and a package export count exactly like a value import. A type that platform and domain both need moves down to
+      platform or is passed through options.
+    rationale: |-
+      Domain owns invariants, platform is technical runtime, integrations translate providers. Any upward edge makes an owner
+      impossible to test or split, and a type-only edge hides a real cycle from the compiler and the linter.
+    cases:
+      - id: case-1
+        when: A feature needs behavior that another feature already has
+        write: Move that behavior into a domain capability and let both features import it.
+      - id: case-2
+        when: A platform module needs a domain enum or entity list
+        write: Receive the list through `register(options)` composed by the app, or move the neutral type to platform.
+      - id: case-3
+        when: A domain capability needs a provider
+        write: Import the integration public API. The integration owns its own contract, errors and config; it never imports the domain.
+      - id: case-4
+        when: An internal alias, relative import or package export cannot resolve
+        write: Treat it as a configuration failure, never as a passing check.
+    verification:
+      automated:
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+        - ARCH_OWNER_CYCLE
+        - BE_FEATURE_IMPORTS_FEATURE
+        - BE_PUBLIC_SURFACE
+        - ARCH_OWNER_EXPORT_BYPASS
+        - ARCH_OWNER_EXPORT_STAR
+        - HFS_ALIAS_REEXPORT
+        - ARCH_PACKAGE_EXPORT_BYPASS
+      manual:
+        - Confirm that a proposed shared type belongs to platform or options rather than hiding an upward dependency.
+    relatedExamples: []
+  - id: BE-ARCHITECTURE-2
+    title: Apps own bootstrap and composition only
+    kind: mandatory
+    hfsRules: [R32, R33, R02, R245, R246]
+    requirement: |-
+      An app directory `be/apps/<app>/src` holds `main.ts` (at most 80 lines), `<app>.env.ts` (150), `<app>.options.ts` (200),
+      `compose/<area>.ts` (120) and `app.module.ts` (250, with `static register(options: AppOptions)`); an app has no spec of its
+      own (BE-TEST-1). `<app>.env.ts` exports an explicit typed `<App>Env` interface and
+      `read<App>Env(env: EnvSource): <App>Env`. The interface declares its own readonly parsed members, typed from
+      capability parsers and structurally compatible with the app's options, with no localhost or default host fallback.
+      Secrets use `env.secret`:
+      `EnvSource` resolves `<NAME>_FILE` first for `.starcistacks` custody and plain `<NAME>` only when the file key is absent.
+      The role name stays `<app>.env.ts`, never `env.ts`; capability `<capability>.config.ts` parsers remain unchanged.
+      `main.ts` builds `EnvSource` once, imports and calls the reader from `<app>.env.ts`, builds `AppOptions`, calls
+      `AppModule.register(options)` and handles startup failure (the cli app boots with
+      `CommandFactory.run` instead and never serves, cli.yaml BE-CLI-1). Only `main.ts` and `<app>.env.ts` may read the app's
+      environment. The env file holds parsing only, with no logic, module composition, business code or feature imports;
+      the options file holds env-derived values and port bindings only, with no parsing. Neither it nor a compose group
+      reads `process.env` or `EnvSource`. The env and options files both refuse module, queue and
+      scheduler composition (`BE_APP_OPTIONS_COMPOSITION`).
+      `app.module.ts` imports and spreads the area groups, which register the capability modules and the modules of the app's
+      kind (api: `-graphql`, `-http`, `-websocket` and the `-schedule` and `-message` modules of the background it owns; worker:
+      `-schedule`, `-message`; cli: the cli feature root module `CliModule`). For an api app the root binds `APP_GUARD` and
+      `APP_FILTER`; it holds no business handler, service, controller, resolver or entity. The e2e world boots the real `AppModule.register(options)`
+      (BE-TEST-12). A process entrypoint (`main.ts`, `bootstrap()`, a top-level `void x()`, `NestFactory.create`,
+      `CommandFactory.run`) exists only under `be/apps/*/src`; migrations run only through the cli migrate command.
+    rationale: |-
+      A thin composition root makes startup explicit and keeps product behavior independently testable below it.
+    cases:
+      - id: case-1
+        when: Process entry
+        write: main.ts builds EnvSource, calls read<App>Env from <app>.env.ts, builds options, creates the Nest app from AppModule.register(options), starts, and reports a startup failure with the failing key or module name.
+      - id: case-2
+        when: Root dependency composition
+        write: 'app.module.ts lists ClockModule.register({ isGlobal: true }), PurchaseModule.register({ isGlobal: true, ...options.purchase }), CheckoutGraphqlModule and the APP_GUARD and APP_FILTER providers.'
+      - id: case-3
+        when: A second process kind is needed
+        write: Add a `be.app.worker` app (background scaled apart) and declare its kind in hfs.json sides.be.apps; a one-off action is a command of the one `be/apps/cli`; never grow the api app with either.
+    verification:
+      automated:
+        - BE_APP_COMPOSITION_ONLY
+        - BE_APP_BUSINESS_ROLE
+        - BE_ENTRYPOINT_ONLY_IN_APPS
+        - HFS_SLOT_REQUIRED_MISSING
+        - HFS_MIN_INSTANCES
+        - HFS_REQUIRED_FILE_MISSING
+        - HFS_ROOT_ENTRY_MISSING
+        - HFS_APPS_REQUIRED
+        - HFS_APP_LAYOUT_INVALID
+        - HFS_README_TITLE_INVALID
+        - HFS_README_DESCRIPTION_INVALID
+        - HFS_README_SECTION_MISSING
+        - HFS_README_SECTION_ORDER
+        - HFS_README_DEVELOPMENT_INCOMPLETE
+        - HFS_README_WORK_POINTER_MISSING
+        - HFS_README_PRIVATE_URL
+        - HFS_README_BADGE_NOT_LIVE
+        - BE_APP_OPTIONS_COMPOSITION
+        - BE_APP_COMPOSITION_BUDGET
+      manual:
+        - Verify that the e2e run of the app fails when a module or provider is missing.
+    relatedExamples: []
+  - id: BE-ARCHITECTURE-3
+    title: One module shape; one representative module per capability, registered once per app
+    kind: mandatory
+    hfsRules: [R30, R45, R25, R295]
+    requirement: |-
+      Every NestJS module has a module definition (owner:module-definition-everywhere, R295): a capability's sub-modules, every feature
+      application module, every transport module and every cli group are built the same way as a capability, with
+      `<x>.module-definition.ts` (`new ConfigurableModuleBuilder<XOptions>().setClassMethodName("register").build()`), `<x>.options.ts`
+      and a `<x>.module.ts` that extends `ConfigurableModuleClass` and declares only its `@Module` metadata. Such a module is listed
+      only as `XModule.register({...})` (`{}` when it takes no options); a sub-module is imported by its parent as
+      `PetModule.register({})`. The rest of this requirement is the capability case. Every capability module (the `<c>.module.ts` of a `be.domain`, `be.platform` or `be.integrations` owner) is
+      `@Module({...}) export class XModule extends ConfigurableModuleClass {}` with a `<c>.module-definition.ts` built by
+      `new ConfigurableModuleBuilder<XOptions>().setExtras({ isGlobal: false }, (definition, extras) => ({ ...definition, global: extras.isGlobal })).build()`.
+      The generic `XOptions` is required; a capability without options declares `export type XOptions = Record<string, never>` in
+      `<c>.options.ts`. Only the method name `register` exists (no `forRoot`, `forFeature`, `registerAsync`); a module that adds
+      providers overrides `static register(options: typeof OPTIONS_TYPE): DynamicModule`. Each capability has one representative
+      module (`AnimalModule`), the only module of the capability registered in an app, exactly once per app, in
+      `be/apps/<app>/src/app.module.ts`, as `X.register({ isGlobal: true, ...options.x })`. A representative may split its
+      complexity into sub-modules (`PetModule`, `HumanModule`, each with its own module definition) and import them as
+      `imports: [PetModule.register({})]`; a sub-module is
+      never registered in an app, never global and has exactly one importer, its parent. Other capabilities reach a capability
+      only through its `Inject<Thing>()` decorators and never import its representative module. `isGlobal: true` appears only in
+      app roots and `@Global()` appears nowhere (tests included). The one legal cross-module import is a transport module
+      importing its own feature's application module. No `new` of an `@Injectable`, no module-level `let`, no two modules in
+      one file, no `PortBinding`-style composition helper, no `ModuleRef`. Each owner exposes one `index.ts` with named exports
+      only and no `export *`, within the owning slot's `budget.indexExports`: 60 names for domain, platform and feature
+      owners, 80 for be.integrations provider entries. A specialized slot without its own budget inherits the tier's
+      owner-slot budget. HFS_UNUSED_EXPORT still prunes names with no supported external consumer.
+    rationale: |-
+      A stateful module imported from two consumers is two instances: two pools, two clients. Registering the representative
+      once at the app root removes that failure class and makes globality a composition decision; splitting a capability into
+      sub-modules only reduces the complexity of one parent.
+    cases:
+      - id: case-1
+        when: A capability with options
+        write: 'purchase.module-definition.ts builds ConfigurableModuleClass and OPTIONS_TYPE from ConfigurableModuleBuilder<PurchaseOptions>; PurchaseModule extends ConfigurableModuleClass and is registered once as PurchaseModule.register({ isGlobal: true, ...options.purchase }).'
+      - id: case-2
+        when: A feature needs a provider of another capability
+        write: Inject it through the capability's injector or by class from its public entry; the app registered the capability once, and the feature module does not import it.
+      - id: case-3
+        when: A capability grows too large for one module
+        write: 'PurchaseModule imports PetModule-style sub-modules as PetModule.register({}) (each with its own module definition); only PurchaseModule appears in an app''s imports.'
+      - id: case-4
+        when: Providers differ by connection
+        write: 'Keep one connection per database with its own injector and one DatabaseModule.register({ isGlobal: true, connections: [...] }) at the app root.'
+    verification:
+      automated:
+        - BE_PUBLIC_SURFACE
+        - ARCH_OWNER_EXPORT_BYPASS
+        - ARCH_OWNER_EXPORT_STAR
+        - HFS_ALIAS_REEXPORT
+        - ARCH_PACKAGE_EXPORT_BYPASS
+        - BE_MODULE_SHAPE
+        - BE_MODULE_HANDLER_REGISTRATION
+        - BE_MODULE_PROVIDER_REREGISTRATION
+        - HFS_UNUSED_EXPORT
+        - HFS_UNUSED_FILE
+        - BE_MODULE_DEFINITION_MISSING
+      manual:
+        - Review provider token, scope and lifetime through the e2e run of the app.
+    relatedExamples: []
+  - id: BE-ARCHITECTURE-4
+    title: Application contracts do not depend on transport adapters
+    kind: mandatory
+    hfsRules: [R29, R37, R88]
+    requirement: |-
+      Messages, handlers and their plain contracts in `application/` do not import transport DTOs, request or session framework
+      context, generated GraphQL types or protocol decorators, and no ORM entity appears in a contract. Transport adapters under
+      `transport/<protocol>/` import application messages and contracts and project results. Nest injection alone is allowed
+      in `application/`; a namespace alias must not hide a protocol decorator.
+    rationale: |-
+      Several protocols reuse one operation only when its contract depends on none of their request or response shapes.
+    cases:
+      - id: case-1
+        when: A handler needs the caller
+        write: Accept `ExecuteParams<T>` whose `principal` is `{ id, roles }`; never a request object, token or ORM user.
+      - id: case-2
+        when: A result reaches a resolver
+        write: The resolver maps the plain result to its `<Action>Type` in `<action>.mapper.ts`.
+    verification:
+      automated:
+        - BE_FEATURE_SHAPE
+        - BE_FEATURE_LAYOUT_INVALID
+        - BE_APPLICATION_IMPORTS_TRANSPORT
+        - BE_APPLICATION_TRANSPORT_FRAMEWORK
+        - BE_ENTITY_IN_CONTRACT
+        - BE_TRANSPORT_SHAPE
+      manual:
+        - Check generated wire types and same-source public API leaks outside recognizable configured paths.
+    relatedExamples: []
+  - id: BE-ARCHITECTURE-5
+    title: Owners form an acyclic graph and every feature is composed
+    kind: mandatory
+    hfsRules: [R27, R31]
+    requirement: |-
+      No cycle exists between owners at any tier, and `import type` edges are part of the graph. Every feature and every
+      transport module is composed by at least one app. Code that no app composes never runs, so it is a finding even when its
+      specs pass.
+    rationale: |-
+      A cycle prevents separate testing and splitting, and an uncomposed feature is dead code that still looks finished.
+    cases:
+      - id: case-1
+        when: Two capabilities need each other
+        write: Extract the shared contract into a third capability or into platform, and make both depend on it.
+      - id: case-2
+        when: A new feature is added
+        write: Add its transport modules to the app that serves it in the same change and cover it in the app's e2e.
+    verification:
+      automated:
+        - ARCH_OWNER_CYCLE
+        - BE_FEATURE_NOT_COMPOSED
+      manual:
+        - Confirm the app that composes a feature is the one that should serve it.
+    relatedExamples: []
+  - id: BE-ARCHITECTURE-6
+    title: No trigger kind imports another; the kinds meet through the event bus
+    kind: mandatory
+    hfsRules: [R156, R28, R31]
+    requirement: |-
+      Features are grouped by what starts their work: `api`, `webhooks`, `realtime`, `saga`, `reactors`, `jobs` and `cli` (the slot
+      field `trigger` of the kind's owner slot). Business logic stays in `modules/domain` and a feature is a thin door. No kind imports
+      another kind; each imports only downward into `modules/*`, and only `be/apps/*` compose features. Every cross-kind call is an
+      event: a domain service publishes `eventBus.publish(event, tx)` and the other kind consumes it (api to saga or jobs, saga to jobs,
+      jobs to saga, cli to jobs or saga). Type-only imports count, and an import inside one owner is always fine.
+    rationale: |-
+      A direct import couples two failure domains and runs the callee inside the caller's process and transaction. An event is durable,
+      retried and observable, so the kinds can be deployed and scaled apart.
+    cases:
+      - id: case-1
+        when: A request must start a background job
+        write: The domain service the api handler calls enqueues the job inside its transaction (queues.yaml); the jobs feature never appears in an api import.
+      - id: case-2
+        when: A saga step needs a job's result
+        write: The job's domain service publishes a completion event; a saga consumer advances the saga.
+    verification:
+      automated:
+        - BE_KIND_ISOLATION
+        - BE_FEATURE_IMPORTS_FEATURE
+        - BE_FEATURE_NOT_COMPOSED
+      manual:
+        - Confirm a shared helper two kinds need sits in modules/*, not in a feature.
+    relatedExamples: [event-bus]

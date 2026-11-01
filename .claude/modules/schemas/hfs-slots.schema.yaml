@@ -1,0 +1,681 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:starci:hfs-slots:3
+title: HFS slot manifest (kind app or runtime)
+description: >-
+  The shape of knowledge/hfs/slots.yaml. Semantic rules JSON Schema cannot state (unique ids, every tier named by a
+  slot or mayImport exists in the profile, an app-kind slot names a declared kind)
+  are checked by scripts/hfs/slots.mjs loadSlotManifest. Two kinds share the loader: `app` (knowledge/hfs/slots.yaml,
+  no `kind` key) for product apps, and `runtime` (knowledge/hfs/runtime-slots.yaml) for the StarCi runtime repository.
+if: {required: [kind], properties: {kind: {const: runtime}}}
+then: {$ref: '#/$defs/runtimeManifest'}
+else: {$ref: '#/$defs/appManifest'}
+$defs:
+  appManifest:
+    type: object
+    additionalProperties: false
+    required: [schema, version, versioning, presenceValues, trackedValues, testValues, editions, sides, appKinds, tiers, ruleParams, slots]
+    properties:
+      schema: {const: starci/hfs-slots@3}
+      editions:
+        const: [full, lite]
+        description: The editions an app declaration may name in hfs.json (absent means full); slots and rules carry `editions` subsets of this list.
+      kind: {const: app}
+      version:
+        type: string
+        pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+        description: MAJOR.MINOR.PATCH. The major must equal the number after @ in `schema`; a repository pins only the major.
+      versioning:
+        type: object
+        additionalProperties: false
+        required: [patch, minor, major, pins]
+        properties:
+          patch: {type: string}
+          minor: {type: string}
+          major: {type: string}
+          pins: {type: string}
+      presenceValues: {const: [required, optional, opt-in, forbidden]}
+      trackedValues: {const: [tracked, ignored, external]}
+      testValues: {const: [unit-beside, e2e, none]}
+      sides:
+        type: object
+        additionalProperties: false
+        required: [be, fe]
+        description: The two sides of an app, each in the folder of its name; reads lists the only paths of the other side it may read.
+        properties:
+          be: {$ref: '#/$defs/side'}
+          fe: {$ref: '#/$defs/side'}
+      triggerKinds: {$ref: '#/$defs/nameList'}
+      appKinds:
+        type: object
+        additionalProperties: false
+        required: [be, fe]
+        properties:
+          be: {$ref: '#/$defs/nameList'}
+          fe: {$ref: '#/$defs/nameList'}
+      naming:
+        type: object
+        additionalProperties: false
+        required: [prefixes]
+        description: RT_SLOT_ID_SHAPE vocabulary — id prefixes, the declared same-concept/refused suffix pairs, and the S9-02 incoming-thing glossary. Optional so a manifest pinned to an older minor still validates.
+        properties:
+          prefixes: {$ref: '#/$defs/nameList'}
+          sameConceptPairs: {$ref: '#/$defs/stringPairs'}
+          refusedPairs: {$ref: '#/$defs/stringPairs'}
+          glossary: {type: object, additionalProperties: {type: string, minLength: 1}}
+      tiers:
+        type: object
+        additionalProperties: false
+        required: [be, fe]
+        properties:
+          be: {$ref: '#/$defs/tierMap'}
+          fe: {$ref: '#/$defs/tierMap'}
+      ruleParams:
+        type: object
+        additionalProperties: false
+        required: [common, be]
+        properties:
+          db:
+            type: object
+            additionalProperties: false
+            properties:
+              extensions:
+                type: array
+                uniqueItems: true
+                items: {type: string, minLength: 1}
+          common:
+            type: object
+            additionalProperties: false
+            required: [fileLines, duplicateBlock]
+            description: The parameters both sides share (ruleParams(profile) merges common under the profile); a side restates one of them only to override it.
+            properties:
+              fileLines: {$ref: '#/$defs/fileLines'}
+              functionLines: {type: integer, minimum: 1}
+              featureFiles: {type: integer, minimum: 1}
+              duplicateBlock: {$ref: '#/$defs/duplicateBlock'}
+          be:
+            type: object
+            additionalProperties: false
+            required: [infraOwners, eventBus, specDoubles, paramNames, suffixes, bannedSuffixes, contractShape, unitRoles, logicRoles, thinRoles, patternScenarios, kindPatterns, addKinds]
+            properties:
+              fileLines: {$ref: '#/$defs/fileLines'}
+              functionLines: {type: integer, minimum: 1}
+              featureFiles: {type: integer, minimum: 1}
+              duplicateBlock: {$ref: '#/$defs/duplicateBlock'}
+              infraOwners:
+                type: object
+                minProperties: 1
+                description: R90 BE_INFRA_OWNER. Raw library specifier or global reference -> the capabilities allowed to use it; [] means nowhere.
+                additionalProperties:
+                  type: array
+                  uniqueItems: true
+                  items: {type: string, pattern: '^(platform|integrations)/[a-z][a-z0-9-]*$'}
+              eventBus:
+                type: object
+                additionalProperties: false
+                required: [imports, classes]
+                description: >-
+                  R87 BE_CQRS_SHAPE no-event-bus. `imports`: module specifier -> the member names that are an in-process event
+                  ([] flags the package itself); `classes`: module specifier -> the class names that are an in-process bus when
+                  constructed or extended.
+                properties:
+                  imports:
+                    type: object
+                    minProperties: 1
+                    additionalProperties:
+                      type: array
+                      uniqueItems: true
+                      items: {type: string, pattern: '^[A-Z][A-Za-z0-9]*$'}
+                  classes:
+                    type: object
+                    minProperties: 1
+                    additionalProperties:
+                      type: array
+                      minItems: 1
+                      uniqueItems: true
+                      items: {type: string, pattern: '^[A-Z][A-Za-z0-9]*$'}
+              specDoubles:
+                type: object
+                additionalProperties: false
+                required: [kit, doubles, fallback]
+                description: R48 BE_SPEC_QUALITY spec-infra-double-from-kit. The kit package, the ordered token-pattern -> double table and the fallback double a service spec provider takes its useValue from.
+                properties:
+                  kit: {type: string, minLength: 1}
+                  doubles:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [token, double, forms]
+                      properties:
+                        token: {type: string, minLength: 1, description: A regular expression over the UPPER_SNAKE form of the provider token name.}
+                        double: {type: string, pattern: '^[A-Za-z][A-Za-z0-9]*$'}
+                        forms: {$ref: '#/$defs/doubleForms'}
+                  fallback:
+                    type: object
+                    additionalProperties: false
+                    required: [double, forms]
+                    properties:
+                      double: {type: string, pattern: '^[A-Za-z][A-Za-z0-9]*$'}
+                      forms: {$ref: '#/$defs/doubleForms'}
+              paramNames:
+                type: array
+                minItems: 1
+                description: R85 BE_RAW_INJECT injected-param-name. The names of the ports every class injects the same way; an entry names a declared type (type) or its ending (typeSuffix) and the parameter names it allows (names, and any ending nameSuffix).
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [names]
+                  oneOf:
+                    - {required: [type]}
+                    - {required: [typeSuffix]}
+                  properties:
+                    type: {type: string, pattern: '^[A-Z][A-Za-z0-9]*$'}
+                    typeSuffix: {type: string, pattern: '^[A-Z][A-Za-z0-9]*$'}
+                    names:
+                      type: array
+                      minItems: 1
+                      uniqueItems: true
+                      items: {type: string, pattern: '^[a-z][A-Za-z0-9]*$'}
+                    nameSuffix: {type: string, pattern: '^[A-Z][A-Za-z0-9]*$'}
+              kindPatterns:
+                type: object
+                description: 'BE_KIND_DECLARATION. Trigger kind -> the patterns an app that uses the kind declares (and whose platform capabilities must exist).'
+                additionalProperties:
+                  type: array
+                  uniqueItems: true
+                  items: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+              addKinds:
+                type: object
+                description: 'starci app add <noun> <name>. Noun -> the pattern topic whose files tree is generated, its instance variable, the patterns and trigger kind it registers, the options it needs and the defaults of the other variables.'
+                additionalProperties:
+                  type: object
+                  required: [topic, variable, patterns]
+                  additionalProperties: false
+                  properties:
+                    topic: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+                    variable: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+                    trigger: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+                    patterns: {type: array, uniqueItems: true, items: {type: string, pattern: '^[a-z][a-z0-9-]*$'}}
+                    needs: {type: array, uniqueItems: true, items: {type: string, pattern: '^[a-z][a-z0-9-]*$'}}
+                    also: {type: array, uniqueItems: true, items: {type: string, pattern: '^[a-z][a-z0-9-]*$'}}
+                    defaults: {type: object}
+                    wire:
+                      type: object
+                      description: The static module that lists the members of the kind; the generated member is registered in it (an import line and an entry of its imports array).
+                      required: [file, import, symbol]
+                      additionalProperties: false
+                      properties: {file: {type: string}, import: {type: string}, symbol: {type: string}}
+              patternScenarios:
+                type: object
+                description: 'BE_PATTERN_SPEC_MISSING. Declared pattern -> the scenario ids an e2e or integration spec must prove (a test titled <pattern>/<scenario>: ...).'
+                additionalProperties:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+              suffixes: {$ref: '#/$defs/roleSuffixes'}
+              bannedSuffixes: {$ref: '#/$defs/roleSuffixes'}
+              unitRoles:
+                type: array
+                minItems: 1
+                description: The roles of a back end whose unit spec is required, the one list every unit-test consumer reads. What the unit run measures is logicRoles over the coverage-required slots.
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [role, spec]
+                  properties:
+                    role: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+                    spec: {type: string}
+                    slot: {type: string}
+                    exempt: {type: array, items: {type: string, pattern: '^[A-Z][A-Z0-9_]+$'}}
+              logicRoles:
+                allOf: [{$ref: '#/$defs/roleSuffixes'}]
+                description: The roles that carry logic. A file of one of them inside a slot whose coverage is required is measured at 100 per file (jest thresholds, sonar.coverage.exclusions and codecov.yml are derived from it by scripts/hfs/coverage-scope.mjs).
+              thinRoles:
+                allOf: [{$ref: '#/$defs/roleSuffixes'}]
+                description: R203 BE_FEATURE_THIN. The roles a feature-tier file is judged thin by.
+              contractShape:
+                type: object
+                additionalProperties: false
+                required: [helper]
+                description: R47 BE_CONTRACT_UNGUARDED. The world vocabulary of a contract spec; helper is the imported function that erases payload values (shapeOf).
+                properties:
+                  helper: {type: string, pattern: '^[A-Za-z_$][A-Za-z0-9_$]*$'}
+              schemaAuthority:
+                enum: [typeorm, supabase]
+                description: 'Where the schema authority lives (R34/R35): TypeORM migrations under persistence/, or supabase/migrations (a connection with provider: supabase).'
+              lite:
+                type: object
+                minProperties: 1
+                description: 'The ruleParams.be keys edition lite overrides (each shaped as above; schemaAuthority: supabase makes supabase/migrations the one schema authority). A map value (infraOwners) merges one level deep over the base map; any other value replaces it.'
+                properties:
+                  functionLines: {type: integer, minimum: 1}
+                  featureFiles: {type: integer, minimum: 1}
+          fe:
+            type: object
+            additionalProperties: false
+            description: The fe overrides of ruleParams.common, when a side needs its own value.
+            properties:
+              fileLines: {$ref: '#/$defs/fileLines'}
+              functionLines: {type: integer, minimum: 1}
+              featureFiles: {type: integer, minimum: 1}
+              duplicateBlock: {$ref: '#/$defs/duplicateBlock'}
+              lite:
+                type: object
+                minProperties: 1
+                description: 'The ruleParams.fe keys edition lite overrides (each shaped as above).'
+                properties:
+                  functionLines: {type: integer, minimum: 1}
+                  featureFiles: {type: integer, minimum: 1}
+      crossOwner: {type: string}
+      crossApp: {type: string}
+      slots:
+        type: array
+        minItems: 1
+        items: {$ref: '#/$defs/slot'}
+      consumers:
+        type: array
+        items: {type: string}
+  runtimeManifest:
+    type: object
+    additionalProperties: false
+    required: [schema, kind, version, versioning, presenceValues, trackedValues, testValues, profiles, tiers, ruleParams, slots]
+    properties:
+      schema: {type: string, pattern: '^starci/runtime-slots@[0-9]+$'}
+      kind: {const: runtime}
+      version: {$ref: '#/$defs/semver'}
+      versioning:
+        type: object
+        additionalProperties: false
+        required: [patch, minor, major, pins]
+        properties:
+          patch: {type: string}
+          minor: {type: string}
+          major: {type: string}
+          pins: {type: string}
+      presenceValues: {const: [required, optional, opt-in, forbidden]}
+      trackedValues: {const: [tracked, ignored, external, generated]}
+      testValues: {const: [unit-beside, e2e, none]}
+      profiles: {const: [runtime]}
+      tiers:
+        type: object
+        additionalProperties: false
+        required: [runtime]
+        properties:
+          runtime: {$ref: '#/$defs/tierMap'}
+      ruleParams:
+        type: object
+        additionalProperties: false
+        required: [runtime]
+        properties:
+          runtime:
+            type: object
+            additionalProperties: false
+            required: [fileLines, sourceRoots, infraOwners, baseWriteMembers, baseEnvSeams, apiContracts, sourceName, oneOffNames, sharedBasenames, generated, heldSecrets, pinned, selfChecks]
+            properties:
+              fileLines: {$ref: '#/$defs/fileLines'}
+              sourceRoots: {$ref: '#/$defs/uniqueNames'}
+              infraOwners:
+                type: object
+                additionalProperties: false
+                required: [modules, globals, programs]
+                description: RT_EXTERNAL_OWNER. A module specifier, a global or a spawned program word -> the owners allowed to use it (api/<system>, api/* or engine/db); [] means nowhere.
+                properties:
+                  modules: {$ref: '#/$defs/ownerMap'}
+                  globals: {$ref: '#/$defs/ownerMap'}
+                  programs: {$ref: '#/$defs/ownerMap'}
+              baseWriteMembers: {$ref: '#/$defs/uniqueNames'}
+              baseEnvSeams: {$ref: '#/$defs/stringList'}
+              apiContracts:
+                type: object
+                propertyNames: {pattern: '^[a-z][a-z0-9-]*$'}
+                additionalProperties: {type: string, minLength: 1}
+              sourceName: {type: string, minLength: 1}
+              oneOffNames: {$ref: '#/$defs/uniqueNames'}
+              sharedBasenames: {$ref: '#/$defs/uniqueNames'}
+              generated:
+                type: array
+                minItems: 1
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [root, generatedBy]
+                  properties:
+                    root: {type: string, minLength: 1}
+                    generatedBy: {type: string, minLength: 1}
+              heldSecrets:
+                type: array
+                description: The sealed secrets the public runtime repository may still track (RT_SECRET_TRACKED), each with why; the list is empty and stays empty.
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [path, reason]
+                  properties:
+                    path: {type: string, minLength: 1}
+                    reason: {type: string, minLength: 1}
+              pinned:
+                type: array
+                minItems: 1
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [path, why]
+                  properties:
+                    path: {type: string, minLength: 1}
+                    why: {type: string, minLength: 1}
+              selfChecks:
+                type: array
+                minItems: 1
+                description: The retained runtime self-checks `starci runtime check` runs after the runtime check, in order.
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [id, run]
+                  properties:
+                    id: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+                    run: {type: string, minLength: 1}
+                    args: {$ref: '#/$defs/stringList'}
+      crossOwner: {type: string}
+      crossSystem: {type: string}
+      slots:
+        type: array
+        minItems: 1
+        items: {$ref: '#/$defs/runtimeSlot'}
+      consumers:
+        type: array
+        items: {type: string}
+  ownerMap:
+    type: object
+    additionalProperties:
+      type: array
+      uniqueItems: true
+      items: {type: string, pattern: '^(api/(\*|[a-z][a-z0-9-]*)|engine/db)$'}
+  uniqueNames:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items: {type: string, minLength: 1}
+  runtimeSlot:
+    type: object
+    additionalProperties: false
+    required: [id, profiles, path, presence, tracked, tier, tests]
+    properties:
+      id: {type: string, pattern: '^runtime\.[a-z0-9-]+(\.[a-z0-9-]+)*$'}
+      profiles: {const: [runtime]}
+      path: {type: string, minLength: 1}
+      presence: {enum: [required, optional, opt-in, forbidden]}
+      tracked: {enum: [tracked, ignored, external, generated]}
+      tier: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+      tests: {enum: [unit-beside, e2e, none]}
+      coverage: {enum: [required, none], description: 'required: the subtree is measured at 100 per file on every logicRoles file of the runtime coverage scope; none: never measured. Declared by every tracked slot of a runtime manifest and by no other (scripts/hfs/manifest-shape.mjs)'}
+      owner: {type: boolean}
+      minInstances: {type: integer, minimum: 1}
+      requires: {$ref: '#/$defs/stringList'}
+      allows: {$ref: '#/$defs/stringList'}
+      forbids: {$ref: '#/$defs/stringList'}
+      budget:
+        type: object
+        minProperties: 1
+        additionalProperties: {type: integer, minimum: 1}
+      rules:
+        type: array
+        uniqueItems: true
+        items: {type: string, pattern: '^[A-Z][A-Z0-9_]*\*?$'}
+      goesTo: {type: string, minLength: 1}
+      why: {type: string, minLength: 1}
+      since: {$ref: '#/$defs/semver'}
+      generatedBy: {type: string, minLength: 1, description: 'the one writer of a generated slot (tracked: generated)'}
+      parent: {type: string, pattern: '^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$', description: 'the declared slot id this id extends; RT_SLOT_ID_SHAPE requires the id to start with <parent>.'}
+    allOf:
+      - if: {properties: {tracked: {const: external}}, required: [tracked]}
+        then: {required: [goesTo], properties: {presence: {const: forbidden}}}
+      - if: {properties: {presence: {const: forbidden}}, required: [presence]}
+        then: {properties: {tracked: {const: external}}}
+      - if: {properties: {tracked: {const: generated}}, required: [tracked]}
+        then: {required: [generatedBy]}
+      - if: {required: [generatedBy]}
+        then: {properties: {tracked: {const: generated}}}
+      - if: {properties: {tracked: {const: tracked}}, required: [tracked]}
+        then: {required: [coverage]}
+        else: {not: {required: [coverage]}}
+  side:
+    type: object
+    additionalProperties: false
+    required: [reads]
+    properties:
+      reads:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+          pattern: '^[a-z][a-z0-9-]*/([^/]+/)+$'
+          description: A path of the other side (be/contracts/) or of an app-root slot tree the side may read (supabase/types/).
+  fileLines:
+    type: object
+    additionalProperties: false
+    required: [soft, hardGrowth]
+    properties:
+      soft: {type: integer, minimum: 1}
+      hardGrowth: {type: boolean}
+  duplicateBlock:
+    type: object
+    additionalProperties: false
+    required: [lines, tokens]
+    description: The one threshold of R21 duplicate code; checks and messages render it from here.
+    properties:
+      lines: {type: integer, minimum: 2}
+      tokens: {type: integer, minimum: 1}
+  doubleForms:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    description: What the provided value may be - call double(...), new new Double(...), curried double(...)(...), a plain object literal, a primitive literal or an array literal.
+    items: {enum: [call, new, curried, object, primitive, array]}
+  roleSuffixes:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    description: R89 BE_SOURCE_FORM. The closed role-suffix vocabulary of a source file name (suffixes) or the suffixes that are never a role (bannedSuffixes); the two lists are disjoint.
+    items: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+  nameList:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+  stringPairs:
+    type: array
+    uniqueItems: true
+    items:
+      type: array
+      minItems: 2
+      maxItems: 2
+      items: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+  tierMap:
+    type: object
+    minProperties: 1
+    propertyNames: {pattern: '^[a-z][a-z0-9-]*$'}
+    additionalProperties:
+      type: object
+      additionalProperties: false
+      required: [mayImport]
+      properties:
+        mayImport:
+          type: array
+          uniqueItems: true
+          items: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+        mayImportKinds:
+          type: object
+          minProperties: 1
+          propertyNames: {pattern: '^[a-z][a-z0-9-]*$'}
+          additionalProperties:
+            type: object
+            additionalProperties: false
+            required: [from, to]
+            properties:
+              from: {$ref: '#/$defs/nameList'}
+              to: {$ref: '#/$defs/nameList'}
+        mayImportSlots:
+          type: object
+          minProperties: 1
+          propertyNames: {pattern: '^[a-z][a-z0-9-]*$'}
+          additionalProperties:
+            type: object
+            additionalProperties: false
+            required: [from]
+            properties:
+              from:
+                type: array
+                minItems: 1
+                uniqueItems: true
+                items: {type: string, pattern: '^(app|repo|be|fe|runtime)\.[a-z0-9-]+(\.[a-z0-9-]+)*$'}
+        acyclic: {type: boolean}
+        lowerLayerOnly: {type: boolean}
+  semver: {type: string, pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'}
+  major: {type: integer, minimum: 2}
+  stringList:
+    type: array
+    items: {type: string, minLength: 1}
+  slotEvidencePath:
+    type: string
+    minLength: 1
+    pattern: '^(?!/)(?!.*\.\.)(?!.*\\)[^\s]+$'
+  slot:
+    type: object
+    additionalProperties: false
+    required: [id, profiles, path, presence, tracked, tier, tests, since]
+    properties:
+      id: {type: string, pattern: '^(app|repo|be|fe)\.[a-z0-9-]+(\.[a-z0-9-]+)*$'}
+      profiles:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {enum: [app, be, fe]}
+        description: '[app] alone for a slot of the app root (id app.<name>, tier none), else the sides the slot exists in'
+      path: {type: string, minLength: 1}
+      presence: {enum: [required, optional, opt-in, forbidden]}
+      tracked: {enum: [tracked, ignored, external]}
+      tier: {type: string, pattern: '^[a-z][a-z0-9-]*$', description: 'a tier of the matrix, none, or inherit (the tier of the enclosing owner)'}
+      tests: {enum: [unit-beside, e2e, none]}
+      editions:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {enum: [full, lite]}
+        description: 'the editions the slot exists in (default: the manifest editions); a slot outside the declared edition owns no path'
+      editionWhy: {type: string, minLength: 1, pattern: '\S', description: 'the ruling that explains why the slot differs between editions'}
+      templateNa: {type: string, minLength: 1, pattern: '\S', description: 'why this product-owned or generated slot has no scaffolded template'}
+      exemplifiedBy:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          oneOf:
+            - {$ref: '#/$defs/slotEvidencePath'}
+            - type: object
+              additionalProperties: false
+              required: [path]
+              not: {required: [edition, editions]}
+              properties:
+                path: {$ref: '#/$defs/slotEvidencePath'}
+                edition: {enum: [full, lite]}
+                editions:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items: {enum: [full, lite]}
+        description: 'existing template, example or dedicated fixture paths that exercise the slot, optionally scoped to editions'
+      litePresence:
+        description: 'the presence under edition lite (default: presence); a bare value or a per-side map (an app-root slot takes the bare value); forbidden demands goesTo'
+        anyOf:
+          - {enum: [required, optional, opt-in, forbidden]}
+          - type: object
+            minProperties: 1
+            additionalProperties: false
+            properties:
+              be: {enum: [required, optional, opt-in, forbidden]}
+              fe: {enum: [required, optional, opt-in, forbidden]}
+      lite:
+        type: object
+        minProperties: 1
+        additionalProperties: false
+        description: 'the fields the slot carries under edition lite (same shapes as the slot body); lite.path re-binds no variable the path does not have'
+        properties:
+          path: {type: string, minLength: 1}
+          requires: {$ref: '#/$defs/stringList'}
+          allows: {$ref: '#/$defs/stringList'}
+          forbids: {$ref: '#/$defs/stringList'}
+          minInstances: {type: integer, minimum: 1}
+          requiredInstances:
+            type: object
+            additionalProperties: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
+          why: {type: string, minLength: 1, description: 'the why of the slot under lite: the Supabase adapter that implements the slot''s ports there'}
+      provider:
+        enum: [postgres, supabase]
+        description: 'the connection provider that enables this opt-in slot (a connection in hfs.json with that provider); never an app kind'
+      coverage: {enum: [required, none], description: 'required: the subtree is measured at 100 per file on every ruleParams.be.logicRoles file; none: never measured and excluded from Sonar coverage. Declared by every tracked slot of the be profile and by no other (scripts/hfs/coverage-scope.mjs)'}
+      owner: {type: boolean}
+      entries:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {type: string, minLength: 1}
+        description: 'the explicit public API files of a directory slot, besides index.ts; each is a relative path the slot allows, such as the server-only auth exchange entry used by a callback route'
+      outcomeHome:
+        const: true
+        description: 'on a file slot: the one file that declares the repository''s Outcome union (one per repository; no other file declares a second)'
+      trigger: {type: string, pattern: '^[a-z][a-z0-9-]*$', description: 'the trigger kind of a feature-tier slot (one of the manifest triggerKinds); a feature of one kind never imports a feature of another'}
+      pattern: {type: string, pattern: '^[a-z][a-z0-9-]*$', description: 'the design pattern a product declares in hfs.json sides.<side>.patterns to enable this opt-in slot (event-bus, queue, fenced-job, projection, saga); a path in the slot of an undeclared pattern is HFS_SLOT_NOT_ENABLED'}
+      appKind: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+      minInstances: {type: integer, minimum: 1}
+      requiredWhen: {const: connections}
+      requiredInstances:
+        type: object
+        additionalProperties: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
+      requires: {$ref: '#/$defs/stringList'}
+      allows: {$ref: '#/$defs/stringList'}
+      forbids: {$ref: '#/$defs/stringList'}
+      layers: {$ref: '#/$defs/stringList'}
+      kinds:
+        allOf: [{$ref: '#/$defs/stringList'}]
+        description: folder kinds a rule asks about that are not import layers (feature pages/layouts/overlays; the layer folders of a ui package); classification reports the one a file sits in
+      roles:
+        type: object
+        minProperties: 1
+        propertyNames: {pattern: '^[a-z][a-z0-9-]*$'}
+        additionalProperties: {type: string, minLength: 1, pattern: '^[^/]+$'}
+        description: role name -> file name inside the slot (a <var> is filled from the path); classification reports the role of a file whose name is one of them
+      composedBy:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+        description: the app kinds that may compose this slot (a transport folder); an app of another kind never imports its module
+      budget:
+        type: object
+        minProperties: 1
+        additionalProperties: {type: integer, minimum: 1}
+      managedBy: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+      liteManagedBy:
+        type: string
+        pattern: '^[a-z][a-z0-9-]*$'
+        description: 'the template directory starci app sync renders under edition lite (default: managedBy); without managedBy the slot is managed only in lite'
+      perConnection:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+        description: the platform capabilities (be.persistence only) whose tables exist on every connection that uses them; their arrays may be registered on several declared connections (R178)
+      rules:
+        type: array
+        uniqueItems: true
+        items: {type: string, pattern: '^[A-Z][A-Z0-9_]*\*?$'}
+      goesTo: {type: string, minLength: 1}
+      why: {type: string, minLength: 1}
+      since: {$ref: '#/$defs/semver'}
+      parent: {type: string, pattern: '^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$', description: 'the declared slot id this id extends; RT_SLOT_ID_SHAPE requires the id to start with <parent>.'}
+    allOf:
+      - if: {properties: {tracked: {const: external}}, required: [tracked]}
+        then: {required: [goesTo], properties: {presence: {const: forbidden}}}
+      - if: {properties: {presence: {const: forbidden}}, required: [presence]}
+        then: {properties: {tracked: {const: external}}}

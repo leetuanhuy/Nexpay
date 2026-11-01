@@ -1,0 +1,55 @@
+schema: starci/knowledge-source@1
+id: be.resilience
+title: Retry through the shared helper
+purpose: |-
+  Given an operation that may fail transiently - a flaky dependency, a lock contention error, a rate limit - how does code
+  retry it? Through one shared, bounded, jittered, abortable helper, or through the queue's declared attempts and backoff;
+  never a hand-written loop at the call site.
+appliesTo:
+  - backend
+family: be
+# The slot ids this topic teaches (knowledge/hfs/slots.yaml); scripts/gates/read-digest.mjs inverts these
+# into the READ-step slot -> pattern-topic map (knowledge/op-gate.yaml kinds), each slot's topics in index.yaml order.
+slots: [be.platform, be.integrations]
+provenance:
+  reviewedAt: 2026-09-30
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/rules.yaml
+    - owner-locked BE convention 2026-09-30
+    - packages/eslint/be/resilience.mjs
+    - knowledge/patterns/be/persistence.yaml
+  limitations: |-
+    Static checks find a loop that both catches an error and waits before repeating, and the timer ban keeps the wait out of
+    product code. They cannot judge whether an operation is safe to retry (idempotent) at all; the SRS and the operation's own
+    contract answer that.
+rules:
+  - id: BE-RESILIENCE-1
+    title: A retried operation goes through platform/retry or a queue definition
+    kind: mandatory
+    hfsRules: [R81, R90]
+    requirement: |-
+      Code that must retry a transient failure calls `retry(fn, { maxAttempts, baseDelayMs, maxDelayMs, signal })` from
+      `platform/retry` (bounded attempts, full-jitter exponential backoff capped at `maxDelayMs`, rejects on abort, rethrows the
+      last error once attempts are exhausted), or relies on the `attempts` and `backoff` of the queue it declared with
+      `defineQueue<Payload>`. A hand-written `for`, `while` or `do...while` loop that catches an error and waits does not
+      exist, and the timer ban of `platform/{retry,scheduling,messaging,http}` makes the wait unreachable elsewhere.
+      `maxAttempts`, `baseDelayMs` and `maxDelayMs` are named constants. A polling wait with no `catch` is not a retry and is
+      left alone.
+    rationale: |-
+      A hand-rolled retry loop has no visible attempt bound, no jitter (callers retry in lockstep) and no way to honor an abort
+      signal. One helper gives every retry the same shape and puts the backoff math in one place.
+    cases:
+      - id: case-1
+        when: A flaky outbound call
+        write: 'return retry(async () => this.httpClient.request({ method: "POST", url, headers, body, timeoutMs: PROVIDER_TIMEOUT_MS }), { maxAttempts: RETRY_MAX_ATTEMPTS, baseDelayMs: RETRY_BASE_DELAY_MS, maxDelayMs: RETRY_MAX_DELAY_MS, signal })'
+      - id: case-2
+        when: A message that may fail
+        write: 'export const SETTLE_PAYMENT_QUEUE = defineQueue<SettlePaymentPayload>({ name: "billing.settle-payment", attempts: 5, backoff: { type: "exponential", delayMs: 1_000 } })'
+    verification:
+      automated:
+        - BE_HAND_ROLLED_RETRY
+        - BE_INFRA_OWNER
+      manual:
+        - Confirm the retried operation is safe to run more than once (idempotent, or claimed through the inbox) before adding a retry around it.
+    relatedExamples: []

@@ -1,0 +1,157 @@
+// status-block.mjs — the [Supervisor] block the Telegram /status adds after the progress report
+// (scripts/supervisor/telegram-bridge.mjs onStatus; modules/supervisor/supervise.yaml chat): the seat, the OWED
+// count and its trend over the last ticks, the active workers (agent, cluster, age), the land-gate queue and the
+// last push of each main. Read-only over machine.sqlite; null when it does not exist yet.
+import path from 'node:path';
+import { readSupervisor, seatOf, enabledOf, supervisorMode } from '../machine/home.mjs';
+import { workerBoard } from './workers.mjs';
+import { landStatus } from './land.mjs';
+import { probeAll as probeAllQuota } from '../agent/quota/index.mjs';
+import { TEST_REGISTRY_ENV } from '../../engine/db/machine.mjs';
+import { fmtAgo as ago, stampMinuteShort as shortIso } from '../lib/time.mjs';
+import { ownerLanguage, translator } from '../lib/i18n.mjs';
+import { escapeHtml } from '../lib/escape.mjs';
+import { isSpecRun } from '../lib/env.mjs';
+
+
+
+/**
+ * Everything the block shows, from machine.sqlite over the machine handle `m` (seats row 'supervisor', sup_signals,
+ * sup_events ticks, pushes, land_runs, the [Worker] board): {seat, enabled, ticks, board, pushes, lands}.
+ */
+function supervisorSnapshot(m, { now = Date.now() } = {}) {
+  const events = (kinds, limit) => m.supEvents({ kinds, limit }).map((e) => ({ kind: e.kind, entity_id: e.entity_id, created_at: e.created_at, payload: e.payload ?? {} }));
+  const ticks = events(['supervisor-tick'], 6).map((e) => ({ at: e.created_at, owed: e.payload.owed ?? null, clusters: e.payload.clusters ?? null }));
+  // The newest push per repository (machine.sqlite pushes) and the newest land-gate runs (land_runs).
+  const pushes = new Map();
+  for (const p of m.pushes({ limit: 40 })) {
+    if (pushes.has(p.repo_root) || p.result === 'skipped') continue;
+    pushes.set(p.repo_root, { kind: p.result === 'pushed' ? 'push-main' : 'push-refused', entity_id: p.repo_root, created_at: p.at,
+      payload: { head: p.head, refused: p.result === 'pushed' ? null : (p.failure_signature ?? p.reason) } });
+  }
+  const lands = m.landRuns({ limit: 3 }).map((r) => ({ kind: r.result === 'passed' ? 'land-passed' : 'land-failed', entity_id: r.lane ?? r.commit_sha,
+    created_at: r.finished_at ?? r.started_at, payload: { landed: r.landed_sha, lane: r.lane, reason: r.reason } }));
+  return { seat: seatOf(m, now), enabled: enabledOf(m), ticks, board: workerBoard(m, { now }), pushes: [...pushes.values()], lands };
+}
+
+// The block's English sources translate through the i18n catalog (modules/i18n/messages, scripts/lib/i18n.mjs).
+const blockTexts = (language) => {
+  const tr = translator(language);
+  return { head: tr('Supervisor'), chat: tr('in the owner chat'), off: tr('disabled'), none: tr('no seat'), owed: tr('OWED'), trend: tr('trend'), noTick: tr('no tick yet'), workers: tr('Workers'), idle: tr('none active'),
+    queue: tr('Land queue'), empty: tr('empty'), landing: tr('landing now'), pushes: tr('Last pushes'), lastLand: tr('Last land'), tick: tr('last tick'), quota: tr('Quota'), used: tr('used') };
+};
+
+/**
+ * One Quota line from a probeAll() result map: providers whose probe saw a
+ * usedPercent render `name NN% used ↻MM-DD HH:mm` (the next reset), with ⛔ on
+ * 'dead' and ⚠ on 'limited'. Providers with no number are skipped; nothing is
+ * rendered when no provider reports a figure.
+ */
+function renderQuotaLine(quota, { language = ownerLanguage() } = {}) {
+  const t = blockTexts(language);
+  const parts = [];
+  for (const [name, q] of Object.entries(quota ?? {})) {
+    if (typeof q?.usedPercent !== 'number' || !Number.isFinite(q.usedPercent)) continue;
+    let mark = '';
+    if (q.state === 'dead') mark = ' ⛔';
+    else if (q.state === 'limited') mark = ' ⚠';
+    const resetAt = Date.parse(q.resetsAt ?? '');
+    const reset = Number.isFinite(resetAt) ? ` ↻${shortIso(resetAt)}` : '';
+    parts.push(`${escapeHtml(name)} ${Math.round(q.usedPercent)}% ${t.used}${mark}${escapeHtml(reset)}`);
+  }
+  return parts.length ? `📶 ${t.quota}: ${parts.join(' · ')}` : null;
+}
+
+
+/** The block as Telegram HTML, or null. `quota` is a probeAll() result map (null/absent hides the line). */
+function renderSeat(snap, t) {
+  const seat = snap.seat?.value?.terminal ? `${escapeHtml(snap.seat.value.agent ?? '')} ${escapeHtml(snap.seat.value.terminal.slice(0, 13))}…` : t.none;
+  let seatText;
+  if (snap.mode === 'chat') seatText = t.chat;
+  else if (snap.enabled === false) seatText = t.off;
+  else seatText = seat;
+  return `<b>🧭 ${t.head}</b> — ${seatText}`;
+}
+
+function renderTick(snap, t, now) {
+  const [last, ...older] = snap.ticks;
+  if (!last) return `${t.owed}: ${t.noTick}`;
+  const series = [...snap.ticks].reverse().map((x) => x.owed ?? '?').join(' → ');
+  const prev = older[0]?.owed;
+  let arrow = '';
+  if (prev != null && last.owed != null) {
+    if (last.owed > prev) arrow = ' ↑';
+    else if (last.owed < prev) arrow = ' ↓';
+    else arrow = ' =';
+  }
+  const cluster = last.clusters != null ? ` (${escapeHtml(last.clusters)} cluster)` : '';
+  return `${t.owed}: <b>${escapeHtml(last.owed ?? '?')}</b>${arrow}${cluster} · ${t.trend} ${escapeHtml(series)} · ${t.tick} ${ago(last.at, now)}`;
+}
+
+function renderWorkers(snap, t, lines) {
+  const active = snap.board.active;
+  lines.push(`${t.workers} (${active.length}): ${active.length ? '' : t.idle}`);
+  for (const w of active) lines.push(`  • ${escapeHtml(w.agent ?? '?')} — ${escapeHtml(w.cluster)} — ${escapeHtml(w.ageMin)}m`);
+}
+
+function renderQueue(snap, land, t) {
+  const queue = snap.board.reported;
+  let landing = '';
+  if (land.busy) {
+    const current = land.current?.jobId ?? (land.current?.commits ?? []).map((c) => String(c).slice(0, 9)).join(',');
+    landing = `${t.landing} ${escapeHtml(current)}; `;
+  }
+  let queueText;
+  if (queue.length) queueText = queue.map((q) => escapeHtml(q.jobId)).join(', ');
+  else if (land.busy) queueText = '';
+  else queueText = t.empty;
+  return `${t.queue}: ${landing}${queueText}`;
+}
+
+function renderLastLand(snap, t, now) {
+  const last = snap.lands[0];
+  if (!last) return null;
+  const mark = last.kind === 'land-passed' ? '✅' : '❌';
+  return `${t.lastLand}: ${mark} ${escapeHtml(last.entity_id).slice(0, 40)} ${ago(last.created_at, now)}`;
+}
+
+function renderPushes(snap, t, now, lines) {
+  if (snap.pushes.length) {
+    lines.push(`${t.pushes}:`);
+    for (const p of snap.pushes) {
+      let result;
+      if (p.kind === 'push-main') result = `✅ ${escapeHtml(p.payload.head ?? '')}`;
+      else result = `❌ ${escapeHtml(String(p.payload.refused ?? p.payload.error ?? '').slice(0, 80))}`;
+      lines.push(`  • ${escapeHtml(path.basename(p.entity_id))} ${result} ${ago(p.created_at, now)}`);
+    }
+  }
+}
+
+function renderSupervisorBlock(snap, { language = ownerLanguage(), land = { busy: false, current: null }, now = Date.now(), quota = null } = {}) {
+  if (!snap) return null;
+  const t = blockTexts(language);
+  const lines = [renderSeat(snap, t), renderTick(snap, t, now)];
+  const quotaLine = renderQuotaLine(quota, { language });
+  if (quotaLine) lines.push(quotaLine);
+  renderWorkers(snap, t, lines);
+  lines.push(renderQueue(snap, land, t));
+  const lastLand = renderLastLand(snap, t, now);
+  if (lastLand) lines.push(lastLand);
+  renderPushes(snap, t, now, lines);
+  return lines.join('\n');
+}
+
+/**
+ * The /status block for `language`, or null (machine.sqlite not created yet or unreadable, or a spec run whose `env`
+ * names no test machine.sqlite).
+ */
+export function supervisorStatusMessage({ language = ownerLanguage(), env = process.env, now = Date.now(), quota = undefined } = {}) {
+  if ((isSpecRun(env) || isSpecRun()) && !env[TEST_REGISTRY_ENV]) return null;
+  const read = readSupervisor((m) => supervisorSnapshot(m, { now }), null, { env });
+  const snap = read ? { ...read, mode: supervisorMode({ env }) } : null;
+  // The provider quota line: a live probeAll() unless the caller injected one;
+  // a probing failure just drops the line.
+  let q = quota;
+  if (q === undefined) { try { q = probeAllQuota({ env }); } catch { q = null; } }
+  return renderSupervisorBlock(snap, { language, land: landStatus({ env }), now, quota: q });
+}

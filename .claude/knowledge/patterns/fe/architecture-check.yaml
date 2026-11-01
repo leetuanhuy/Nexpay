@@ -1,0 +1,272 @@
+schema: starci/knowledge-source@1
+id: fe.architecture-check
+title: Enforceable frontend architecture boundaries
+purpose: |-
+  Define the route-adapter, responsibility, package and data-boundary rules of a frontend app. The architecture machine
+  of @starci/hfs judges them from the tiers and layers declared in knowledge/hfs/slots.yaml.
+appliesTo:
+  - frontend
+family: fe
+# The slot ids this topic teaches (knowledge/hfs/slots.yaml); scripts/gates/read-digest.mjs inverts these
+# into the READ-step slot -> pattern-topic map (knowledge/op-gate.yaml kinds), each slot's topics in index.yaml order.
+slots: [fe.app, fe.route]
+provenance:
+  reviewedAt: 2026-09-29
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/slots.yaml
+    - https://nextjs.org/docs/app/getting-started/server-and-client-components
+    - https://nextjs.org/docs/app/getting-started/project-structure
+    - https://react.dev/learn/keeping-components-pure
+    - https://www.typescriptlang.org/docs/handbook/modules/reference.html
+  limitations: |-
+    Static TypeScript analysis does not prove rendered behavior, accessibility, request ownership or whether a client
+    boundary is usefully split. The selected app's manifests, tsconfig, installed TypeScript, framework
+    conventions and package exports are the resolution authority.
+rules:
+  - id: FE-ARCHITECTURE-1
+    title: Routes adapt framework inputs to one visual owner
+    kind: mandatory
+    hfsRules: [R54, R57, R26]
+    requirement: |-
+      A visual route may resolve framework-owned server inputs such as params, searchParams, headers, cookies, a session
+      read, redirects and notFound, then mounts one page-level visual owner. A route that only redirects or terminates
+      with notFound mounts no visual owner. Shell composition belongs in a layout or the page owner, not beside the page
+      in the route adapter. Every resolved internal app import or re-export from app/, including type-only edges, enters an
+      exact public entry under features/{pages,layouts,overlays}; React, Next and external framework imports remain valid.
+      Every owner is mounted by a route, no owner is `() => null`, and every href is built by modules/routes and matches a
+      real route.
+    rationale: |-
+      The invariant is one visual responsibility per route. An owner no route mounts is dead code, and an href with no
+      route is a broken link.
+    cases:
+      - id: case-1
+        when: A product route renders a screen
+        write: Resolve framework inputs and mount one page-level owner.
+      - id: case-2
+        kind: exception
+        when: An index route redirects or calls notFound
+        write: Return no visual owner; the redirect or notFound is the complete route responsibility.
+      - id: case-3
+        when: Navigation or a shell is required
+        write: Compose it in the route layout or the page owner.
+    verification:
+      automated:
+        - FE_ROUTE_FILES_THIN
+        - FE_NEXT_CONVENTIONS
+        - FE_PAGE_METADATA_MISSING
+        - FE_ROUTE_ONE_PAGE
+        - FE_ROUTE_DRAWING_DECISION
+        - FE_ROUTE_CLIENT_BOUNDARY
+        - FE_ROUTE_CLIENT_HOOK
+        - FE_ROUTE_DEFAULT_EXPORT
+        - FE_OWNER_REACHABLE
+        - FE_ROUTE_HARDCODED
+        - FE_HREF_RESOLVES
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+      manual:
+        - Confirm a route-level loader does not become product orchestration or duplicate client fetching.
+    relatedExamples: []
+  - id: FE-ARCHITECTURE-2
+    title: Responsibilities point inward and downward, without cycles
+    kind: mandatory
+    hfsRules: [R27, R64, R26, R30, R91]
+    requirement: |-
+      Dependencies follow the tiers of slots.yaml: route to feature, modules and packages; feature to components
+      (including blocks), hooks, modules and packages. Page and layout owners at features/{pages,layouts}/<Name>/index.tsx
+      may also import overlay public entries. This is the only feature-to-feature edge: layouts never import pages,
+      overlays never import overlays, and components never import overlays. Components descend blocks to composites to
+      branches to leaves (a layer imports only the layers after it, never block to block) and may import hooks and
+      packages, never app or features; hooks import modules and packages only; modules
+      import modules and packages only, acyclic. A framework-pinned source-root file (proxy, instrumentation,
+      instrumentation-client, next-env.d.ts) is a thin adapter whose internal imports enter modules or a feature public
+      entry only. Relative paths, aliases, type-only edges, workspace packages, dynamic string literals and re-export
+      barrels obey the same direction, and a cycle between owners is a finding. Every import across owners targets the owner's
+      index.ts or index.tsx; there is no export *.
+    rationale: |-
+      A partial responsibility graph stays valid across a one-app front end and several apps, and cycles prevent separate
+      reasoning about each unit.
+    cases:
+      - id: case-1
+        when: A reusable unit needs product state
+        write: Receive a resolved contract, or move the orchestration to the owning feature.
+      - id: case-2
+        when: A domain overlay coordinates a product scenario
+        write: Treat it as feature composition even when its folder is named overlays.
+      - id: case-3
+        when: A visual primitive needs browser-only interaction
+        write: Keep intrinsic focus, disclosure, drag, measurement or reduced-motion behavior local when it has no product-world or transport ownership.
+      - id: case-4
+        when: A page composes a client list of connected blocks
+        write: The page entry imports the overlay public entry; the overlay entry imports block public entries and passes block renderers to pure presentation. A branch or block never imports another block.
+      - id: case-5
+        when: A layout hosts URL-selected overlays while pages remain server components
+        write: The layout imports an OverlayRouteHost overlay and its candidate overlay entries, passing rendered nodes to the host. That client host owns route state and renders the pure OverlayHost branch, which receives nodes and never imports features (FE-BOUNDARY-5).
+    verification:
+      automated:
+        - ARCH_OWNER_CYCLE
+        - FE_APP_ISOLATION
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+        - BE_PUBLIC_SURFACE
+        - ARCH_OWNER_EXPORT_BYPASS
+        - ARCH_OWNER_EXPORT_STAR
+        - HFS_ALIAS_REEXPORT
+        - ARCH_PACKAGE_EXPORT_BYPASS
+        - FE_SOURCE_FORM
+        - FE_SOURCE_LAYOUT_INVALID
+      manual:
+        - Classify the responsibility before treating a folder-to-folder edge as upward.
+    relatedExamples: []
+  - id: FE-ARCHITECTURE-3
+    title: Split world ownership only when there is a boundary to own
+    kind: mandatory
+    hfsRules: [R55, R56, R65, R26, R92]
+    requirement: |-
+      Product data, session, locale and router decisions and transport lifecycle in a block belong to
+      blocks/<Name>/index.tsx, and every nonempty render path reaches the exact <Name>Base pure export from the sibling component.tsx.
+      Pure blocks and lower tiers have no mandatory twin. Leaves, branches and composites may own intrinsic React
+      interaction but cannot own product-world lifecycle. A pure component or branch may map list identities to blocks
+      through a supplied render prop, without importing the blocks or fetching. The feature owner's renderer composes
+      blocks only; it does not draw intrinsic markup or call hooks, and a world-reading owner still renders through a pure
+      boundary. A client overlay may read the list identities for this composition; every connected item block owns its
+      own reads and exact Base twin. Pages and layouts stay server components. All authored custom useX declarations live under hooks/<domain>;
+      a hooks/ui implementation stays intrinsic only while its resolved closure is free of product hooks, modules,
+      transport, session and route lifecycle. A connected unit has at most 6 data hooks and 6 useState.
+    rationale: |-
+      The split isolates real world dependencies without manufacturing forwarding components around ordinary browser
+      interaction.
+    cases:
+      - id: case-1
+        when: A component reads product data, session, router or locale, or transport state
+        write: Put that ownership in the connected entry and hook and pass resolved props and actions to presentation.
+      - id: case-2
+        when: A component only owns its DOM ref, focus, disclosure, measurement or motion
+        write: Keep one client visual component unless reuse reveals a meaningful separate contract.
+      - id: case-3
+        when: A hook sends a request
+        write: Wrap one operation of modules/api in a hooks/swr hook; never fetch directly.
+      - id: case-4
+        when: Client data identifies the blocks in a list
+        write: A page mounts a client overlay; its index passes identities and renderItem to its Base, a branch calls renderItem for each identity with a stable key, and each block renders its own Base.
+    verification:
+      automated:
+        - FE_CLIENT_BOUNDARY
+        - FE_CLIENT_SERVER_IMPORT
+        - FE_CLIENT_REACHES_SERVER
+        - FE_SERVER_ONLY_MARK
+        - FE_STORAGE_OUTSIDE_MODULES
+        - FE_DANGEROUS_HTML
+        - FE_HOOKS_ARE_HOOKS
+        - FE_CUSTOM_HOOK_LOCATION
+        - FE_BLOCK_PRODUCT_HOOK_DEFINITION
+        - FE_COMPONENT_DEEP_HOOK_IMPORT
+        - FE_SIZE_AND_STATE_BUDGET
+        - FE_LIST_KEY
+        - FE_EFFECT_CLEANUP
+        - FE_SWALLOWED_ERROR
+        - FE_CONSOLE_CALL
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+        - FE_COMPONENT_API
+        - FE_COMPONENT_WORLD_OWNERSHIP
+        - FE_WORLD_OWNER_RENDER_BOUNDARY
+        - FE_CONNECTED_BLOCK_RENDER_PAIR
+        - FE_PURE_REACHES_DATA
+        - FE_PURE_WORLD_HOOK
+        - FE_PURE_WORLD_IMPORT
+      manual:
+        - Distinguish intrinsic browser interaction from product-world ownership before requiring a split.
+    relatedExamples: []
+  - id: FE-ARCHITECTURE-4
+    title: Packages expose owned public APIs and apps stay independent
+    kind: mandatory
+    hfsRules: [R63, R64, R26, R30]
+    requirement: |-
+      Discover application and package roots from manifests and tsconfig, including workspace globs. An app may consume
+      declared package exports. A package never imports app internals, and cross-package consumers use the owning package's
+      declared public exports. An app never imports another app; shared code is a package. A packages/ path or a second
+      consumer does not by itself make code shared.
+    rationale: |-
+      Package boundaries are ownership and distribution contracts, and apps that import each other cannot be built or
+      deployed separately.
+    cases:
+      - id: case-1
+        when: The app root declares npm workspaces (fe/packages/*)
+        write: Resolve each matched package manifest and its exports before checking cross-package imports.
+      - id: case-2
+        when: Two apps need the same component
+        write: Move it to fe/packages/<family>-ui, built to dist, and import it by its declared export.
+      - id: case-3
+        when: Logic has one cohesive owner and one consumer
+        write: Keep it with that owner; sharing never requires two consumers.
+    verification:
+      automated:
+        - FE_PACKAGE_SHAPE
+        - FE_APP_ISOLATION
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+        - BE_PUBLIC_SURFACE
+        - ARCH_OWNER_EXPORT_BYPASS
+        - ARCH_OWNER_EXPORT_STAR
+        - HFS_ALIAS_REEXPORT
+        - ARCH_PACKAGE_EXPORT_BYPASS
+      manual:
+        - Confirm the public export is semantically stable rather than merely reachable.
+    relatedExamples: []
+  - id: FE-ARCHITECTURE-5
+    title: Features own scenarios and modules own reusable capabilities
+    kind: mandatory
+    hfsRules: [R50, R52, R56, R26, R30, R92]
+    requirement: |-
+      Features/{pages,layouts,overlays} own product composition. hooks/<domain> own React lifecycle functions and map
+      module results to the product-facing contract. A module owns one cohesive reusable technical or domain capability and
+      exposes a declared public entry. Framework routes adapt to a feature; Grammar stays product-agnostic. Wire types
+      generated from be/contracts/ stay inside modules/api and are mapped before presentation or Grammar.
+    rationale: |-
+      Ownership stays legible with one hooks root and without a wrapper per file, and a transport revision then affects
+      its mapper instead of every render contract.
+    cases:
+      - id: case-1
+        when: An authentication journey coordinates browser persistence, redirects and API operations
+        write: Keep its hook under hooks/authentication and call modules/api and modules/session through public entries.
+      - id: case-2
+        when: A GraphQL document has generated result and variable types
+        write: Keep the generated wire contract in modules/api and map it to the feature model there.
+      - id: case-3
+        when: A presentational action needs a provider choice
+        write: Use a feature or view literal union and map it to the transport enum in the data adapter.
+    verification:
+      automated:
+        - FE_TRANSPORT_OWNER
+        - FE_EFFECT_FETCH
+        - FE_SWR_KEY_IDENTITY
+        - FE_SWR_MUTATION_RESOURCE_IDENTITY
+        - FE_WIRE_GENERATED
+        - FE_HOOKS_ARE_HOOKS
+        - FE_CUSTOM_HOOK_LOCATION
+        - FE_BLOCK_PRODUCT_HOOK_DEFINITION
+        - FE_COMPONENT_DEEP_HOOK_IMPORT
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+        - BE_PUBLIC_SURFACE
+        - ARCH_OWNER_EXPORT_BYPASS
+        - ARCH_OWNER_EXPORT_STAR
+        - HFS_ALIAS_REEXPORT
+        - ARCH_PACKAGE_EXPORT_BYPASS
+        - FE_COMPONENT_API
+        - FE_COMPONENT_WORLD_OWNERSHIP
+        - FE_WORLD_OWNER_RENDER_BOUNDARY
+        - FE_CONNECTED_BLOCK_RENDER_PAIR
+        - FE_PURE_REACHES_DATA
+        - FE_PURE_WORLD_HOOK
+        - FE_PURE_WORLD_IMPORT
+      manual:
+        - Confirm generated wire types do not become the feature or presentation source of truth.
+    relatedExamples: []

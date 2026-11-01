@@ -1,0 +1,27 @@
+# StarCi: runtime state, owner config and credentials are local to this checkout
+.starciwork/
+.claude/config.yaml
+.claude/secret.env
+.claude/.runtime/
+
+# =========================================================================
+# .NET / Visual Studio / JetBrains Rider
+# =========================================================================
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+.vs/
+.vscode/
+*.user
+*.userosscache
+*.suo
+*.userprefs
+*.sln.docstates
+
+# Rider
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db

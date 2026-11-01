@@ -1,0 +1,131 @@
+// Owner intent normalization. This preserves constraints; it never grants launch or budget authority.
+import { isPlainObject } from '../../engine/plain-object.mjs';
+import { allocationSettings } from '../../engine/config.mjs';
+import { removedNotice } from '../../engine/removed-vocabulary.mjs';
+import { admissionRoles, admissionSelectorFields } from './agent-admission.mjs';
+
+const POOLS = Object.freeze({codex:'codex-agent','codex-agent':'codex-agent',claude:'claude-agent','claude-agent':'claude-agent',devin:'devin-agent','devin-agent':'devin-agent'});
+const PROVIDERS = Object.freeze({codex:'codex',openai:'codex',claude:'claude',anthropic:'claude',devin:'devin',cursor:'cursor'});
+const plain = value => isPlainObject(value) && [Object.prototype,null].includes(Object.getPrototypeOf(value));
+const canonicalRoutingPool = value => typeof value === 'string' ? POOLS[value.trim().toLowerCase()] : undefined;
+const defaultRoles = () => {
+  const policy = allocationSettings().admission;
+  const roles = policy?.ownerBiasRoles;
+  if (!Array.isArray(roles) || !roles.length || roles.some(value => !admissionRoles(policy).includes(value)))
+    throw invalid('allocation.admission.ownerBiasRoles must declare valid default roles');
+  return roles;
+};
+const invalid = message => Object.assign(new Error(`Invalid owner routing bias: ${message}`),{code:'invalid-owner-routing-bias'});
+const text = (value,key) => {
+  if(typeof value !== 'string' || !value.trim())throw invalid(`${key} must be a nonempty string`);
+  return value.trim();
+};
+/** `; <field> is removed (<replacement>)` for each unknown bias field the removed list names. */
+const removedHints = (label,unknown) => label==='bias'
+  ? unknown.map(field=>removedNotice('bias-field',field)).filter(Boolean).map(notice=>`; ${notice}`).join('')
+  : '';
+const keys = (value,allowed,label) => {
+  if(!plain(value))throw invalid(`${label} must be a plain object`);
+  const unknown=Object.keys(value).filter(key=>!allowed.includes(key));
+  if(unknown.length)throw invalid(`${label} has unknown fields: ${unknown.join(', ')}${removedHints(label,unknown)}`);
+};
+const provider = value => {
+  const found=PROVIDERS[text(value,'provider').toLowerCase()];
+  if(!found)throw invalid('provider is not declared');
+  return found;
+};
+const pool = value => {
+  const found=POOLS[text(value,'pool').toLowerCase()];
+  if(!found)throw invalid('pool is not declared');
+  return found;
+};
+const selector = value => {
+  keys(value,admissionSelectorFields,'selector');
+  if(!Object.keys(value).length)throw invalid('selector must constrain a pool, provider or model');
+  const result={};
+  if(value.pool!==undefined)result.pool=pool(value.pool);
+  if(value.provider!==undefined)result.provider=provider(value.provider);
+  if(value.model!==undefined)result.model=text(value.model,'model');
+  const family=result.pool?.replace(/-agent$/,'');
+  if(family && result.provider && family!==result.provider)throw invalid('selector pool and provider conflict');
+  return result;
+};
+const role = value => {
+  const found=text(value,'role').toLowerCase();
+  if(!admissionRoles(allocationSettings().admission).includes(found))throw invalid('role is not declared');
+  return found;
+};
+/** A member name: `<agent>` / `<pool>` (the whole provider window) or `<agent>/<model>` (one member). */
+const memberName = item => {
+  if(typeof item!=='string' || !item.includes('/'))return null;
+  const [agent,...rest]=item.split('/');
+  return selector({provider:agent.trim(),model:rest.join('/').trim()});
+};
+/** One member name as its canonical selector (or pool id), or undefined when the alias is unknown. */
+export const canonicalRoutingMember = value => { try { return memberName(value) ?? canonicalRoutingPool(value); } catch { return undefined; } };
+const canonicalList = value => {
+  if(value===undefined || value===null)return [];
+  if(!Array.isArray(value))throw invalid('prefer and avoid must be arrays');
+  const result=[];
+  const seen=new Set();
+  for(const item of value){
+    // String preferences drop an unknown alias. Hard selectors never drop fields.
+    const normalized=typeof item==='string'?(memberName(item)??canonicalRoutingPool(item)):selector(item);
+    if(!normalized)continue;
+    const key=JSON.stringify(normalized);
+    if(!seen.has(key)){seen.add(key);result.push(normalized);}
+  }
+  return result;
+};
+/** A bias entry as a selector: a pool id string names the pool, a selector object is kept. */
+export const asSelector = value => typeof value==='string'?{pool:value}:value;
+const covers = (excluded,required) => {
+  const a=asSelector(excluded),b=asSelector(required);
+  const family=value=>value.provider??value.pool?.replace(/-agent$/,'');
+  const matches = ([key,value]) => {
+    if (key === 'provider') return family(b) === value;
+    if (key === 'pool') return b.pool === value || family(b) === value.replace(/-agent$/,'');
+    return b[key] === value;
+  };
+  return Object.entries(a).every(matches);
+};
+const override = value => {
+  keys(value,['authorized','scopeId','role','provider','model','account','reason'],'reserveOverride');
+  if(value.authorized!==true)throw invalid('reserveOverride requires an explicit authorized owner grant');
+  const result={authorized:true,scopeId:text(value.scopeId,'scopeId'),role:role(value.role),provider:provider(value.provider),model:text(value.model,'model'),reason:text(value.reason,'reason')};
+  if(value.account!==undefined)result.account=text(value.account,'account');
+  return result;
+};
+
+/** Normalize owner-authored data. Authorization is independently checked by the admission adapter. */
+export function normalizeOwnerRoutingBias(value){
+  if(value===undefined || value===null)value={};
+  keys(value,['prefer','avoid','only','reserveOverride','roles'],'bias');
+  const avoid=canonicalList(value.avoid);
+  const prefer=canonicalList(value.prefer).filter(item=>!avoid.some(excluded=>covers(excluded,item)));
+  const result={prefer,avoid};
+  const only=canonicalList(value.only);
+  if(only.length){
+    result.only=only;
+    if(only.every(named=>avoid.some(excluded=>covers(excluded,named))))throw invalid('only conflicts with avoid');
+  }
+  if(value.reserveOverride!==undefined && value.reserveOverride!==null)result.reserveOverride=override(value.reserveOverride);
+  if(value.roles!==undefined){
+    if(!Array.isArray(value.roles) || !value.roles.length)throw invalid('roles must be a nonempty array');
+    result.roles=[...new Set(value.roles.map(role))];
+  }
+  if(result.reserveOverride && !(result.roles??defaultRoles()).includes(result.reserveOverride.role))throw invalid('reserveOverride role is outside the bias roles');
+  return result;
+}
+
+/** Scope persisted owner intent to one actor; a grant for another attempt never leaks into this one. */
+export function biasForRole(value,requestedRole,scopeId){
+  const bias=normalizeOwnerRoutingBias(value);
+  const actor=role(requestedRole);
+  if(!(bias.roles??defaultRoles()).includes(actor))return {prefer:[],avoid:[]};
+  const reserveOverride=bias.reserveOverride;
+  const scoped={prefer:bias.prefer,avoid:bias.avoid};
+  if(bias.only)scoped.only=bias.only;
+  if(reserveOverride?.role===actor && reserveOverride.scopeId===scopeId)scoped.reserveOverride=reserveOverride;
+  return scoped;
+}

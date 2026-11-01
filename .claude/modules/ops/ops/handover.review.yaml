@@ -1,0 +1,195 @@
+schema: starci/op@1
+id: handover.review
+goal:
+  en: "Hand the finished workflow to the owner and ask for acceptance: assemble one handover package in
+    the owner's language - what was built and why, where it lives, exactly how to run and test it, what
+    still runs on placeholder credentials, what was not proven live and the known risks - and ask the
+    owner to approve it, report a defect or ask a question. The workflow is done only when the owner
+    approves; the approval is the owner's own and a delegated answer never gives it."
+nodeKinds: [operations]
+completionProfile: operations
+sideEffects: []
+graphPolicy:
+  mode: read-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+reads:
+  - id: goal
+    path: starci kernel survey --workflow <workflow> --json (goal revision, markdown, approved opChain)
+    purpose:
+      en: The goal the owner accepted - its purpose, scope, exclusions and done metrics - and the approved
+        leg chain it was delivered through.
+  - id: deliveries
+    path: starci kernel survey --workflow <workflow> --deliveries --json (deliveries, credentialPending, handoverHistory)
+    purpose:
+      en: Every settled operation of the workflow with its filed report - summary, files, repository, head
+        commit, branch, checks, open items, blocker and credentialPending - plus every earlier handover
+        ask of this workflow with the owner's decision, who answered it and the owner's note.
+  - id: coverage
+    path: starci kernel coverage --workflow <workflow> --json (items, mustOwed)
+    purpose:
+      en: Every FR, XBase#state shape and applicable proof case of the workflow's scope with the indexed evidence
+        that proves it and its status - proven, stale (its code changed since) or missing.
+  - id: repo
+    path: <app>/<bound-paths>
+    purpose:
+      en: The delivered source at the commits the reports name - README, package scripts, env examples,
+        .starcistacks manifests and the run and test commands the repository itself declares.
+  - id: evidence
+    path: N/evidence.yaml and N/evidence/<id>/manifest.yaml of each delivered record
+    purpose:
+      en: The proof each delivered record carries - which assertions passed, which were not run, and whether
+        a live proof ran against the real provider or runtime (proof.boundary, fakes, blocked environment).
+writes:
+  - id: package
+    path: evidence/**
+    artifacts: [handover-<attempt>.md, handover-<attempt>.json]
+    content:
+      en: "The evidence directory is .starciwork/evidence/<workflow>.handover/ beside the root catalog - the workflow-level bundle
+        the setup record uses as precedent (work-layout.yaml shape.setup): a handover spans the whole
+        workflow, not one feature record, and the kernel grants exactly this directory as the job's owned
+        path. Each attempt adds its own handover-<attempt>.md, the package the owner reads, written in
+        owner_language, and handover-<attempt>.json, the same content as data {built, why,
+        repositories[{repository, branch, head}], run[], test[], credentialPending[], notProvenLive[],
+        risks[], answeredQuestion?, fixedFeedback?}. Files of an earlier attempt stay as they are."
+steps:
+  - reads:
+      - goal
+      - deliveries
+    writes: []
+    action:
+      en: "Read the approved goal and every delivery, then the latest entry of handoverHistory; it decides
+        which run this is. No entry, or an entry the kernel already acted on (a feedback note whose fix
+        settled, an owner question), is a handover: assemble the package and ask. The latest entry
+        answered approve with byOwner true is the owner's acceptance: file done as the final step says.
+        An approve answered by anyone other than the owner is no acceptance - hand over again so the
+        owner answers. A workflow with no settled delivery has nothing to hand over: report blocked
+        with kind authority and NOTHING_DELIVERED."
+  - reads:
+      - goal
+      - deliveries
+      - coverage
+      - repo
+      - evidence
+    writes: [package]
+    action:
+      en: "Write the package in owner_language, plain words, in this order: (1) what was built and why,
+        mapped from the goal's purpose to the delivered slices; (2) where it lives - every repository,
+        branch and head commit the deliveries name; (3) how to run it, step by step, with the exact
+        commands, environment files and URLs the repository declares; (4) how to test it, step by step -
+        each step's URL or command, the account alias to use (never a secret) and the result the owner
+        should see; (5) what runs on placeholder credentials - every credentialPending variable, the
+        feature it gates and what the owner provides to make it live (modules/ops/_common.yaml Bounded
+        finish and blockers); (6) what was not proven - every coverage item that is stale or missing, and
+        every proof that did not run against the real provider or runtime, with why; a must-have (coverage mustOwed)
+        is never handed over unproven: report blocked, kind test-gap, naming each; (7) known risks - open items, partial or failed legs,
+        residual findings and anything unverified. When the latest handover answer is the owner's
+        question, open the package with its answer; when it is feedback, open with what was fixed, in
+        which commit, and how to re-test it. Every command, URL, repository, branch and commit comes
+        from the repository or a delivery report; one that cannot be established is written as unknown,
+        never invented."
+  - reads:
+      - deliveries
+    writes: [package]
+    action:
+      en: "Ask with starci kernel report, outcome ask, then end the turn. question.text opens with a two-line summary
+        (the owner may read it first in a clipped Telegram message) followed by the whole package.
+        question.options holds exactly three options, in this order, labelled in owner_language:
+        approve - the workflow is done; feedback or bug - the reviewer describes it in the note;
+        question - the reviewer asks it in the note (for vi, the Vietnamese renderings of \"Approve - workflow complete\", \"Feedback / report
+        a bug - describe it in the note\", \"Ask a question - write it in the note\"). No picks. question.refs names
+        the package paths, question.assets any evidence image the test steps point at - a drawing as its
+        drawn part (page content, overlay panel alone, layout drawing; desktop and mobile), never its
+        composite, which serve-ask would swap for the part anyway - and files lists the package. starci kernel report refuses a handover ask of any other shape. The kernel serves it through
+        serve-ask and parks this attempt awaiting the owner; nothing in this turn waits for the answer."
+  - reads:
+      - deliveries
+    writes: []
+    action:
+      en: "When the latest handover answer is the owner's approve, file done with summary \"approved by the
+        owner: <ask dispatch id>\", no new package and no new ask. starci kernel settle turns that pass into the
+        handover-approved event from the answer receipt, and refuses it (handover-not-approved) when the
+        receipt is not the owner's approval of the latest package or a business job settled after that
+        package was filed."
+  - reads:
+      - deliveries
+      - evidence
+    writes: [package]
+    action:
+      en: "Autopilot (owner ruling 2026-09-28 autopilot-run-to-finish; modules/kernel/driver-loop.yaml autopilot): the
+        handover is the owner's ONE review of everything autopilot decided. When `starci kernel survey --deliveries` carries
+        .autopilot (starci/autopilot-bundle@1, \"backlog awaiting the owner's review\"), the handover ask carries it verbatim as
+        question.autopilot, lists every provisional acceptance's images in question.assets, and the package opens with
+        that bundle: each provisional drawing and direction (label \"self-accepted provisionally\"), each deferred leg and why, each
+        deferred-to-handover proof with its sandbox/stub path and what real proof is owed, and the autopilot decision
+        log. The owner's feedback may name items: per named provisional item the Kernel re-opens only that item (api
+        autopilot --reopen) and the draw-feedback loop re-runs it; approve still means only the owner's approve."
+  - reads: [repo]
+    writes: [package]
+    action:
+      en: "The package's how-to-test section names the app's managed commands per test layer, as the app declares them: npm test (the unit project with per-service coverage), npm run test:integration and npm run test:e2e (the test world on the preset's world runner, attaching the warm stack through npm run test:stack -- up), npm run test:contract (provider sandboxes; it fails without keys, naming them), plus npm run lint and npm run typecheck at the app root - never a hand-made docker or container recipe."
+      vi: "Phần hướng dẫn test của gói nêu các lệnh được quản lý của app theo từng tầng test, đúng như app khai báo: npm test (dự án unit với độ phủ từng service), npm run test:integration và npm run test:e2e (test world trên world runner của preset, gắn stack ấm qua npm run test:stack -- up), npm run test:contract (sandbox của nhà cung cấp; tự bỏ qua khi không có khóa), cùng npm run lint và npm run typecheck ở gốc app - không bao giờ là công thức docker hay container tự chế."
+proofs:
+  - id: package-grounded
+    requirement:
+      en: Every command, URL, repository, branch and commit in the package traces to the repository or a
+        delivery report, and every credentialPending variable and every proof that did not run live is
+        listed.
+  - id: handover-ask-shape
+    requirement:
+      en: The ask carries three distinct options in the order approve, feedback, question and no picks;
+        starci kernel report refuses any other handover ask.
+    check: scripts/kernel/handover.mjs
+  - id: must-have-proven
+    requirement:
+      en: A handover ask is filed only while coverage mustOwed is empty; starci kernel report refuses it handover-proof-owed
+        otherwise.
+    check: scripts/kernel/proof-integrity.mjs
+  - id: owner-approval
+    requirement:
+      en: A pass settles only on the owner's approve receipt for the latest handover ask with no business
+        settle after it, and starci kernel finish refuses a workflow without a handover-approved event newer than
+        its last business settle.
+    check: scripts/kernel/handover.mjs
+judge:
+  - by: machine
+    measures: [handover-gate]
+    proofs: [handover-ask-shape, must-have-proven]
+    why: "the ask is refused unless it carries the three options in order and no must-have proof is owed"
+  - by: owner
+    why: "a pass settles only on the owner's approve receipt for the latest handover ask, and finish refuses a workflow without a handover-approved event newer than its last business settle"
+blockers:
+  - code: NOTHING_DELIVERED
+    condition:
+      en: The workflow has no settled delivery to hand over; the chain before the handover has not run.
+  - code: SOURCE_UNREADABLE
+    condition:
+      en: A delivered repository or the commit a report names cannot be read, so the run and test steps
+        cannot be grounded; name the repository and commit.
+placeholders:
+  workflow: The running workflow id the handover bundle is keyed by
+  attempt: This handover.review job's attempt number
+  app: shared
+  bound-paths: shared
+  id: An evidence bundle id of a delivered record
+layoutPolicy:
+  checks: [starci-validate]
+policy:
+  # specsToggle: what this op does when the owner's config.yaml specs.<class> is false (scripts/route/spec-deferral.mjs):
+  # defer-leg = never dispatched, settled deferred; skip = runs without that class of test or coverage; not-counted = the gate does not demand it.
+  specsToggle: {unit: not-counted, e2e: not-counted}
+  handoverPolicy:
+    options: [approve, feedback, question]
+    approval: owner-only
+    delegation: a delegate may answer feedback or question; serve-ask refuses a delegated approve
+    settle: starci kernel settle records handover-approved on a handover.review pass and refuses handover-not-approved otherwise
+    finish: starci kernel finish refuses handover-not-approved without a handover-approved event newer than the last business settle
+    feedback: modules/models/kinds.yaml route handover-feedback-repairs-the-build, then handover.review again
+    question: handover.review again with the answer in the package
+route:
+  nodeKinds: [workflow]
+  phase: [operate, cross-cutting]
+  intent: [handover, owner-acceptance]
+  prerequisites: [every other leg of the approved chain settled]
+  riskHints: [waits-on-owner]

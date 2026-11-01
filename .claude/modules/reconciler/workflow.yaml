@@ -1,0 +1,71 @@
+# workflow.yaml — the Workflow controller (lane rc-sla-workflow): scripts/reconciler/controllers/workflow.mjs.
+#
+# Design: <tmp>/reconciler-design/DESIGN.md §8.2 (Workflow controller), §9.2 (the workflow state machine and
+# its SLA table), §10.3-§10.4 (Decision Item, doorbell), §17.1 (one stall detector, findings become DIs). Engine
+# contract: <tmp>/reconciler-design/LANES.md "Shared contract" (controller module, ctx, CONCERNS).
+#
+# Mode: config.yaml reconciler.controllers.workflow.mode (off | shadow | active; lane rc-engine). In shadow every
+# api call, DI and doorbell is a would-row (ctx.api / ctx.openDecision); SLA clocks are recorded in every mode.
+#
+# One pass per key `workflow:<ledgerId>:<workflowId>` computes ONE projection: the cached `starci kernel status --json`
+# (ctx.status: progress, rca, frontier, stuck[], revisionNotice) and scripts/supervisor/stall.mjs stallFindings over a
+# read-only handle, with frontierOf = the cached status (no second starci kernel status). From it:
+#   clocks     STALL_UNOWNED / STALL_ESCALATED (stalled), ORPHANED_FRONTIER, REV_ACK_OVERDUE, GOAL_TEXT_MISSING on
+#              `workflow:<ledger>:<wf>`; one clock per starci kernel status stuck[] item on `stuck:<ledger>:<wf>:<kind>:<id>`
+#              (state = its code, `<CODE>/critical` for the second threshold; numbers from opTelemetry.stuckSla);
+#              a clock whose condition is gone is cleared; an ended workflow clears all of its clocks.
+#   decisions  one DI per finding, idempotency key `<kind>:<workflowId>:<subject>` (decisionKinds below), carrying
+#              the evidence line and the first rca action not yet tried; then the Kernel seat's doorbell
+#              (scripts/machine/decisions.mjs ringDoorbell, lane rc-decisions; a would-row until it lands and
+#              in shadow). This is the only stall wake and progress-stall owed action: the controller owns
+#              both, and no separate loop runs them.
+#   escalate   a stall older than runtimes.yaml allocation.progress.supervisorGraceMs -> the same DI escalated to
+#              the Supervisor (idempotency key suffixed `@supervisor`).
+#   asks       an open owner ask whose poll digest tag (scripts/supervisor/poll.mjs askLiveness) is in
+#              askRepark.liveness -> `starci kernel serve-ask --workflow <wf> --dispatch <id>` (re-park); `on-demand` is
+#              untouched; one re-park per ask per askRepark.minIntervalMs.
+#   finish     frontier finish-ready (every job settled AND the handover approved) -> `starci kernel finish --workflow <wf>`
+#              (the api refuses otherwise; idempotent).
+#   goal       a running workflow whose goal text is null, empty or carries an unrendered value
+#              (scripts/goal/goal-text.mjs) -> GOAL_TEXT_MISSING clock (critical, INV-W4; only the owner fixes it).
+schema: starci/reconciler-controller@1
+controller: workflow
+resyncMs: 120000
+concurrency: 2
+concerns: [workflow.stall-wake, workflow.progress, workflow.ask-repark]
+routes:
+  - incident-raised
+  - incident-resolved
+  - ask-serving
+  - ask-serving-expired
+  - ask-notified
+  - ask-answered
+  - ask-superseded
+  - peer-message-sent
+  - peer-message-acked
+  - op-settled
+  - plan-derived
+  - runtime-rev-acked
+  - handover-approved
+  - goal-defined
+decisionKinds:
+  progress-stall:     {decider: kernel, from: 'starci kernel status progress.stall past progress.graceMs, or an alerting STALLED finding', subject: 'the stall episode (its clock entered_at)'}
+  stale-gate:         {decider: kernel, from: 'STALE-GATE finding (a supervisor-gate goes to the Supervisor)', subject: incident id}
+  stale-wait:         {decider: kernel, from: 'STALE-WAIT finding', subject: job id}
+  stale-peer-wait:    {decider: kernel, from: 'STALE-PEER-WAIT finding', subject: incident id}
+  unread-peer:        {decider: kernel, from: 'UNREAD-PEER finding', subject: peer message key}
+  orphaned-frontier:  {decider: kernel, from: 'frontier orphaned-frontier with an alerting STALLED finding or past supervisorTick.orphanedFrontierMs', subject: 'the episode'}
+  retry-decision:     {decider: supervisor, from: 'a retry-cap wait past its stuckSla criticalMs (supervisorOwed)', subject: 'the wait kind and its incident or job'}
+  ready-undispatched: {decider: supervisor, from: 'a queued-ready wait past its stuckSla criticalMs (supervisorOwed)', subject: 'the wait kind and its job'}
+  rev-ack:            {decider: kernel, from: 'starci kernel status revisionNotice.state owed', subject: 'the current runtime rev (short)'}
+# The OWED classes of the Supervisor that are no Decision Item of their own (supervise.yaml mission.classes): a starci kernel status stuck[] wait past its
+# stuckSla criticalMs opens ONE Decision Item for the Supervisor of the kind named here (scripts/reconciler/owed-plan.mjs), and a frontier that stays
+# orphaned past progress.supervisorGraceMs opens an orphaned-frontier one. Each kind has typed choices in modules/supervisor/supervisor-menu.yaml.
+supervisorOwed:
+  retry-cap: retry-decision
+  queued-ready: ready-undispatched
+# A DI's dueAt = openedAt + decisionDueMs (DESIGN §9.1 decision: 15 minutes, then the DI escalates).
+decisionDueMs: 900000
+askRepark:
+  liveness: [dead, stale, unserved]
+  minIntervalMs: 1800000

@@ -1,0 +1,25 @@
+import { Module } from "@nestjs/common"
+import type { DynamicModule } from "@nestjs/common"
+import { ConfigurableModuleClass, OPTIONS_TYPE } from "./payment.module-definition"
+import { PAYMENT_SERVICE } from "./payment.decorators"
+import { PaymentReceiptService } from "./payment-receipt.service"
+import { PaymentService } from "./payment.service"
+
+@Module({})
+/** The payment capability over the billing database: the intake of the bank transfer notifier. */
+export class PaymentModule extends ConfigurableModuleClass {
+    /** Registers the capability once per app. */
+    static register(options: typeof OPTIONS_TYPE): DynamicModule {
+        const base = super.register(options)
+        return {
+            ...base,
+            providers: [
+                ...(base.providers ?? []),
+                PaymentService,
+                PaymentReceiptService,
+                { provide: PAYMENT_SERVICE, useExisting: PaymentService },
+            ],
+            exports: [PaymentReceiptService, PaymentService, PAYMENT_SERVICE],
+        }
+    }
+}

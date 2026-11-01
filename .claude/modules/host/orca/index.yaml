@@ -1,0 +1,179 @@
+schema: starci/orca-provider@1
+provider: orca
+executable: orca
+files:
+  capabilities: capabilities.yaml
+  api: api.yaml
+  calls: calls.yaml
+  recipes: recipes.yaml
+  validation: validation.yaml
+  envelopes: envelopes.yaml
+  agents:
+    codex: ../../models/agents/codex.yaml
+    claude: ../../models/agents/claude.yaml
+    devin: ../../models/agents/devin.yaml
+    cursor: ../../models/agents/cursor.yaml
+purpose: |-
+  Canonical Orca API call templates for StarCi orchestrated execution. These calls are the
+  only supported construction path; prompts may fill placeholders but may not invent a
+  different hierarchy, launch sequence, display role or lifecycle shortcut.
+environmentBinding:
+  currentRuntime: omit---on
+  namedRuntime: '--on <observed-environment-id>'
+  namedRuntimeAuthority: live-runtime-inventory-only
+  forbidden:
+    - literal-windows-environment
+    - guessed-environment-name
+ui:
+  activitySubtitle: last-tool-activity-not-agent-identity
+  identitySource:
+    - native-agent-icon
+    - terminal-title
+    - supervised-worker-receipt
+  note: 'A sidebar subtitle such as "Bash: node cli.mjs status" means the native agent is currently using Bash; it does not mean the terminal is a shell-only worker.'
+  semanticHierarchy:
+    schema: starci/agent-hierarchy@1
+    projection: 'workflow -> Kernel -> Op'
+    source: 'durable workflow/job identity plus Run coordinator, Task and Dispatch receipts'
+    neverFrom: [terminal-title-parsing, tab-order, pane-layout, parentPaneKey]
+    rule: 'same-worktree peers remain semantic children when their Task/Dispatch belongs to the Kernel-owned Run'
+names:
+  workflowWorktree: "[Workflow] <Workflow>"
+  workflowKernel: "[Kernel] <Workflow>"
+  operation: modules/kernel/start-workflow.yaml orcaTree.titles (operationTask, managedOperationTerminal)
+  rule: A worktree carries its workflow name; the one kernel process that owns the loop inside that worktree is its Kernel; every operation agent is an Op. There is no supervisor layer between a Kernel and an Op.
+launchTrust: "The runtime, never the owner, approves Claude/Codex launch prompts. Every launch (Kernel, Supervisor, [Worker] and op, all through worker-start) first runs scripts/agent/trust.mjs for its cwd (Claude ~/.claude.json hasTrustDialogAccepted; Codex trust_level in ~/.codex and Orca's codex-runtime-home config.toml) and records trust in the launch event; a launch gate the agent card's gateAutoAnswer allowlists is answered once from the screen (gate-auto-approved), anything else is refused."
+workflowKernel:
+  role: one-worker-per-workflow
+  note: |-
+    The Kernel is an Orca worker (modules/kernel/start-workflow.yaml). start-workflow,
+    run from the launching terminal, creates the Kernel's entry Run (that terminal coordinates it), files the Kernel
+    Task and starts it with worker-start. The Kernel's first operation creates the workflow Run from the Kernel's own
+    terminal - Orca takes Run-scoped calls only from a Run's coordinator - and every operation Task/Dispatch of that
+    Run is a child of the Kernel.
+  calls:
+    entryRun:
+      api: orchestration.run-create
+      cli: 'orca orchestration run-create --objective "[Kernel] <Workflow> — <workflow-id>" --json'
+    boot:
+      api: orchestration.worker-start
+      cli: 'orca orchestration worker-start --spec "<kernel prompt>" --task-title "[Kernel] <Workflow>" --worktree <workflow-worktree path, created first by worktree create --name wf-<workflowId>> --agent <agent> --model <model> --effort <effort> --display-name "[Kernel] <Workflow>" --run <entry-run-id> --retry-request <id from the launch identity> --json'
+    bindRun:
+      api: orchestration.run-create
+      cli: 'orca orchestration run-create --objective "<workflow goal>" --from <own-terminal> --json'
+    useRun:
+      api: orchestration.run-use
+      cli: 'orca orchestration run-use --id <run-id> --from <own-terminal> --json'
+    answerOperation:
+      api: terminal.send
+      cli: 'orca terminal send --terminal <operation-agent-terminal> --text "<answer or continue instruction>" --enter --json'
+operationAgent:
+  role: one-supervised-native-agent-per-operation-attempt
+  canonicalLauncher:
+    module: scripts/kernel/cli.mjs
+    command: dispatch
+    authority: exclusive-effectful-construction-path
+    calls: calls.yaml
+    runner: scripts/agent/lib.mjs
+    companions:
+      settle: Stop, release and verify one Dispatch; returns a typed settlement.
+      notify: Type one message into a live operation agent's own terminal and prove delivery from the screen; the only way the kernel speaks to a working agent.
+      report: The typed operation report, written exactly once by the operation agent at its boundary.
+      verify: Read-only contract check of the provider tree before the first effect (starci runtime check --only providers).
+    input: modules/kernel/api.yaml commands.dispatch.args
+    candidateAuthority: |-
+      The runtime allocator names one runtime per operation and startOperation({candidates}) hands the
+      launcher exactly that resolved selection; a chain is walked only when no candidate is given.
+    guarantees:
+      - issues only the verbs and flags calls.yaml declares (scripts/api/orca/lib.mjs builds every argv from that file)
+      - refuses before effects when the live agent-context signature does not carry the command or flags calls.yaml declares
+      - attests-from-is-the-workflow-run-owner-handle
+      - creates-canonical-operation-task-once-per-invocation
+      - tries-only-the-allocated-candidate-or-walks-the-whole-resolved-chain-in-order
+      - starts-fresh-native-agent-in-exact-workflow-worktree
+      - proves-prompt-delivery-before-attestation
+      - attests-effective-agent-model-and-worktree
+      - canonicalizes-and-verifies-terminal-title
+      - fences-settles-and-proves-no-effects-before-next-candidate
+      - stops-with-typed-reconciliation-on-partial-or-unknown-effects
+      - returns-exhausted-chain-as-typed-result-never-thrown-string
+      - replays-unknown-mutations-once-with-retry-request
+  admission:
+    expectedOperation: approved-goal-operation
+    providerSelection: profiles-registry-resolver-output
+    beforeTaskCreate:
+      - assert-exact-operation
+      - assert-operation-contract
+      - assert-resolved-target
+    afterWorkerStart:
+      api: orchestration.worker-show
+      cli: 'orca orchestration worker-show --dispatch <operation-dispatch-id> --json'
+      attest:
+        - dispatch.task_id equals operation-task-id
+        - observation.exactWorker equals true
+        - worker.startOptions.launch.effective.agent equals resolved Orca agent
+        - worker.startOptions.launch.effective.model equals resolved model
+        - worker.agent_terminal_handle is present
+      beforeEffectAcceptance: required
+      mismatch: fence-reconcile-release-and-retry-allocated-runtime
+      canonicalizeTitle:
+        renameApi: terminal.rename
+        renameCli: 'orca terminal rename --terminal <worker.agent_terminal_handle> --title "[Op] <operation>" --json'
+        failureEffect: record-ui-defect-without-rejecting-valid-operation-effects
+      runtimeTitleDrift:
+        classification: mutable-native-ui-metadata
+        whenImmutableIdentityRemainsExact: recanonicalize-without-fencing
+        effectDecision: never-reject-solely-for-title-drift
+    architectureSidearm:
+      onlyTrigger: active implementation secondary_request
+      exactReason: sds-technical-gap
+      exactSecondaryOp: architecture.decide
+      requires: explicit-bounded-sds-allowlist
+      neverFrom: [review-finding, review-suggestion, open-question, inferred-gap]
+  start:
+    note: >-
+      The one launch for every provider (claude, codex, devin): Orca composes the agent command with the owner's
+      per-agent default args (agentDefaultArgs); --model/--effort only for Claude, Codex and Cursor (a Devin worker
+      starts on its CLI default: agent card start.modelArgument false). There is no terminal-create launch.
+    calls:
+      startAgent:
+        api: orchestration.worker-start
+        cli: 'orca orchestration worker-start --spec "<one-operation-contract>" --task-title "<op> #<attempt>" --display-name "[Op] <operation>" --worktree <workflow-worktree> --agent <resolved-agent> [--model <resolved-model-id> --effort <resolved-effort>] --run <workflow-run-id> --from <kernel-terminal> --retry-request <id from job + lease> --json'
+        note: Orca files the operation Task from --spec in the same call (result.taskId); there is no task-create and no dispatch-show.
+      nameAgent:
+        api: terminal.rename
+        cli: 'orca terminal rename --terminal <result.worker.agentTerminalHandle, else worker-show result.dispatch.assigneeHandle> --title "[Op] <operation>" --json'
+  settle:
+    release:
+      api: orchestration.worker-release
+      cli: 'orca orchestration worker-release --dispatch <operation-dispatch-id> --json'
+routing:
+  operationToKernel:
+    api: report-file
+    cli: 'node <launcher> report --run <workflow-run-id> --from <own-terminal> --task <operation-task-id> --dispatch <operation-dispatch-id> --capability "<own Dispatch capability from injected Orca preamble>" --reports-dir <workflow-reports-dir> --outcome <done|partial|failed|ask|blocked> --summary "<what happened>" --json'
+    authority: report-file-then-signal
+    onceOnly: true
+    reason: One report file per Dispatch is the source of truth; the Orca signal is only the wake-up.
+  kernelToOperation:
+    api: terminal.send
+    cli: 'orca terminal send --terminal <operation-agent-terminal> --text "<answer or continue instruction>" --enter --json'
+    forbiddenType: status
+    proveDeliveryFrom: terminal-screen-not-send-receipt
+    reason: |-
+      An operation receives its whole contract at launch, so notify is the only downward channel and it is
+      proven from the screen; a status message never carries a control instruction.
+  operationToOperation: forbidden
+forbiddenCalls:
+  - raw-operation-worker-start-outside-canonical-launcher
+  - orchestration.dispatch-inject-for-operation
+  - orchestration.dispatch-to-reused-terminal-for-operation
+  - terminal-send-outside-canonical-launcher
+  - terminal-create-for-any-agent
+  - worker-start-terminal-adoption
+  - operation-agent-tool-agent
+  - orchestration-send-status-for-control-instruction
+  - operation-agent-direct-control-of-another-operation
+  - operation-task-outside-the-approved-goal
+  - operation-effect-without-provider-attestation
+  - architecture-sidearm-inferred-from-review
+  - literal-or-guessed-worker-start-environment

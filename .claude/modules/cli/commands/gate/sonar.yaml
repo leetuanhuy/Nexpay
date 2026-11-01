@@ -1,0 +1,47 @@
+group: gate
+verb: sonar
+owner: runtime
+summary: inspect, provision, run and start the local Sonar quality gate
+impl: {script: scripts/gates/sonar-local.mjs}
+positional:
+  - {name: command, enum: [status, ensure-project, token, scan, dashboard, up, stop], required: true, variadic: false}
+  - {name: arguments, required: false, variadic: true}
+flags:
+  - {name: key, type: string, summary: Sonar project key}
+  - {name: name, type: string, summary: Sonar project display name}
+  - {name: with-token, type: boolean, summary: ensure the project token is in custody}
+  - {name: wait, type: boolean, summary: wait for the processed quality gate}
+  - {name: base, type: string, summary: base revision for changed-line analysis}
+  - {name: paths, type: list, summary: repository paths in the slice}
+  - {name: project-gate, type: boolean, summary: judge the whole-project quality gate}
+  - {name: branch, type: string, summary: read the dashboard of this branch instead of the main branch}
+  - {name: out, type: string, summary: write the summary to this file}
+  - {name: blob, type: boolean, summary: store the summary as a blob}
+  - {name: log, type: string, summary: write scanner output to this file}
+  - {name: token-ref, type: string, summary: custody reference for the analysis token}
+  - {name: no-ensure, type: boolean, summary: do not ensure the project before scanning}
+  - {name: timeout, type: number, summary: scanner timeout in seconds}
+  - {name: wait-timeout, type: number, summary: quality-gate wait timeout in seconds}
+  - {name: isolate, type: boolean, summary: analyze the slice in a temporary project}
+  - {name: keep-slice-project, type: boolean, summary: retain the temporary slice project}
+  - {name: declaration, type: string, summary: stack declaration file}
+  - {name: host, type: string, summary: Sonar server URL}
+  - {name: stack, type: string, summary: custody stack directory}
+  - {name: public, type: boolean, summary: "up or stop: activate profile public; up verifies the tunnel is running (needs CLOUDFLARE_TUNNEL_TOKEN)"}
+conventions:
+  - "up --public retries the tunnel running check for up to 30 seconds; SONAR_TUNNEL_NOT_RUNNING refuses with container state and the last 20 scrubbed log lines"
+  - "SONAR_DB_PASSWORD_MISMATCH: the starci-sonarqube-postgres-data volume has another password than SONARQUBE_DB_PASSWORD in secret.env"
+  - "(Compose supplies SONAR_JDBC_PASSWORD and POSTGRES_PASSWORD);"
+  - "restore the old password or export a backup before recreating the volume"
+exit:
+  "0": requested inspection or gate passed
+  "1": gate failed or scan was refused
+  "2": command was blocked or usage was invalid
+json: always
+examples:
+  - starci gate sonar status
+  - starci gate sonar scan --cwd <repo> --base <rev> --paths src --wait
+  - starci gate sonar dashboard --cwd <repo>
+  - starci gate sonar up
+  - starci gate sonar up --public
+editions: [full]

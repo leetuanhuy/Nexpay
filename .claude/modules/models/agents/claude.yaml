@@ -1,0 +1,81 @@
+schema: starci/agent-card@1
+agent: claude
+kind: native-managed-agent
+start:
+  api: orchestration.worker-start
+  agentArgument: claude
+  # The agent's own approval-bypass mode. Orca applies it from settings.agentDefaultArgs; the host preflight refuses a launch
+  # when that setting lacks it (the agent would stop at an approval prompt no one answers).
+  bypassFlag: '--dangerously-skip-permissions'
+readiness: worker-start-receipt
+# Content is a file; what travels is the reference (scripts/agent/prompt-file.mjs): a follow-up prompt above allocation.promptFile.maxChars is written to a
+# file and the terminal is given one line that names it, so no TUI paste heuristic (a folded "[Pasted Content N chars]" chip, a swallowed Enter) is involved.
+delivery:
+  mode: file-reference-above-inline-limit
+  prompt: 'Read <file> completely. It is your dispatched prompt. Follow it exactly.'
+roles:
+  - workflow-kernel
+  - operation-agent
+name:
+  api: terminal.rename
+release:
+  api: orchestration.worker-release
+  # worker-release alone does not end every agent (a released cursor worker kept its cursor-agent process running): the runtime then closes the
+  # worker's terminal and proves that no process of that terminal's shell tree remains (scripts/machine/worker-close.mjs, allocation.workerClose).
+  closeTerminal: true
+  verify: terminal-process-tree
+launchEnv:
+  DISABLE_AUTOUPDATER: '1'
+launchEnvReason: >-
+  Every runtime-launched Claude seat (Kernel, Supervisor seat, op and Supervisor workers) runs the one npm-global
+  claude.exe, so Claude Code's own auto-update can never replace it while seats run (update_apply_exe_locked) and
+  every seat showed "✘ Auto-update failed: claude.exe in use". The runtime therefore turns the updater off: Orca's
+  orchestration worker-start composes every worker's command itself, so scripts/agent/trust.mjs asserts the key under
+  env in the launch worktree's .claude/settings.local.json (project scope, never a user-global settings file) before every Claude launch - only when the key is missing, an owner-set value is kept. Updates are applied deliberately while no seat runs (docs/supervisor.md "Claude Code
+  updates"): stop the seats, have the owner update the global Claude Code package, then /start.
+launchTrust: >-
+  Requires the current installation's explicit launchTrust automatic profile and an exact approved repository root. Before an authorized launch
+  scripts/agent/trust.mjs sets ~/.claude.json projects[<cwd>].hasTrustDialogAccepted (keys <cwd> in its forward- and backslash forms) and
+  asserts settings.json skipDangerousModePermissionPrompt; explicit provider declines and unresolved launch directories are refused. A consent screen alone cannot prove scope.
+gateAutoAnswer:
+  # Claude refuses keys for a moment after a dialog opens; the answer waits delayMs, then walks the cursor to
+  # `select` (arrow keys) and presses Enter. A gate still on screen settleMs later is refused.
+  delayMs: 1500
+  settleMs: 6000
+  gates:
+    claude-workspace-trust:
+      requiresLaunchTrust: true
+      select: 'Yes, I trust this folder'
+    claude-bypass-permissions-consent:
+      requiresLaunchTrust: true
+      select: 'Yes, I accept'
+liveness:
+  busyPatterns:
+    - '\((?:running \S+ hook · )?(?:\d+h\s)?(?:\d+m\s)?\d+s\s·\s[↓↑]\s[\d.]+k?\s+tokens'
+  chromePatterns:
+    - '^\s*\S\s+(?:low|medium|high|xhigh|max)\s+·\s+/effort\b'
+    - '^\s*(?:[✘✗×✔✓√⚠]\s+)?(?:Auto-update failed\b|Auto-updating…|Update installed · Restart to (?:apply|update)\b|Update failed and .+ could not be restored\b|Update available! Run:|Claude Code can''t auto-update\b|globalVersion: \S+ · latestVersion:)'
+    - '\s·\s+(?:rename it back to|reinstall with|[Rr]un|Try)\s+(?:`?claude doctor\b|npm i -g @anthropic-ai/claude-code\b)'
+    - '^\s*(?:[✘✗×⚠]\s+)?(?:IDE extension install failed\b|(?:IDE|VS Code|Visual Studio Code|Cursor|Windsurf|JetBrains|IntelliJ IDEA|PyCharm|WebStorm|GoLand|Rider|PhpStorm|RubyMine|CLion|Android Studio|Zed)\s+disconnected\s*$)'
+    - '^\s*⧉\s+(?:In\s+\S|\d+\s+lines?\s+(?:selected|from)\b)'
+    - '^\s*(?:[✘✗×⚠]\s+)?(?:MCP (?:\d+ )?servers? blocked by enterprise policy:|one or more of your MCP server choices could not be saved\b|your MCP server choices apply to this session only\b|skipping \.mcp\.json server approval\b)'
+    - '^\s*(?:\d+% until auto-compact|\d+% context used|Context low \(\d+% remaining\))(?:\s·\s.*)?\s*$'
+verifiedAt: 2026-10-02
+verifiedAgainst: 'claude CLI 2.1.282'
+forbidden:
+  - shell-only-role
+  - unsupervised-dispatch-inject-as-success
+capabilities:
+  schema: starci/claude-capabilities@1
+  # Evidence, nivo ledger 2026-09-23: claude-agent never ran interface.audit, so browser-dom is not proven; a tool is listed
+  # here after a settled pass shows it. A drawing op needs no image tool of its agent: it calls `starci work imagegen`.
+  hostTools: []
+  orca:
+    nativeManagedAgent: supported
+    agentId: claude
+    roles:
+      - workflow-kernel
+      - operation-agent
+quota:
+  probe: orca-account
+  window: weekly

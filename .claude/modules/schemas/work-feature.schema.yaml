@@ -1,0 +1,116 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:work:feature:1
+type: object
+additionalProperties: false
+description: "A feature's own record at features/<feature>/index.yaml. It names the feature and says what it
+  is about; every rule, requirement, design, screen, implementation and flow of that feature lives under its
+  directory. Like the catalog it is a parent, so it carries no state - a feature is not a unit of work, it is
+  a place work is kept, and its progress is derived from the leaves beneath it. A `state` key here is refused
+  on purpose: the moment a parent can claim done, a tree can report done while its leaves say otherwise."
+required:
+  - schema
+  - id
+  - title
+  - description
+properties:
+  schema:
+    const: work/feature@1
+    $ref: "urn:work:common:1#/$defs/familyDiscriminator"
+  id:
+    $ref: "urn:work:common:1#/$defs/slugId"
+    description: The feature's stable identifier, matching the entry the catalog carries for it. It is the
+      second segment of every record id inside this feature, which is what makes an id readable as an
+      address.
+  title:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: What the feature is, written as a statement rather than a label. A title that reads as a
+      sentence forces the author to say what the feature does instead of naming a folder.
+  description:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: What the feature covers and, where it helps, what it deliberately does not. It is the
+      orientation a reader needs before opening any leaf.
+  extensions:
+    type: object
+    additionalProperties: false
+    description: Declarations that belong to a numbered extension of the Work model rather than to this
+      family's own vocabulary.
+    properties:
+      work3:
+        type: object
+        additionalProperties: false
+        properties:
+          scope:
+            $ref: "#/$defs/scope"
+$defs:
+  scope:
+    type: object
+    additionalProperties: false
+    required: [nodes, deps, exclusions]
+    description: The bounded scope scope.define writes for one workflow - the proposed nodes it may touch,
+      their declared dependencies and the exclusions it must not touch. It is typed data a planning
+      operation consumes without re-reading the request, kept on the record of the feature that owns the
+      request.
+    properties:
+      request:
+        type: object
+        additionalProperties: false
+        required: [workflow, goalIdentity, goalRevision, outcome]
+        description: The workflow and approved goal identity and revision this scope bounds, with its
+          outcome and effect ceiling.
+        properties:
+          workflow: {type: string, minLength: 1}
+          goalIdentity: {type: string, minLength: 1}
+          goalRevision: {type: integer, minimum: 0}
+          source: {type: string, minLength: 1}
+          outcome: {$ref: "urn:work:common:1#/$defs/prose"}
+          effectCeiling:
+            anyOf:
+              - {$ref: "urn:work:common:1#/$defs/prose"}
+              - {type: array, minItems: 1, items: {$ref: "urn:work:common:1#/$defs/prose"}}
+          completionCriteria: {type: array, items: {$ref: "urn:work:common:1#/$defs/prose"}}
+      nodes:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [id]
+          properties:
+            id: {type: string, minLength: 1}
+            kind: {type: string, minLength: 1}
+            path: {type: string, minLength: 1}
+            purpose: {$ref: "urn:work:common:1#/$defs/prose"}
+            grounding: {type: array, items: {type: string, minLength: 1}}
+            dependsOn: {type: array, items: {type: string}}
+      deps:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [from, to]
+          properties:
+            from: {type: string, minLength: 1}
+            to: {type: string, minLength: 1}
+            reason: {$ref: "urn:work:common:1#/$defs/prose"}
+      exclusions:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [reason]
+          properties:
+            subject: {type: string, minLength: 1}
+            path: {type: string, minLength: 1}
+            reason: {$ref: "urn:work:common:1#/$defs/prose"}
+      openQuestions:
+        type: array
+        items:
+          anyOf:
+            - {$ref: "urn:work:common:1#/$defs/prose"}
+            - type: object
+              additionalProperties: false
+              required: [question]
+              properties:
+                id: {type: string, minLength: 1}
+                question: {$ref: "urn:work:common:1#/$defs/prose"}
+                status: {type: string, minLength: 1}
+                resolution: {$ref: "urn:work:common:1#/$defs/prose"}

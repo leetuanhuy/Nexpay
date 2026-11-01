@@ -1,0 +1,16 @@
+# Workflow worktrees and the land (owner decision WFWT, final: ONE Orca-owned worktree per Kernel workflow; the per-op
+# worktree and its node_modules junction overlay are gone). Read by scripts/machine/worktree-registry.mjs worktreeSettings(),
+# and scripts/kernel/status/imports.mjs (invariant.importsCacheMs). Every value has the
+# same default in code.
+
+worktrees:
+  capPerRepo: 10                # live runtime worktrees per repository; a workflow over it waits for its Kernel launch
+  ownerGoneMs: 1800000          # the GC removes a tree whose owner has been gone this long (after preserving it)
+  gcEveryMs: 300000             # the reconciler GC controller's worktree pass (key gc:worktrees, always active)
+  commandMs: 300000
+  removeRetries: 3              # an Orca removal refused because another process holds a file of the tree is asked again this many times (scripts/machine/worktree-orca.mjs), as the git home retries a busy file
+  removeRetryMs: 200            # the first wait between those asks; each next one waits one more step
+  rebaseMilestoneBehind: 20     # a workflow branch is rebased mid-workflow once main is this many commits past its merge-base (scripts/lib/rebase-milestone.mjs)
+
+invariant:
+  importsCacheMs: 300000        # starci kernel status importsBroken: one scan per tree state within this window

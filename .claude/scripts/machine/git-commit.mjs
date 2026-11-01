@@ -1,0 +1,154 @@
+// git-commit.mjs - create one convention-shaped commit without broad or implicit staging.
+import fs from 'node:fs';
+import path from 'node:path';
+import { add } from '../api/git/add.mjs';
+import { commit } from '../api/git/commit.mjs';
+import { diff } from '../api/git/diff.mjs';
+import { porcelainStatus } from '../api/git/porcelain-status.mjs';
+import { revParse } from '../api/git/rev-parse.mjs';
+import { revParseQuery } from '../api/git/rev-parse-query.mjs';
+import { symbolicRef } from '../api/git/symbolic-ref.mjs';
+import { asList, byCodeUnit } from '../lib/list.mjs';
+import { refusal as verbRefusal, resultOk as ok, resultOutput as output } from '../lib/verb-call.mjs';
+
+const TYPES = new Set(['feat', 'fix', 'refactor', 'test', 'docs', 'chore', 'land', 'release']);
+
+const slash = (value) => value.split(path.sep).join('/');
+
+function stagedFiles(cwd, gitDiff, filter = null) {
+  const result = gitDiff(['--cached', '--name-only', ...(filter ? [`--diff-filter=${filter}`] : []), '--'], { cwd, config: { 'core.quotepath': 'off' } });
+  return ok(result) ? output(result).split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : null;
+}
+
+function statusPaths(text) {
+  return String(text ?? '').split(/\r?\n/).map((line) => line.slice(3).trim())
+    .map((name) => name.includes(' -> ') ? name.split(' -> ').at(-1) : name).filter(Boolean);
+}
+
+function resolvePaths(inputs, cwd, root, exists) {
+  const resolved = [];
+  for (const value of inputs) {
+    const given = String(value ?? '');
+    if (!given) return { error: 'a --paths value may not be empty' };
+    const absolute = path.resolve(cwd, given);
+    const relative = path.relative(root, absolute);
+    if (path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) {
+      return { error: `path is outside the repository: ${given}` };
+    }
+    if (!exists(absolute)) return { error: `path does not exist: ${given}` };
+    resolved.push(slash(relative || '.'));
+  }
+  return { paths: [...new Set(resolved)] };
+}
+
+// The subject line the --type, --summary and --scope make, or the text that refuses them.
+function subjectFor(args) {
+  const type = String(args.type ?? '').trim();
+  const summary = String(args.summary ?? '').trim();
+  const scope = args.scope == null ? '' : String(args.scope).trim();
+  if (!TYPES.has(type)) return { error: `--type must be one of ${[...TYPES].join(', ')}` };
+  if (!summary) return { error: '--summary is required' };
+  if (!/^[a-z]/.test(summary)) return { error: '--summary must start with a lowercase letter' };
+  if (summary.endsWith('.')) return { error: '--summary must not end with a period' };
+  if (/[\r\n]/.test(summary) || /[\r\n]/.test(scope)) return { error: '--summary and --scope must be one line' };
+  const subject = scope ? `${type}(${scope}): ${summary}` : `${type}: ${summary}`;
+  if (subject.length > 100) return { error: `subject is ${subject.length} characters; maximum is 100` };
+  return { subject };
+}
+
+// The body of --body or --body-file, or the text that refuses them. A launcher that goes through a command shell (the Windows
+// cmd shim of starci) ends an argument at its first newline, so a multi-line body travels in a file or on stdin (`--body-file -`).
+function bodyOf(args, readText) {
+  const file = args['body-file'] == null ? '' : String(args['body-file']);
+  if (!file) return { body: String(args.body ?? '').trim() };
+  if (args.body != null) return { error: 'pass --body or --body-file, not both' };
+  try {
+    return { body: String(readText(file === '-' ? 0 : file)).replace(/\r\n/g, '\n').trim() };
+  } catch (error) {
+    return { error: `cannot read --body-file ${file}: ${error?.code ?? error?.message ?? error}` };
+  }
+}
+
+// The commit message (subject, body, trailers) and its trailers.
+function messageOf({ subject, body, args, ctx, branch }) {
+  const coAuthor = String(args['co-author'] ?? ctx?.env?.STARCI_CO_AUTHOR ?? '').trim();
+  const lane = String(args.lane ?? (branch.startsWith('lane/') ? branch : '')).trim();
+  const trailers = [...(coAuthor ? [`Co-Authored-By: ${coAuthor}`] : []), ...(lane ? [`Lane: ${lane}`] : [])];
+  const paragraphs = [subject];
+  if (body) paragraphs.push(body);
+  if (trailers.length) paragraphs.push(trailers.join('\n'));
+  return { message: paragraphs.join('\n\n'), trailers };
+}
+
+// A dry run: the message and the files the commit would hold, nothing written.
+function dryRunPlan({ api, root, addPaths, message, subject, trailers }, refusal) {
+  const staged = stagedFiles(root, api.diff);
+  if (staged == null) return refusal('could not read the staged files', 1);
+  let preview = staged;
+  if (addPaths.length) {
+    const status = api.porcelainStatus(root, { pathspecs: addPaths, untracked: 'all', literal: true });
+    if (!status.ok) return refusal(`could not inspect --paths: ${status.stderr || 'git status failed'}`, 1);
+    preview = [...new Set([...staged, ...statusPaths(status.stdout)])].sort(byCodeUnit);
+  }
+  const mergeHead = api.revParse(root, 'MERGE_HEAD');
+  if (mergeHead) {
+    const unresolved = stagedFiles(root, api.diff, 'U');
+    if (unresolved == null) return refusal('could not read unresolved merge paths', 1);
+    if (unresolved.length) return refusal(`unresolved merge paths:\n${unresolved.join('\n')}`, 1);
+  }
+  if (!preview.length && !mergeHead) return refusal('nothing to commit', 1);
+  return {
+    code: 0,
+    text: `message:\n${message}\n\nstaged:\n${preview.join('\n')}`,
+    data: { schema: 'starci/git-commit@1', ok: true, sha: null, subject, trailers, paths: preview, dryRun: true }
+  };
+}
+
+/** Commit requested paths, the existing index or a resolved pending merge with the StarCi subject and trailers. */
+export async function gitCommit(ctx, deps = {}) {
+  const refusal = (text, code = 2) => verbRefusal('starci git commit', text, code,
+    { schema: 'starci/git-commit@1', ok: false });
+  const api = { add, commit, diff, porcelainStatus, revParse, revParseQuery, symbolicRef, exists: fs.existsSync, readText: (file) => fs.readFileSync(file, 'utf8'), ...deps };
+  const args = ctx?.args ?? {};
+  const titled = subjectFor(args);
+  if (titled.error) return refusal(titled.error);
+  const { subject } = titled;
+  const given = bodyOf(args, api.readText);
+  if (given.error) return refusal(given.error);
+
+  const cwd = path.resolve(ctx?.cwd ?? process.cwd());
+  const top = api.revParseQuery(['--show-toplevel'], { cwd });
+  if (!ok(top) || !output(top)) return refusal('current directory is not a Git worktree');
+  const root = path.resolve(output(top));
+  const branchRef = api.symbolicRef(root);
+  const branch = branchRef.replace(/^refs\/heads\//, '');
+  const role = String(ctx?.role ?? 'owner');
+  if (branch === 'main' && ['worker', 'lead', 'coordinator'].includes(role)) {
+    return refusal(`role ${role} may not commit on main; commit on a lane and use starci git sync to merge local main into lanes`);
+  }
+
+  const requested = asList(args.paths);
+  const checked = resolvePaths(requested, cwd, root, api.exists);
+  if (checked.error) return refusal(checked.error);
+  const addPaths = checked.paths ?? [];
+  const { message, trailers } = messageOf({ subject, body: given.body, args, ctx, branch });
+  if (args['dry-run']) return dryRunPlan({ api, root, addPaths, message, subject, trailers }, refusal);
+
+  if (addPaths.length) {
+    const staged = api.add(['--', ...addPaths], { cwd: root });
+    if (!ok(staged)) return refusal(`git add failed: ${output(staged, 'stderr') || 'unknown error'}`, 1);
+  }
+  const paths = stagedFiles(root, api.diff);
+  if (paths == null) return refusal('could not read the staged files', 1);
+  if (!paths.length && !api.revParse(root, 'MERGE_HEAD')) return refusal('nothing to commit', 1);
+  // The message goes to git on stdin (-F -), never as an argument: no newline, quote or length of it meets a command line.
+  const made = api.commit(['-F', '-'], { cwd: root, input: `${message}\n` });
+  if (!ok(made)) return refusal(`git commit failed: ${output(made, 'stderr') || output(made) || 'unknown error'}`, 1);
+  const sha = api.revParse(root, 'HEAD');
+  if (!sha) return refusal('commit succeeded but HEAD could not be resolved', 1);
+  return {
+    code: 0,
+    text: `committed ${sha.slice(0, 7)} ${subject}`,
+    data: { schema: 'starci/git-commit@1', ok: true, sha, subject, trailers, paths }
+  };
+}

@@ -1,0 +1,327 @@
+# ============================================================================
+# modules/kernel/verdict-contract.yaml — the op's return contract
+#
+# The output schema of an ephemeral [Op] agent: the verdict enum and its
+# semantics, the evidence paths a verdict must stand on (and the byte-level
+# checks that prove them), and the free-text suspicion channel that maps a
+# mid-flight wrongness back to goal.revise. Then the other half: what the
+# spine ACCEPTS and what it REJECTS — the kernel's side of the contract.
+#
+# Two layers, kept distinct everywhere below:
+#   REPORT outcome — what the agent claims: done|partial|failed|ask|blocked
+#                    (the envelope below; schema starci/op-report@1)
+#   KERNEL verdict — what the kernel judges: pass (reproduced) / fail
+#                    (couldn't reproduce, or red proof) / blocked (owner or
+#                    boundary needed) — this is the `returns.verdict` of
+#                    dispatch.yaml and the input to driver-loop.yaml's table.
+# ============================================================================
+
+schema: starci/module-kernel-verdict@1
+
+about:
+  kind: verdict-contract
+  businessQuestion: >-
+    "When an ephemeral op agent finishes, what shape must its answer take for
+    the kernel to believe it — and when the agent says 'something here is
+    wrong', where does that doubt go?"
+  businessAnswer: >-
+    One typed report — filed as a durable reports row via `starci kernel report`,
+    signal second — bound to the exact dispatch that produced it. The agent
+    claims an outcome; the kernel consumes it (`starci kernel consume-report`) and
+    re-proves it (`starci kernel record-checks`) before `starci kernel settle`. Doubt is a first-class
+    field, not a side-channel: suspicion text becomes a backward edge to the
+    boundary that owns the wrongness.
+  sources:
+    - scripts/kernel/cli.mjs
+    - modules/models/kinds.yaml
+    - engine/db/ledger.mjs
+
+# ============================================================================
+# 1 — THE AGENT'S OUTPUT. The packet's `returns` block, spelled out.
+# ============================================================================
+returns:
+  verdict:
+    enum: [pass, fail, blocked]
+    semantics:
+      pass: >-
+        The agent claims the work complete — maps to report outcome `done`.
+        Owes: at least one check that actually ran and exited 0, no open
+        items, every claimed file inside the allowlist. The kernel still
+        re-runs the checks itself; 'pass' is accepted only when the kernel
+        could reproduce it (the api's validateOpReport done-rules;
+        'done is never taken on trust').
+      fail: >-
+        The work ran and is red — maps to outcome `failed` (a failing check
+        or an honest summary required), or `partial` (unfinished, open items
+        listed for the next attempt). A worker may incorrectly claim `done`;
+        an independently recorded red Kernel check overrules that claim,
+        settles fail and releases the worker instead of leaving the attempt
+        fenced forever. Also the shape of a red proof leg:
+        uat/e2e/perf red reports `failed` and routes to lane.build repair.
+      blocked: >-
+        Progress needs something outside the grant — maps to outcome
+        `blocked` (a typed blocker is required; the kinds are
+        modules/models/kinds.yaml blockers, which
+        scripts/kernel/report-envelope.mjs loads as BLOCKER_KINDS and the
+        envelope validates against) or `ask` (a question the kernel
+        may answer only from offered options, else needUser).
+    note: >-
+      The packet's three-value enum is the agent-facing compression. On the
+      wire it is the five-value OUTCOMES enum of starci/op-report@1; the
+      driver collapses partial->fail(retry-with-open-items) and ask->blocked
+      (needUser) in the verdict table (driver-loop.yaml verdictTable).
+
+  evidence:
+    meaning: >-
+      The paths the verdict stands on — report.files plus the artifacts the
+      op's brief declared (evidence/result.json, evidence/effects.json, evidence/manifest.yaml,
+      captures, recordings, sonar exports — whatever the op's writes: block
+      names, e.g. modules/ops/ops/task.execute.yaml writes.evidence).
+    mustPass: >-
+      Artifact-BYTE checks, not existence-by-name:
+      - declared bytes exist and are non-empty      -> ASSET_MISSING / ASSET_EMPTY
+      - bytes carry the magic their extension claims -> ASSET_MAGIC (png/webm/mp4 signatures)
+      - stamped digests are real sha256 and match    -> ASSET_STAMP / ASSET_DIGEST
+      - recorded media is not a stub/fake            -> RUN_MEDIA_FAKE
+      - every receipt names a real artifact          -> RECEIPT_ORPHAN
+      (all: scripts/work/validate/check-work-artifacts.mjs; DEP_STALE /
+      NORM_UNRECORDED baseline semantics: scripts/work/validate/check-work-deep.mjs).
+    kernelSide: >-
+      The file LIST is never taken from the report: validateOpReport
+      refuses report.files outside the job's owned_paths
+      (scripts/kernel/report-envelope.mjs), and the byte-level checks above
+      run as the op's declared checks re-executed by the kernel via
+      `starci kernel record-checks` (scripts/work/validate/check-work-artifacts.mjs). A claim of
+      bytes that differ on disk is ASSET_DIGEST — rejected.
+
+  suspicion:
+    meaning: >-
+      Optional free-text: the mid-flight wrongness signal — the agent's statement that
+      something upstream is wrong (a spec contradicts the work, the scope
+      doesn't cover reality, the goal looks wrong). Free text because doubt
+      is not enumerable; routing it is the driver's job.
+    driverMapsTo: >-
+      goal.revise / the backward edges — three levels from
+      modules/goal/legality.yaml backwardEdges.suspicionLevels:
+      - spec-conflict-in-scope  -> owning revise route (srs-gap ->
+        business.revise, sds-gap -> architecture.revise, interface-gap ->
+        interface.draw, brand-gap -> brand.decide, grammar-gap ->
+        grammar.update, test-gap -> test.author); goal-level -> goal.revise.
+      - scope-expansion         -> re-run scope.define; provision.ask if the
+        widening needs owner consent (AUTHORITY_WIDENING).
+      - identity-wrong          -> provision.ask ALWAYS; the driver never
+        self-decides (identity-changing revisions are rejected;
+        amendments bind baseGoalIdentity — modules/ops/ops/goal.revise.yaml).
+      For interface.audit, violating an existing explicit Grammar/direction is
+      failed bounded implementation drift; missing, contradictory or
+      systemically inadequate direction is blocked interface-gap; the loop
+      and its budget are driver-loop.yaml interfaceAuditLoop.
+    neverQuietly: >-
+      The suspicion is reported, not patched: the op's allowlist does not
+      cover the record it doubts, so it cannot and may not edit it
+      (modules/goal/legality.yaml backwardEdges.neverQuietly — never relabel a
+      wrong flow as debt).
+
+# ============================================================================
+# 2 — THE REPORT ENVELOPE. starci/op-report@1 (validated when the worker
+#    files `starci kernel report`; re-validated at `starci kernel settle`). The reports ROW is
+#    the durable verdict, the file is the bound artifact, the Orca message
+#    is the wake-up signal.
+# ============================================================================
+envelope:
+  schema: starci/op-report@1
+  required: [outcome, run, task, dispatch, from, summary]
+  fields:
+    outcome: "done|partial|failed|ask|blocked"
+    summary: "one line, whitespace-collapsed, <=600 chars, secret-redacted"
+    files: "paths the verdict claims, normalized; each must sit under the allowlist"
+    checks: "[{name, command, exitCode, evidence<=400ch, failing?[]}] — executed, not intended; failing names the files a red repo-wide gate implicates"
+    open: "unfinished items a `partial` carries to its next attempt"
+    question: "ask only: {text, options[]}; typed record bound to the current goalRev"
+    blocker: "blocked only: {kind <- BLOCKER_KINDS, detail}"
+    rootCause: "optional: {node (op, op#instance, or a Work record id such as impl.<feature>.<repo>.<name>), self?, category, claim<=600ch, evidence[]<=400ch each, counterCheck?, expectedFix?, recheck?, op? (the build op owning the fix), files?[] (the paths it repairs)} (scripts/kernel/report-envelope.mjs rootCauseProblems); a product or findings failure whose owner resolves to a build op queues a repair of that op and the op again behind it; another non-build node queues a read-only root verify of it before the op runs again (api.yaml settle failureClass)"
+    failureClass: "optional on outcome failed: environment|tool|findings|product|deterministic|transient (scripts/kernel/verify-failure.mjs). The api derives the class from the evidence and keys failed routes on it (modules/models/kinds.yaml vocabularies.failureClasses); only transient and tool re-run the same op as-is. A walk on a stack that is not up is outcome blocked with blocker kind environment, never failed"
+    claims: "optional: [{paths?[], frs?[], cases?[], shapes?[], specs?[]}] — what the job's proof files verify (a claim without paths covers every file); indexed per artifact at settle (scripts/kernel/proof-integrity.mjs claimsProblems) and read by starci kernel coverage"
+    seamAssumptions: "optional: [{symbol, assumption, file?}] - what a cut sibling that ran on a stub (packet context.cut.seamStub) assumed of its unlanded seam; the Kernel re-verifies the slice against the landed seam (cut-seam-reconcile, starci kernel cut-seam --reconcile; scripts/kernel/seam-policy.mjs)"
+    owedToWire: "optional, canon slices (code.refactor params.canonFamilies): [{path, finding, file?, ruleId?}] - each residual canon finding only the cut's canon-wire leg can land (path = the shared-root, config, public-entry or consumer file outside the slice); its cut-slice-postcondition is green when every residual canon-scan finding is listed here, and settle adds each path to the queued canon-wire leg"
+    head: "the commit the op's checks ran on (git rev-parse HEAD; no op commits, the runtime is the only committer, scripts/kernel/workflow-checkpoint.mjs); required of review.verify: the finish lands only the head its settle checkpoint recorded and its report named (reviewVerifiedOf, workflow-finish-verify-stale)"
+    signal: "the Orca wake-up type must match the outcome (SIGNALS: done/partial->worker_done, failed->worker_done(failed), ask->question, blocked->escalation)"
+  binding: >-
+    Identity fields (run, task, dispatch, from) bind the report to the exact
+    dispatch; UNIQUE(workflow_id, dispatch_id) on the reports table means one
+    dispatch produces exactly one report (engine/db/ledger.mjs /
+    engine/db/schema/runtime.sql reports DDL). Filing is `starci kernel report --job <id>
+    --report <file>` — the file is a starci/op-report@1 JSON envelope the api
+    validates (identity fields run/task/dispatch/from are stamped from the
+    job row, never the worker's claim); an upsert on that key, so a re-filed
+    report replaces itself rather than doubling; consumed_at marks the
+    report the kernel already integrated (`starci kernel consume-report`).
+
+retryAccounting:
+  identity: >-
+    Business/effectful retries are new jobs rows with attempt+1 and a fresh
+    Dispatch. A launch rejected before any accepted contract/effect is the
+    narrow exception: explicit no-effect infrastructure proof returns the same
+    durable job/attempt to queued. Repeated recovery cannot create a successor,
+    duplicate contract or duplicate business effect.
+  noEffectInfrastructure: >-
+    A dispatch-rejected/provider failure is excluded from business route limits
+    only when its durable result explicitly carries effectState:none,
+    retryable:true and attemptConsumed:false. The queued job keeps
+    its try (the same job row, no new try_no: a leased -> ready move) while
+    consuming the separately bounded infrastructure restart allowance.
+  ownerWait: >-
+    An ask is a wait on the owner, not a failure. `starci kernel settle --verdict
+    blocked` on a filed `ask` report records result_json.verdict
+    `awaiting-owner` (kernelVerdict `blocked`, askDispatchId the ask's
+    dispatch) and moves jobs.status to `awaiting_owner`, never `failed`: a
+    settled status like failed (the worker is released, leases are dropped) that
+    counts as no failure, and the answered ask is re-enqueued as a new attempt
+    that follows it (retry_of may name an awaiting_owner job). That try spends
+    neither a business retry (engine/admission.mjs retryDisposition, retryClass
+    `owner-answer`) nor a try of its unit's budget (admission spentTries; the
+    jobs_enqueue_guard trigger subtracts awaiting_owner tries); its unit parks
+    `deciding`. `starci kernel status` counts the job under `failures.awaitingOwner`,
+    lists the open wait in `awaitingOwner[]` and marks its leg
+    `awaitingOwner: true` (yellow), never under failures or red. No job
+    settled `blocked` on an `ask` report reads as one any other way.
+  peerWait: >-
+    A repo-wide gate red on a peer's change is the peer's, not the op's. `starci kernel record-checks` attributes a
+    red check that names its `failing` files (modules/kernel/api.yaml commands.check peerBlocked);
+    a settle whose only red checks are peerBlocked records result_json.peerBlocked and spends no
+    business retry (retryDisposition retryClass `peer-blocked`); the Kernel hands the red to the
+    peer through the settle's routes.
+  failClosed: >-
+    Missing, unknown or partial effect state is not a free resume. It consumes
+    the normal business retry budget and must reconcile possible effects before
+    another writer is admitted; prose, a dead terminal, or an expired lease is
+    not no-effect proof.
+
+# ============================================================================
+# 3 — WHAT THE SPINE ACCEPTS. Layers, in order; a report is judged at each.
+# ============================================================================
+accepts:
+  - layer: schema-valid
+    rule: "validateOpReport passes: known schema, known outcome, outcome's required payload present, signal matches outcome, files inside the allowlist"
+    citation: "scripts/kernel/cli.mjs settle validation"
+  - layer: identity-bound
+    rule: >-
+      The report binds the exact dispatch: its identity fields {run, task,
+      dispatch, from} are stamped from the job row at filing and any
+      contradiction fails starci/op-report@1 (report-invalid). At settle the
+      reports row is looked up by the job's dispatch_id and a settled job
+      refuses outright (job-settled) — a duplicate settle is refused, never
+      double-counted. Lease rows carry the same discipline structurally:
+      leases_match_job RAISE(ABORT,'lease-identity-drift') means no lease
+      can persist against a mismatched job identity.
+  - layer: kernel-consumed
+    rule: >-
+      `starci kernel consume-report` marks the reports row integrated (consumed_at)
+      BEFORE the checks re-run; `starci kernel settle` enforces consumption — it sets
+      consumed_at itself if the kernel did not — so a report is never
+      settled unconsumed and consumption is never a side-effect of last
+      words.
+  - layer: kernel-reproduced
+    rule: >-
+      `done` is accepted only after the kernel re-runs the op's checks itself
+      — the re-run results are recorded on the checks row via `starci kernel record-checks`
+      (keyed workflow_id/op_id/attempt, one row per attempt) — and the filed
+      envelope's outcome normally agrees with the verdict. A red checks row
+      is the one admissible contradiction: it may overrule a `done` claim to
+      fail. Pass still requires `done` plus recorded green checks; every other
+      contradiction is verdict-outcome-mismatch. Acceptance writes the verdict
+      record on the job's result_json.
+      For an operation with explicit cutSetAuthority, the raw unchanged full
+      integration command may remain nonzero on a non-final slice only as
+      preserved evidence whose residual failures map exclusively to unsettled
+      sibling ordinals. The green Kernel checks are the independently executed
+      `cut-slice-postcondition` and `cut-regression-inventory`; the pass that
+      closes the cut set additionally requires `full-regression-final` green.
+      The closing pass is the one that leaves no other ordinal open (every
+      other ordinal's latest job settled succeeded), whichever ordinal settles
+      last - never ordinal === total, because ordinals settle out of order
+      once the seam passes. `starci kernel settle` enforces it and
+      appends `cut-set-closed`; the set counts done only there. No generic
+      operation may reinterpret a red check this way.
+  - layer: boundary-correct
+    rule: >-
+      A blocked verdict is accepted only with a typed blocker in BLOCKER_KINDS
+      — the kind IS the route key (modules/models/kinds.yaml routes match on
+      blocker/outcome/verdict). An environment blocker carrying a credential
+      replacement request must name the failing check with concrete evidence
+      (modules/models/kinds.yaml environment-needs-the-user;
+      modules/ops/ops/provision.ask.yaml).
+  - layer: rev-consistent
+    rule: >-
+      A report belongs to the goalRev that produced it; adoption into a new
+      rev happens only when the digests are identical
+      (modules/ops/ops/goal.revise.yaml). Evidence derived from a section
+      that was revised is stale until re-proven (propagate-invalidation).
+
+# ============================================================================
+# 4 — WHAT THE SPINE REJECTS. Every rejection keeps the fence — a rejected
+#    report is a routed verdict (usually retry), never silent loss.
+# ============================================================================
+rejects:
+  - id: delivery-done-with-incomplete-chain
+    rule: >-
+      A product-delivery done claim is rejected unless current SRS, SDS, code,
+      test/E2E and UAT evidence all bind the same delivery revision. Missing,
+      stale, skipped, failing or cross-revision evidence yields partial or
+      blocked; scheduled jobs merely settling does not satisfy this rule.
+    citation: "modules/ops/ops/review.verify.yaml business/workflow modes; modules/kernel/driver-loop.yaml finish"
+  - id: done-without-proof
+    rule: "'done' with zero checks, a failing check, or open items -> invalid; report failed or partial instead"
+    citation: "scripts/kernel/cli.mjs settle validation"
+  - id: done-from-last-words
+    rule: >-
+      A dead worker's recovered last words are honoured for partial/failed/
+      ask/blocked — never for done: 'done' owes checks no lost worker ran.
+      Falls back to outcome failed so the ordinary acceptance path judges it
+      (the api's last-words recovery via scripts/agent/lib.mjs). A live screen
+      tail read via `starci kernel observe` is the same class
+      (driver-loop.yaml boundary.opTerminalObservation).
+  - id: done-outside-leases
+    rule: >-
+      A green op's pass is refused workflow-foreign-commit while its workflow
+      branch carries a commit the runtime did not make past the last
+      checkpoint, and workflow-foreign-change while the workflow worktree has
+      a change under no live op's leases. Only the runtime commits: the pass
+      commits exactly the op's owned paths as the workflow's checkpoint.
+    citation: "scripts/kernel/workflow-checkpoint.mjs checkpointOp, run by starci kernel settle (modules/cli/commands/kernel/settle.yaml checkpoint)"
+  - id: out-of-scope-files
+    rule: "report.files outside the allowlist -> rejected, per-file named"
+    citation: "validateOpReport ownedPaths check (scripts/kernel/report-envelope.mjs), run at starci kernel report and when settle files a --report"
+  - id: stale-lease-settle
+    rule: >-
+      A lease row that cannot match the job's identity cannot be written at
+      all ('lease-identity-drift' trigger — a lease's
+      {workflow_id,op_id,attempt,generation,token} must equal its job's);
+      a settle against an already-settled job is refused (job-settled).
+      An agent cannot graft evidence or a lease onto another job.
+    citation: "engine/db/schema/runtime.sql leases_match_job triggers; scripts/kernel/cli.mjs settle job-settled refusal"
+  - id: unverifiable-evidence
+    rule: >-
+      Declared bytes missing/empty/wrong-magic/wrong-digest refuse the run
+      (ASSET_* codes); a record whose dependency baseline moved refuses
+      DEP_STALE — stale evidence is missing evidence.
+    citation: "scripts/work/validate/check-work-artifacts.mjs; scripts/work/validate/check-work-deep.mjs"
+  - id: unknown-effect-fallback
+    rule: >-
+      A missing output, unknown effect or guessed terminal identity never
+      permits fallback or cleanup claims: only a typed, identity-bound
+      `effectState: none` permits the fallback path; 'released'/'already_
+      released' prove cleanup while identity_unproven/no_owned_resource is
+      reported cleanup.complete:false (CONTEXT.md lifecycle correction;
+      the api's settle requires the settlement to
+      name THIS exact dispatch with effectState none).
+  - id: invented-answer
+    rule: >-
+      An ask the kernel cannot answer from the offered options goes to the
+      user — the kernel never invents an answer it was not offered
+      (modules/models/kinds.yaml question-needs-the-user).
+  - id: quiet-fix
+    rule: >-
+      A report that silently absorbed a spec conflict instead of raising
+      suspicion/blocker is a violation of the correction policy — the route
+      reopens the owning boundary (legality.yaml backwardEdges.neverQuietly).

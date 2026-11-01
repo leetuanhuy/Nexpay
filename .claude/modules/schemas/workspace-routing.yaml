@@ -1,0 +1,51 @@
+schema: starci/workspace-routing@1
+source: The StarCi host directory containing this .claude checkout and its paired sibling .workspaces route registry.
+registry: .workspaces/projects/<project>/work.json
+rules:
+  - .claude and .workspaces are a host pair. They are not default directories for every source;
+    app repositories must not receive copies.
+  - AGENTS.md is the host bootstrap file installed from .claude/init (CLAUDE.md/DEVIN.md only on
+    opt-in hosts). Project setup does not create these files or another .claude in routed
+    app sources.
+  - Read the selected project's binding before resolving Work or target code. Preserve Source when
+    entering another repository or worktree.
+  - Resolve source-relative repository paths from Source, not from .claude or the current target
+    checkout. Verify each actual Git remote against the declared repository before effects.
+  - A selected project has exactly one canonical Work root at .starciwork. Both editions permit
+    workspace.yaml metadata there. Lite may omit the tree when no brand records exist and permits only
+    .gitignore, optional workspace.yaml and brand/**. Workspace metadata supplies the project id and repo roles
+    for app-root detection and front-end role mapping. Project identity is also stored in routing references
+    and the external ledger, never in a project-name directory inside Work.
+  - In full edition, all product features are owned below features/<feature>/; business, architecture, UI,
+    implementation and UAT belong inside that feature. Never bind a feature as a separate workspace
+    or place feature business at .starciwork/business/ or .starciwork/features/business/.
+  - The one app repository owns .starciwork at its root. Backend and frontend code live in the
+    declared side folders, and both share that Work.
+  - The app owns the one runtime ledger for both BE and FE workflow state, a runtime.sqlite under
+    the host's <runtime root>/.runtime/projects/<ledger_id> directory, keyed by the app's Work root
+    (engine/db/ledger.mjs ledgerFileFor, registered in the machine.sqlite ledgers table), never inside
+    .starciwork. The
+    host registry is not project state; the host is an app only when its binding explicitly names it.
+  - Tasks launched outside the host must receive its absolute project skill path and selected
+    binding explicitly. Directory changes and AGENTS.md discovery in an app do not discover
+    instructions in a separate host automatically.
+  - Each full app project retains its own durable Work tree; a lite app retains its optional
+    workspace metadata and brand tree. .workspaces stores routing references,
+    never business progress, evidence or workflow history.
+  - If a binding or target is missing, inspect existing project route files and propose the exact
+    mapping; never silently use an illustrative outputs workspace as project Work.
+  - Use the resolved app Work root for schema validation and brand records; resolve workflow goals,
+    evidence and completion through the external project ledger. Lite readers read workspace.yaml normally
+    when present and skip index.yaml, shell/index.yaml and features/<feature>/index.yaml.
+  - Validate the app checkout and both side directories against this routing contract before workflow
+    effects. A failed source binding never authorizes creating another runtime, stack or Work tree.
+  - Before new workspace creation, inspect app storage for `.work`/`.starci` names —
+    they mean the tree predates `.starciwork`, mixed names mean conflict. Coordinate the rename
+    before new planning, never create a parallel tree; never relocate active records or rewrite
+    approvals silently. Runtime state lives in the project's runtime.sqlite only, outside .starciwork.
+bindingShape:
+  schema: starci/workspace-binding@2
+  project: project identifier
+  repository: "{pathFromSource, gitRepository} - the one app checkout and its declared remote"
+  sides: "{be: be, fe: fe} - side directories within the app checkout"
+  work: "{pathFromRepository: .starciwork} - Work at the app root"

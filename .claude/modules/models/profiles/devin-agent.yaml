@@ -1,0 +1,38 @@
+# Profile: devin-agent — the Cognition Devin command-terminal pool.
+# Business frame: the owner-gated executor. Owner-assigned capacity: 10 parallel
+# lanes under explicit-workflow-quota authority.
+# Registry facts (provider, runtime, model pins, capacity, launch agent) live in
+# modules/models/registry.yaml — pools.devin-agent and targets.devin-agent.
+
+target: devin-agent           # registry.yaml: pools.devin-agent + targets.devin-agent
+schema: starci/module-model-profile@1
+
+identity:
+  logicalIdentity: >-
+    modules/models/registry.yaml: the logical model identity is `devin-agent`; the local
+    CLI may use an account-selected underlying model and StarCi does not rename or
+    infer it. modelPolicy: "pin-swe-2-max-and-attest-the-devin-cli-runtime-before-dispatch".
+
+position: modules/models/tiers.yaml tiers, seats and difficulty; modules/models/runtimes.yaml roleOfKind; modules/models/registry.yaml pools
+
+business:
+  question: >-
+    "Which pool do I open when the owner explicitly grants Devin CLI capacity to
+    a workflow?" — devin-agent, and only then.
+  whenNeeded:
+    - Bounded implement/verify/write inside an Orca workflow worktree after explicit slot grant.
+    - Easy and medium hands-on implementation: first member of the medium and low tiers (tiers.yaml), Sol (medium) or Luna (low) behind it. Slots are owner-granted (config.yaml allocation.grants).
+    - "Drawing ops take the tier of their difficulty (high holds no Devin member) and get images from the headless starci work imagegen call; Devin still runs token-render checks in product checkouts through its browser-dom tool."
+    - Verification of hands-on work at easy and medium difficulty, with the browser-dom tool for UI audits.
+  whenNot:
+    - Anywhere outside Orca — the pool launches only as an Orca command-terminal inside the workflow worktree.
+    - decide/plan/manager/planner/validator/ImageGen roles — none exist (modules/models/registry.yaml lists these exclusions verbatim).
+    - Hard and insane work: the high and frontier tiers hold no Devin member.
+    - Beyond its owner-assigned cap: absence of granted quota, not the pool itself, is the gate.
+  pickedBy: >-
+    The common picker over the tier chains and the quota; the explicit-workflow-quota gate sits before
+    eligibility — capacity is an owner decision, not a scheduler guess.
+  failureModes:
+    - "Reading an early chain position as unbounded capacity: the quota gate still bounds admission."
+    - Trusting `auth status` for login state — the adapter checks `devin models list` because auth status can pass while logged out.
+    - "INFERRED: expecting cloud handoff/subagent behavior — both are forbidden; the op's boundary is the worktree."

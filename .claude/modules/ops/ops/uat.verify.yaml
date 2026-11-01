@@ -1,0 +1,420 @@
+schema: starci/op@1
+id: uat.verify
+goal:
+  en: Execute the requested sequential UX flows with scoped account/seed setup, real screenshot/video
+    evidence and verified cleanup.
+nodeKinds: [uat.ux]
+completionProfile: uat.ux
+sideEffects:
+  - scoped test account reuse/creation
+  - owned prerequisite SQL seed and cleanup
+  - selected test automation script authoring
+  - declared product UI actions and explicitly authorized paid AI calls
+  - direct provider/resource cleanup for exact run-owned IDs
+graphPolicy:
+  mode: read-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+reads:
+  - id: target
+    path: .starciwork/features/<feature>/uat/<flow>/index.yaml
+    purpose:
+      en: "Read the existing selected uat record, feature scope, declared refs/dependencies/proof demands
+        and validator freshness. This consumer op requires its target record to exist. An absent
+        target is a scope/graph gap: report it and propose a separately selected scope op; do not
+        create a target or invent its acceptance/graph here."
+  - id: business
+    path: shared
+    purpose:
+      en: shared
+  - id: repo
+    path: <app>/<bound-paths>
+    purpose:
+      en: shared
+  - id: environment
+    path: .starciwork/_resources/environments/<environment>/resource.yaml
+    purpose:
+      en: shared
+  - id: flows
+    path: request flows[] + selected .starciwork/features/<feature>/uat/<flow>/index.yaml
+    purpose:
+      en: Read the finite ordered flows array from the accepted FE evidence/flows.json or its exact selected
+        workflow request. Preserve the FE commit/runtime binding; a different served build requires
+        reconciliation before execution. Do not regenerate or weaken business expectations. Each
+        selected flow maps to an existing target and specifies entry, actor role, ordered actions,
+        expected business outcomes, observed-feedback checks, fixture needs, effects and cleanup.
+        Preserve array order and step order; no flow fan-out or successor dispatch. Material missing
+        expectations are resolved before mutation, not guessed from current behavior.
+  - id: accounts
+    path: .starciwork/_resources/identities/<identity>/resource.yaml + selected account requirements and
+      sealed custody (custody.sealed, always .starcistacks/<env>/secrets/<slug>.enc, app-relative)
+    purpose:
+      en: Resolve an existing suitable test account, role, membership and credential custody; otherwise
+        create a scoped test account through the actual supported identity owner when the UAT
+        request authorizes account setup. Preserve reused accounts and record whether a new account
+        is disposable or explicitly retained.
+  - id: fixtures
+    path: .starciwork/_resources/fixtures/<fixture>/resource.yaml + actual selected database schema and
+      seed preconditions
+    purpose:
+      en: Inspect actual schema, constraints, existing fixture state and required preconditions. Resolve
+        database/environment identity and the run-owned namespace; do not guess SQL tables or use
+        broad table deletion.
+  - id: scripts
+    path: <app>/<write-ceiling> + actual database/provider/identity clients
+    purpose:
+      en: Inspect reusable seed SQL, cleanup SQL and resource-management scripts and the real APIs they
+        call. Create missing scripts inside the selected automation source scope from the actual
+        schema/SDK/API. Keep test plumbing separate from product repairs.
+  - id: effects
+    path: current request authorization + selected environment/provider resources and configured spend
+      limits
+    purpose:
+      en: Bind account creation, SQL seed/delete, product actions, resource creation/deletion and paid AI
+        calls to the selected flows. Reuse explicit user authorization for paid AI testing without
+        another approval per call; use actual configured models/providers and any stated limits,
+        record usage/cost when observable and otherwise unavailable. This is not unlimited unrelated
+        spending or an invitation to retry forever. Discover deletion and post-delete verification
+        capability before creating billable resources.
+  - id: workflow
+    path: shared
+    purpose:
+      en: shared
+  - id: profile
+    path: shared
+    purpose:
+      en: shared
+writes:
+  - id: node
+    path: .starciwork/features/<feature>/uat/<flow>/index.yaml
+    fields: [schema, id, title, state, accounts, steps, proves, evidence, blockedBy]
+    content:
+      en: Read the existing selected scope, expected proof demands and .starciwork graph unchanged. Write
+        the work/uat-flow@1 record's state, proves and evidence pointer here; actual observations,
+        findings, commit mappings and remaining cleanup belong to the evidence result, not record
+        prose. Missing refs/dependencies/acceptance require a reported gap or separately selected
+        scope update; never add/remove them to obtain pass.
+  - id: source
+    path: <app>/<write-ceiling>
+    fields: [seed SQL, delete SQL, resource-management scripts, automation tests and usage instructions]
+    content:
+      en: Reuse or create scripts for account setup where needed, idempotent prerequisite seed, run-owned
+        SQL deletion, provider resource inspection/create/delete and cleanup verification. Require a
+        stable run ID, exact recorded IDs, environment/account ownership checks, dry-run/plan
+        inspection, parameterized SQL, transactions where supported, idempotent cleanup and nonzero
+        failure exits. Do not modify business code, expected outcomes, database schema or apply
+        production migrations.
+  - id: resources
+    path: .starciwork/_resources/{identities/<identity>,fixtures/<fixture>}/resource.yaml
+    schema: work/resource@1
+    fields:
+      - schema
+      - selected identity metadata
+      - selected fixture metadata
+      - revision
+      - "details: actual IDs and sealed refs only"
+    content:
+      en: Fill or refresh only already selected identity/fixture resource slots (work/resource@1) after
+        observing real setup. Finalize semantic IDs, revisions and custody refs before computing the
+        verification input digest. Preserve reusable identity records; per-run effects and cleanup
+        results belong to evidence rather than post-proof resource edits.
+  - id: evidence
+    path: <STARCI_JOB_SCRATCH>/runs/<runId>/**
+    fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+    artifacts: [manifest.yaml, result.md, screens/**/*.png, videos/**]
+    content:
+      en: "The run is agent data (docs/ledger-db.md): write it under STARCI_JOB_SCRATCH, never under .starciwork,
+        and file it with `starci kernel report --job <job> --report <report.json> --attach <scratch>/runs/<runId>` - every file becomes an artifact of this attempt
+        (role uat-run, run_id <runId>). The flow's sibling evidence.yaml cites the run it settled on as
+        run {id: <runId>, result: {artifact?, sha256}, screens: [{artifact?, sha256, label}], videos: [{artifact?, sha256}]}.
+        Keep request flow order, original assertion IDs, actual locators/actions and business results,
+        per-check expected yes/no and observed yes/no, screenshots and playable real browser video
+        indexed by flow/step/time. For unobserved checks keep actual null with not-run/inconclusive
+        outside the yes/no answer column. Record stable run ID, reused versus created objects,
+        immediate returned resource IDs, provider correlation IDs, script hashes/commands/exits,
+        before/after read-back and cleanup ownership/results. A screenshot or silent video alone
+        cannot prove a business outcome. Redact credentials, PII and sensitive video frames; hash
+        the final sanitized playable assets. Operator-specific observed result in result.md:
+        Preserve expected flows and business assertions; keep per-flow outcomes, yes/no UX
+        observations, original failures and cleanup results in evidence. Done requires the selected
+        journeys and required cleanup to pass. The run folder holds exactly manifest.yaml,
+        result.md, screens/ and videos/; the run ledger, script review, seed, flows, UX checks, walk, read-back, runtime,
+        cleanup and cost payloads fold into manifest.yaml under `files:`, keyed by name."
+steps:
+  - reads:
+      - environment
+    writes: [evidence]
+    action:
+      en: "Environment pre-step, before any setup or walk. starci kernel dispatch already ran node
+        scripts/uat/env-health.mjs check --restart on the environments this flow's records reference and
+        put the result in the packet (context.environment). Re-run it yourself - node
+        scripts/uat/env-health.mjs check --repo <ledger repo> --paths <owned paths as JSON> --json - and
+        record it in report.checks as name env-health with its exit code (0 ready, 3 not ready). A service
+        that is down is started ONLY through starci gate env-health serve --repo <ledger repo>
+        --env <id> --service <name> --cwd <checkout> --url <probe> -- <start command>, which registers it so
+        the next pre-step restarts it itself; never kill a process env-health reports as port-conflict. A
+        probe-drift row means the declared probe path is stale while the service is up: walk, and name the
+        discovered endpoint in the report for workspace.manage. When the stack is still not ready, file
+        outcome blocked with blocker kind environment (never failed): a walk on a dead stack proves nothing
+        about the product and must not be charged to it."
+  - reads:
+      - target
+      - business
+      - flows
+      - repo
+      - environment
+      - effects
+      - profile
+    writes: [evidence]
+    action:
+      en: "Freeze the requested flows order, business expectations and applicable UX checks before
+        effects. UX answers are yes/no for observed loading feedback, error feedback, skeleton,
+        validation, retry/recovery and completion as requested; no beauty, spacing, color,
+        typography or visual-fidelity scoring. Specify expected yes or no and applicability before
+        running; a skeleton is not universally required and no error on a happy path is not
+        automatically a failure. Verify runtime/served identity and actual screenshot/video
+        capability before starting. Own case preparation within this invocation: map every requested
+        flow and step to accepted ACs, actor, entry, preconditions, feedback, persistent read-back
+        where required, real screenshot/video checkpoints and cleanup obligations before effects.
+        Locator choices never redefine expected behavior. No plan/account/seed predecessor is
+        required. Resolve the execution profile and actual tool availability before selecting
+        instruments; this does not switch the model/runtime or spawn workers. Read the FE asset
+        manifest and preserve explicit deferred artwork status. Test business/UX expectations only;
+        cosmetic artwork may remain pending under the accepted profile policy, but missing assets
+        required by a requested flow cannot satisfy its criteria."
+  - reads:
+      - repo
+      - scripts
+      - fixtures
+      - accounts
+      - effects
+      - environment
+    writes: [source, evidence]
+    action:
+      en: Inspect or author the missing seed/delete/resource-management scripts from actual owners and, for
+        a todo flow work.author wrote in planned mode, exactly the automation spec its checks name. Review
+        dry-run targets and failure behavior, test their guards without destructive product effects,
+        and prepare a finally-style cleanup path before the first mutation. The run ledger records
+        reused baselines and every created/mutated ID immediately; discover unknown provider
+        outcomes by read-only correlation before retries. Reuse is the first choice, never reset a
+        shared password. Planned identity slots are the identity resources the flow's accounts.yaml
+        already names, never new ones; seed exactly their roles and write actual provider IDs only
+        after observing creation. Seed prerequisites only, never pre-create the
+        action outcome under test. Record script versions and use sealed credentials at execution
+        time, never in tracked source or evidence.
+  - reads:
+      - accounts
+      - effects
+      - scripts
+      - environment
+      - flows
+    writes: [resources, evidence]
+    action:
+      en: Reuse a suitable account or create the authorized scoped account through its supported
+        provider/script; verify actual login, role and membership. Resolve credentials at use time
+        and isolate browser sessions for distinct actors while retaining the session continuity each
+        sequential flow requires. Track disposable account ownership separately from reused
+        identities. A sealed identity secret is written to exactly one place, .starcistacks/<env>/secrets/<identity-slug>.enc (sops age, created with the repo's stack-secret set command), and the identity record's custody.sealed names that path; never a sealed file, a secrets.enc.yaml or a plaintext value under .starciwork (the validator refuses it with SEALED_CUSTODY_LOCATION or SEALED_FILE_IN_WORK). Test credentials a script, fixture or driver needs are generated per run (node:crypto randomBytes) or, only when they must stay stable across runs, kept the way the app keeps every credential - .starcistacks/<stack>/secrets/test/<name>, stored with the repo's own stack-secret set command (npm run secret:set) so only the sops .enc twin is committed, read with testSecret(<name>, {repo}) (scripts/uat/test-secret.mjs; owner:push-scan-test-secrets-encrypted) - never written as a literal; the push secret scan refuses a plaintext test password.
+  - reads:
+      - fixtures
+      - scripts
+      - accounts
+      - environment
+      - flows
+      - effects
+    writes: [resources, evidence]
+    action:
+      en: Execute reviewed parameterized seed SQL only for missing prerequisites, recording exact inserted
+        IDs and before-images for any authorized changes to reused records. Verify preconditions by
+        read-back. Finalize identity/fixture metadata and compute the actual verification digest
+        before starting the tested journeys; never seed a successful outcome or fabricate a passing
+        prerequisite.
+  - reads:
+      - flows
+      - business
+      - accounts
+      - fixtures
+      - environment
+      - effects
+    writes: [evidence]
+    action:
+      en: Run flows[0], flows[1], and so on in the requested order, each action in its declared sequence,
+        with real browser controls and continuous real video and a Playwright trace per flow. Capture screenshots at
+        significant steps, loading/error/skeleton observations and failure points. Real configured
+        paid AI calls are permitted within the authorized flow; do not substitute mocked AI success.
+        Record asynchronous operation/resource IDs promptly and verify actual completion, not merely
+        request acceptance. Launch the browser run through
+        `node <Source>/.claude/scripts/uat/uat-slots.mjs run --record-dir <evidence dir> -- <project Playwright command>`,
+        which records video, trace and screenshots by default and holds
+        one of the machine-wide config.yaml uat.maxConcurrent UAT slots and waits queued while all are
+        busy.
+  - reads:
+      - flows
+      - business
+      - fixtures
+      - environment
+    writes: [evidence]
+    action:
+      en: For each reached checkpoint answer observed UX checks yes/no only, linked to screenshot/video
+        timestamps. Verify expected business results through actual response, reload/resume and
+        authorized read-only API/SQL read-back; API writes never perform an action claimed as
+        UI-tested. Preserve failures; dependent later steps are not-run, while independent later
+        flows may proceed only in original order with safe preconditions. Do not repair product code
+        or rewrite expected outcomes inside UAT.
+  - reads:
+      - flows
+      - scripts
+      - fixtures
+      - accounts
+      - environment
+      - effects
+    writes: [evidence]
+    action:
+      en: After success, failure or interruption, finalize and inspect the real recordings/screens and run
+        the prepared cleanup for all owned effects. Delete externally provisioned resources through
+        the supported direct provider/API script using exact ledger IDs before removing local
+        metadata; SQL deletion alone cannot delete a VM or stop billing. Poll/reconcile actual
+        absence or provider deletion completion and dependent owned resources. Run cleanup SQL in
+        dependency-safe order, restore authorized reused-record before-images and remove disposable
+        accounts only when owned and selected for cleanup. Preserve shared/reused objects and
+        explicitly retained prerequisites; never broad-delete by age or name prefix alone.
+  - reads:
+      - target
+      - flows
+      - fixtures
+      - scripts
+      - effects
+      - environment
+      - workflow
+    writes: [node, evidence]
+    action:
+      en: Read back database and provider state to prove cleanup, retaining the ownership ledger, scripts
+        and sanitized evidence. If a resource remains, record exact IDs, costs when observable and
+        an executable resume-cleanup command; incomplete cleanup blocks overall done even when flows
+        passed. Report each flow result, the yes/no UX table, screenshot/video refs, usage/cost
+        observations and cleanup result. Validate bound evidence and stop; never claim the journey
+        succeeded solely because cleanup succeeded. For workflow execution, Return outputs.results
+        for every input flow and step in order, yes/no UX observations and screenshot/video
+        evidence, plus outputs.cleanup with no unresolved owned resources for a pass. Submit the
+        exact response to the kernel gate; never self-advance. This handoff is conditional and does
+        not change standalone or named frontend response contracts.
+  - reads: [environment, scripts]
+    writes: [evidence]
+    action:
+      en: "The walk runs against the app's real dev stack - the services the app-root .starcistacks/<env> declares, brought up by the environment's own start commands and checked by env-health - never a test world, a fake of our own service or a shared production target. Where the op runs automated checks (seed, delete and resource scripts, automation specs), they follow the test-world conventions: people through the app's declared identity doors (sign-in and registration helpers, never a hand-made token), state awaited by polling with a deadline (waitFor-style), never a sleep, no process.env read in a spec, a third-party provider reached only through its declared integration and test credentials through testSecret(<name>, {repo}). Evidence is gathered as the evidence write declares."
+      vi: "Lần đi chạy trên stack dev thật của app - các dịch vụ mà .starcistacks/<env> ở gốc app khai báo, khởi động bằng lệnh start riêng của môi trường và được env-health kiểm tra - không bao giờ trên test world, fake của dịch vụ của chính ta hay đích production dùng chung. Khi op chạy kiểm tra tự động (script seed, xóa và tài nguyên, spec tự động), chúng theo quy ước của test world: người dùng qua các cửa identity đã khai báo của app (helper đăng nhập và đăng ký, không bao giờ token tự chế), trạng thái được chờ bằng thăm dò có hạn (kiểu waitFor), không bao giờ sleep, không đọc process.env trong spec, nhà cung cấp bên thứ ba chỉ được chạm qua tích hợp đã khai báo và credential test lấy qua testSecret(<name>, {repo}). Bằng chứng được thu như mục ghi evidence đã khai báo."
+proofs:
+  - id: binding
+    requirement:
+      en: Run the record-class validator `starci runtime validate` and, on every record directory it writes, `starci runtime validate --strict`; every cited ID/path exists or is explicitly
+        proposed, required assertions are covered, input bindings are current, and an honest
+        not-run/fail cannot earn done.
+  - id: sequence
+    requirement:
+      en: Every requested flow and action retains its order, real execution status and original expected
+        outcome; dependent unreached steps are not-run and no parallel flow execution is presented
+        as sequential.
+  - id: journey
+    requirement:
+      en: Actual rendered controls produced each required business outcome with a passing behavior
+        assertion, verified served version and required persistence/negative checks. Paid AI results
+        are actual provider outcomes, not a fake placeholder.
+  - id: ux
+    requirement:
+      en: Each observed applicable UX answer is yes or no with expected value and direct evidence;
+        unobserved checks stay null plus not-run/inconclusive. No appearance score is produced and
+        required failed checks block completion.
+  - id: recording
+    requirement:
+      en: Every executed flow has finalized playable genuine video, its trace and indexed screenshots for
+        its required checkpoints, verified after redaction and named in report.files; settle refuses a
+        pass without an image and a video (PROOF_MEDIA_MISSING). Missing recording cannot be replaced by
+        generated video or stills labelled as footage.
+    check: scripts/kernel/job-artifacts.mjs
+  - id: scripts
+    requirement:
+      en: Seed, delete and resource-management scripts are real inspected reusable source with exact
+        environment/run ownership guards and observed exits; setup/cleanup output records actual IDs
+        and failures, not illustrative SQL or fake provider APIs.
+  - id: cleanup
+    requirement:
+      en: Every run-owned created resource/row/account selected for deletion is confirmed absent through
+        its real owner, reused mutations are restored where authorized, and retained objects have
+        explicit ownership reasons. Partial setup, failed flows and uncertain asynchronous effects
+        remain in the cleanup ledger until resolved; unfinished cleanup cannot earn done.
+judge:
+  - by: machine
+    measures: [declared-checks, work-hygiene, proof-media, contract-script]
+    proofs: [recording]
+    why: "the settler re-runs the record validators and a pass without a screenshot and a genuine video of every executed flow is refused"
+blockers:
+  - code: ENVIRONMENT_NOT_READY
+    condition:
+      en: The env-health pre-step still reports a declared service down, hung, restart-failed or held by a
+        foreign process after the permitted bring-up. File blocked with blocker kind environment and the
+        env-health result; the walk is not run and nothing is charged to the product.
+  - code: PRODUCT_DEFECT_OWNER
+    condition:
+      en: "The walk ran on a ready stack and a step is red. File failed with failureClass product and a
+        rootCause naming the owner of the fix - node: the Work record (impl.<feature>.<repo>.<name>) or
+        op whose output is wrong, op: the build op that repairs it (backend.implement,
+        interface.implement), files: the source paths it touches, plus claim, evidence, counterCheck,
+        expectedFix and recheck. The kernel routes a repair leg to that owner and runs this op again
+        behind it; it never re-runs the same walk at an unchanged HEAD. Use failureClass transient only
+        for a genuine flake a plain re-run may clear, with the evidence for it."
+  - code: FLOW_REQUEST_INCOMPLETE
+    condition:
+      en: The ordered flows array, original expected behavior or required target bindings are missing or
+        ambiguous.
+  - code: SETUP_UNAVAILABLE
+    condition:
+      en: Account custody, actual seed schema/client, runtime or owned setup prerequisite cannot be
+        established within the selected scope.
+  - code: RECORDING_UNAVAILABLE
+    condition:
+      en: The permitted browser cannot capture required genuine video/screenshots or the final sanitized
+        files cannot be played/read.
+  - code: ACTION_OUTSIDE_SCOPE
+    condition:
+      en: An effect exceeds the selected account/data/provider/paid-AI authority or stated spending
+        limits.
+  - code: CLEANUP_INCOMPLETE
+    condition:
+      en: Exact owned resource deletion/restoration remains unverified; retain IDs/evidence and a
+        resumable cleanup command, never erase the ledger or claim done.
+  - code: DECLARED_DEPENDENCY_UNMET
+    condition:
+      en: A declared prerequisite is not effectively done, or a required declared input/scope is missing.
+        Report node/resource IDs and propose a separately selected graph update when needed; never
+        run predecessors or weaken dependsOn/refs/required to proceed.
+placeholders:
+  feature: shared
+  app: shared
+  bound-paths: shared
+  write-ceiling: shared
+  environment: shared
+  identity: shared
+  fixture: shared
+  flow: Selected UAT journey slug
+  runId: Stable id of this UAT run, one folder under the flow node
+layoutPolicy:
+  checks: [starci-validate]
+policy:
+  proofMedia: {images: 1, video: required}
+  uatPolicy:
+    flowOrder: request-sequential
+    uxAnswers: yes-no-observed-only
+    appearanceScoring: false
+    accountSetup: reuse-or-create-scoped
+    seed: prerequisites-only
+    scripts: [seed, delete, resource-management]
+    recording: screenshots-and-real-video
+    cleanup: finally-owned-and-verified
+    paidAI: reuse-explicit-flow-authorization
+route:
+  nodeKinds: [uat.ux]
+  phase: [verify, post-implementation]
+  intent: [uat, acceptance, browser, verify]
+  prerequisites: [implementation done, interface.audit done, verified served build]
+  riskHints: [browser-required]

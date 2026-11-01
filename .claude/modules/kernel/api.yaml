@@ -1,0 +1,205 @@
+# ============================================================================
+# KERNEL-API — modules/kernel/api.yaml
+#
+# THE KERNEL'S ONLY DOOR TO THE LEDGER. The [Kernel] is ONE long-lived LLM
+# agent per workflow (start-workflow.yaml); it never opens
+# .starciwork/runtime.sqlite, never writes a job row, never spawns a terminal
+# itself — every state operation is one call:
+#   starci kernel <command> ...
+# Ops are ephemeral [Op] agents spawned per job by `starci kernel dispatch`
+# (dispatch.yaml). The kernel reasons; the api transacts.
+#
+# The op IPC is durable: contracts out (dispatch writes the contracts row,
+# the worker reads it back via `starci kernel op-contract`), reports in (the worker
+# files `starci kernel report`; the kernel integrates it via `starci kernel consume-report`),
+# checks beside them (`starci kernel record-checks` records the kernel's re-run). Report and
+# contract truth lives in runtime.sqlite through these verbs.
+#
+# Sources (all under .claude/, relative to the skill root):
+#   scripts/kernel/cli.mjs      — the executable half; this file is its contract
+#   engine/db/ledger.mjs        — the tables named below (DDL: engine/db/schema/runtime.sql)
+#   scripts/agent/lib.mjs       — spawnAgent + terminal lifecycle the api drives;
+#                                 the kernel never calls Orca itself
+#   modules/kernel/driver-loop.yaml    — the caller's tick
+#   modules/kernel/dispatch.yaml       — the packet `dispatch` builds + the
+#                                        path-legality preflight before enqueue
+#   modules/kernel/verdict-contract.yaml — what `settle` validates
+#   modules/kernel/kernel-prompt.md    — the spawned kernel's prompt (load order + pointers)
+#   modules/schemas/goal-plan.yaml     — the plan --file shape:
+#                                        {legs:[{op, paths?, notes?}]}
+# ============================================================================
+
+schema: starci/module-kernel-api@1
+
+about:
+  kind: kernel-api-contract
+  businessQuestion: >-
+    "If the kernel is an LLM agent that may not touch the database, what is
+    the exact command surface it reasons through — what does each call read,
+    what does each call write, and when does it refuse?"
+  businessAnswer: >-
+    The verbs are the `modules/cli/commands/kernel/<verb>.yaml` catalog files. Pure reads return projections
+    and touch no row (survey, hierarchy, peers, op-contract) and
+    `estimate` computes slice sizing from modules/models/runtimes.yaml without
+    reading the ledger at all; `observe` is the kernel's window onto its own
+    job's exact op terminal screen — reasoning context and never evidence —
+    and appends its own receipt event. Status can resolve typed waits, sweep
+    autopilot asks, renew live worker leases, and record provider outages. The
+    op IPC is durable rows (dispatch writes contracts, report files reports,
+    consume-report integrates, check records re-runs); every other mutating
+    verb is a single ledger transaction that appends one hash-chained event.
+    Every command prints one JSON object to stdout; a refusal exits non-zero
+    with {ok:false, reason} — a refusal is a fact for the driver loop, never a crash to route
+    around. The op lifecycle is fixed: enqueue -> route (model decision
+    persisted) -> dispatch (contract row written, leases held; or reconcile a
+    pre-contract effect_unknown launch back to the same queued attempt) -> worker
+    files `starci kernel report` -> kernel `starci kernel consume-report` -> kernel re-runs
+    checks -> `starci kernel record-checks` -> `starci kernel settle` (consumption enforced — settle
+    marks the report consumed if the kernel did not).
+  sources:
+    - scripts/kernel/cli.mjs
+    - engine/db/ledger.mjs
+    - scripts/agent/lib.mjs
+
+# ============================================================================
+# CONVENTIONS — true of every command below.
+# ============================================================================
+conventions:
+  invoke: 'starci kernel <command> [--repo <path>] [--json]'
+  ledger: >-
+    .starciwork/runtime.sqlite under the bound repo (engine/db/ledger.mjs
+    ledgerFileFor). Every command opens it first; no file there refuses
+    `ledger-missing` before the verb runs
+  stdout: >-
+    one JSON object — {ok:true, ...} on success. A refusal prints ok:false and
+    names itself in one of four fields: `code` (the thrown refusals, the
+    common case), `reason` (nudge, observe, reconcile, the `max-ops`
+    concurrency refusal route and dispatch share, and every refusal that
+    carries a `detail` telling the Kernel its next call — enqueue's missing
+    required param, dispatch's prerequisite-unmet, route and dispatch's
+    tool-unavailable), `rejected` (every
+    dispatch launch failure) or `refused` (dispatch admission drift). The
+    kebab string is the contract callers match on; each command's `refuses:`
+    names the string it prints and every untyped refusal says so
+  exitCode: '0 ok / 1 refusal / 2 usage error'
+  extensions: >-
+    New verbs, boolean flags and status fields are FILES, never edits of cli.mjs's shared lists
+    (scripts/kernel/api-extensions.mjs): a verb is scripts/kernel/verbs/<verb>.mjs with its contract
+    in modules/cli/commands/kernel/<verb>.yaml; a status field is
+    scripts/kernel/status/<key>.mjs; a boolean flag is a line of scripts/kernel/api-boolean-flags.txt.
+    `starci kernel extensions` lists them; check-cli-parity reads both forms
+  writes: >-
+    every mutation runs inside BEGIN IMMEDIATE and appends its event —
+    events is hash-chained (engine/db/ledger.mjs EVENTS_DIGEST_TRIGGER), so a
+    half-write or a silent edit is impossible
+  identity: >-
+    a job's durable identity is {workflow_id, op_id, attempt, generation} +
+    lease_token; lease writes that do not match the job's complete identity
+    abort at the trigger (engine/db/schema/runtime.sql leases_match_job
+    RAISE(ABORT,'lease-identity-drift')); a report whose identity fields
+    contradict the job's bound {run, task, dispatch, from} fails
+    starci/op-report@1 at filing (report-invalid)
+  callerBoundary: >-
+    scripts/guards/op-caller.mjs resolves actual terminal bindings and managed history, distinguishing
+    Ops, current Kernels, actual Supervisor seats/Workers, known retired/foreign callers, unknown reads
+    and the existing unbound owner session. --by and role environment claims grant no API identity.
+    Ops retain their own report and declared projections; kernelOnly excludes Ops and does not redefine
+    owner/Supervisor maintenance verbs. A Kernel mutation binds workflow generation, attempt, terminal,
+    immutable Dispatch and singleton token through kernel-seat.mjs. caller-admission.mjs rechecks that
+    identity after BEGIN IMMEDIATE and before native Node/Git/Orca effects through the existing owners.
+    Claims and resolutions carry its server-derived incarnation identity. Unknown custody and conflicting
+    actor claims refuse. Unbound owner shell access remains a trusted administrative boundary; this API
+    fence cannot prevent raw SQLite access or prove a missing native handle was never managed.
+  requiredRead: >-
+    scripts/kernel/required-read.mjs derives the complete current Kernel and workflow/op contract paths
+    and byte hashes. kernel-ack-rev --plan projects them; only the current Kernel attests the exact manifest
+    with --digest <readToken> (or the complete manifest with --read-manifest); revision-ack is the same verb. Boot records runtime-read-delivered provenance without acknowledgement. Relevant
+    dirty, unknown, incomplete or changed bytes and a replaced incarnation refuse affected new-leg admission.
+    Git trees retain their actual SHA identity. Installed trees validate the existing install descriptor/package
+    protocol and every required custody hash, deriving an explicit installed revision from current required bytes.
+    Neither package version nor a descriptor alone proves READ. Already admitted Ops retain their frozen
+    contract/proof scope; current safeguards apply and changed relevant bytes require actual READ/CHECK.
+  sharedCheckout: >-
+    Each Git workflow uses its registered workflow checkout and branch; its sibling ops share
+    that tree and a worker touches only its owned paths. Ops never stage or commit. ENFORCED at every op dispatch
+    (scripts/guards/hook-install.mjs guardLaunch; the receipt rides on op-dispatched `guard`, managed
+    dispatches included): (1) the agent's host runs scripts/guards/command-guard.mjs as a PreToolUse hook
+    (registered by launch trust, scripts/agent/trust.mjs: Claude settings.json, Codex config.toml with its
+    trusted hash, Devin config.json) on every shell command before it runs; for an agent whose Orca
+    terminal carries a guard, command-guard.mjs refuses history, ref and tracked-work changes inside
+    its bound workflow worktree (WORKFLOW_HISTORY_CHANGE). The scoped git-policy.mjs also refuses reset (except `reset -- <owned paths>`), rebase, pull --rebase, commit --amend/-a/--no-verify
+    or without explicit pathspecs (a --pathspec-from-file list, stdin `-` and --pathspec-file-nul
+    included, is scoped line by line; an unreadable list refuses PATHSPEC_FILE_UNREADABLE), stash, clean
+    -f, checkout/switch that moves HEAD, checkout/restore/add/rm of paths outside the job's owned paths,
+    branch rewrites, forced pushes, a push to a URL or path or through a command-line remote redirect
+    (PUSH_REMOTE_NOT_CONFIGURED), `remote add|set-url|rename|remove` (REMOTE_REWRITE), or a configuration
+    write that changes core.hooksPath or a remote URL (CONFIG_GUARDED; `starci git sync` owns lane
+    synchronization, and configuration writes are owner-only; setting core.hooksPath to its
+    current value, as husky's install does, passes), update-ref and filter-branch, and a hooked write
+    (commit, merge, push, reset, checkout, ...) with core.hooksPath overridden by -c, --config-env or
+    GIT_CONFIG_* (HOOKS_BYPASS), and an App Router pathspec git would read as a glob (APP_ROUTER_GLOB);
+    deps-guard.mjs refuses an install-family npm, pnpm or yarn command whose package root (cwd, --prefix,
+    -C/--dir, --cwd) has a linked node_modules - its own, one it sits inside, or its workspace root's -
+    (DEPS_THROUGH_LINK; this rule also holds without a guard file),
+    a raw orca orchestration check from the Kernel (KERNEL_ORCA_CHECK), and npm ci while a job of ANOTHER workflow of the ledger is leased; `ln`,
+    `mklink`, New-Item -ItemType Junction|SymbolicLink|HardLink and Create*Link are refused (LINK_CREATE)
+    - the hook blocks the command (exit 2) with a typed code and the remedy; (2)
+    <guards root>/jobs/<job>.json names the job's owned paths as absolute paths, bound to the agent's
+    Orca terminal (<guards root>/terminals/<handle>.json, bound once the start names the terminal, removed when that
+    terminal closes); (3) every checkout the job
+    writes gets a reference-transaction hook (starci-history-guard) that git runs for every caller:
+    main, master and every checked-out branch only move forward and are never deleted, and an op
+    (its terminal bound to a guard) never creates a worktree and every commit its update brings that no
+    remote-tracking ref holds - a merge's own content and each commit it merges in - carries only its
+    owned paths (refs/stash stays writable for lint-staged's pre-commit backup). The hook has no
+    override. Staging into a private GIT_INDEX_FILE passes. config.yaml guards.historyHook /
+    guards.workHook false switch a hook layer off. Settle backs it: only the runtime commits on a workflow
+    branch (workflow-checkpoint.mjs checkpointOp), and a commit or change outside an op's leases refuses
+    its pass (workflow-foreign-commit, workflow-foreign-change). The Kernel is guarded too
+    through scripts/guards/hook-install.mjs: start-workflow.mjs writes it a job guard of role kernel
+    (kernel-<workflow>, no owned path, its workflowWorktree) and binds it to the Kernel's terminal, so
+    layer (1) refuses its raw git history changes, worktree adds, recursive deletes, kills by name and
+    raw agent launches while its `node cli.mjs <verb>` calls pass; layer (3) skips a kernel guard, since
+    the runtime's own git under the Kernel's api calls inherits its terminal. A guard that could not be
+    put in place rides on kernel-booted `guard` with code kernel-guard-unbound
+  hierarchy: >-
+    `hierarchy` projects starci/agent-hierarchy@1 from durable workflow/job
+    identity. Stable nodes are workflow:<workflow>, agent:kernel:<workflow>
+    and agent:operation:<job>; Orca terminal/pane ids are runtime metadata,
+    never parent identity. The Kernel terminal owns one lazy workflow Run and
+    every Op Task/Dispatch belongs to that Run.
+  neverDoes:
+    - 'never picks the next op or the model ad hoc — the kernel reasons, `starci kernel route` resolves and persists the decision on the job payload before every dispatch'
+    - 'never answers an ask or revises a goal — intent is the owners (provision.ask)'
+    - 'never deletes history — finish preserves goals/jobs/reports/events'
+    - 'never spawns outside dispatch --spawn — one job, one terminal, one agent'
+    # Boundary rules the KERNEL agent is held to (driver-loop.yaml boundary).
+    # The api is the only door:
+    - 'kernel never calls orca, git, or an agent CLI directly — host mechanics are api internals + scripts/agent/lib.mjs; the kernel sees receipts, not terminals'
+    - 'kernel never writes files as the durable record — the ledger via api calls plus each job''s declared artifacts are the only durable surface (report/contract truth is the reports/contracts/checks rows)'
+    - 'kernel never settles a report it has not consumed — `starci kernel consume-report` before `starci kernel settle`; consumption is the kernel''s durable acknowledgement and settle enforces it (marks consumed_at) at the latest'
+    - 'kernel never holds durable state only in memory — survey findings, the derived plan, the slice table and routing reasoning persist via plan/incident into events BEFORE dispatch'
+    - 'kernel never reuses an op terminal — settle closes the worker terminal; a retry is a new job row at attempt+1'
+    - 'kernel never mutates an op terminal outside nudge/settle — `starci kernel observe` is the only read of its screen (context, never proof; sending is `starci kernel nudge`, closing is `starci kernel settle`)'
+
+# ============================================================================
+# ASK LIFECYCLE — the events an `outcome: ask` report passes through after it
+# is filed. The report row stays OPEN until a terminal kind lands; every reader
+# of open asks honours all of them.
+# ============================================================================
+askLifecycle:
+  servedBy: scripts/kernel/ask-server.mjs
+  ordering: events are ordered by events.seq — event_id is a random token and orders nothing
+  events:
+    - ask-notified: 'starci kernel serve-ask (serve-ask.mjs parkAsk) told the owner on Telegram: an approval ask is pushed (the question with a Generate URL button, no link, no form; via:telegram), a credential ask is listed for the bridge /creds and never pushed (via:creds). payload {dispatchId, onDemand:true, via:telegram|creds, askClass:approval|credential, messageId, key, fresh, fields}. The ask then waits on the owner with no form (frontier.askOnDemandDispatches, supervisor liveness on-demand); like ask-serving it reopens an ask superseded before it'
+    - ask-notify-failed: 'the Telegram notice could not be sent. payload {dispatchId, error}; starci kernel serve-ask then served the form at once'
+    - ask-serving: 'the localhost form is bound and answering. payload {dispatchId, url, pid, fields, ttlMs, onDemand?, requestedBy?} (onDemand/requestedBy telegram when the owner pressed Generate URL); the newest ask-serving for a dispatch is the URL that counts'
+    - ask-serving-expired: 'the --ttl window closed with no submission. payload {dispatchId}; the URL is dead until a re-serve appends a newer ask-serving'
+    - ask-superseded: 'a later ask report for the same (workflow, op) and the same subject (the asking job params.subject, else overlapping question.refs) was served and retires this one; an ask of the same op about another subject stays open. payload {dispatchId: <retired ask>, by: <the ask now serving>, opId}; terminal — a retired ask is closed without an answer and is never relayed to the owner'
+    - ask-answered: 'the owner submitted the form. payload {dispatchId, receiptPath, answeredBy, optionIndex, custodyWritten, envWritten, pointersWritten, errors} — names and custody paths only, never values; terminal. The receipt (starci/ask-answer@1) carries option, optionIndex (the picked option''s position in question.options), picks, answeredBy, note and at. On a handover.review ask serve-ask refuses a delegate''s approve (403): only the owner approves a handover'
+    - ask-auto-accepted: 'config.yaml asks.autoAcceptRecommended answered the ask with its recommended option instead of serving it; appended with the ask-answered (answeredBy auto-recommended) it audits. payload {dispatchId, opId, optionIndex, option, recommendedReason, receiptPath, rule {key, autoAcceptRecommended, excludes, source: structured|text}, config {autoAcceptRecommended, excludes, source}}. A handover.review, credential or excluded-kind ask never gets one'
+    - draw-owner-ruling: 'an owner answer to a draw-review ask (form submit or a Telegram reply, serve-ask.mjs) holds a note: one event per note, the owner ruling bound to its shape and the part digests the owner saw (scripts/work/draw-feedback.mjs recordDrawAnswer). payload {noteId, record, recordPath, shape, part, parts, text, class (product-direction|grammar|knowledge|one-off), target, as, classifiedBy, decision, owed, dispatchId, jobId, receipt, receiptSha256}'
+    - draw-redraw-owed: 'the owner answered a draw-review ask with a redraw: the same interface.draw leg owes a redraw that addresses every note. payload {record, recordPath, jobId, dispatchId, shapes, noteIds, receipt}; starci kernel status lists it as drawReviews[].redrawOwed and, until an interface.draw job is enqueued after it, a nextActions retry (draw-redraw: the runtime enqueues it when the answer names the job, else the Kernel does)'
+    - knowledge-change-requested: 'a draw note the runtime classified knowledge: a knowledge change request for the supervisor / runtime owner. payload {noteId, target, text, record, shape, dispatchId, receipt, status: open, for: supervisor}; starci kernel status lists open ones as knowledgeChangeRequests until knowledge-change-resolved {noteId}'
+    - ask-message-closed: 'the ask no longer waits (answered, auto-accepted, retired or superseded) and its Telegram messages were removed. payload {dispatchId, reason, deleted[], edited[], failed[]}: deleted, or edited to say it was answered where Telegram refuses a delete (older than 48 h); the bridge sweep retries a failed one'
+  open: 'an ask report carrying neither ask-answered nor ask-superseded for its dispatch_id (a supersede followed by ask-notified or ask-serving is open again); modules/supervisor/supervise.yaml is the reader that tags each open ask live, stale, dead, unserved or on-demand before it reaches the owner'

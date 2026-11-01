@@ -1,0 +1,445 @@
+# ============================================================================
+# modules/kernel/dispatch.yaml — the spawn contract
+#
+# THE SPAWN CONTRACT — the packet each ephemeral [Op] agent is launched with.
+# The packet flows through `starci kernel dispatch`: the [Kernel] agent calls
+# `starci kernel dispatch --job <id> --spawn` and the api —
+# never the kernel itself — reserves the lease, renders the packet and runs
+# the Orca terminal sequence (modules/kernel/api.yaml dispatch).
+# Every field is defined once, with the kernel mechanism that enforces it
+# named beside it. The packet is the whole world the op knows: its brief,
+# the records it may read, the paths it may write, the model and budget it
+# was allocated, and the lease token that binds everything it does back to
+# one durable job identity. The rendered packet is durable too — dispatch
+# writes it as the contracts row (workflow_id,op_id,attempt), which the
+# worker reads back via `starci kernel op-contract`; the terminal text is only the
+# delivery, the row is the dispatch authority. The answer travels the same
+# channel back: `starci kernel report` files the durable reports row.
+# ============================================================================
+
+schema: starci/module-kernel-dispatch@1
+
+about:
+  kind: dispatch-contract
+  businessQuestion: >-
+    "When the kernel spawns one ephemeral agent for one operation, what exactly
+    is it told, what exactly may it touch, and what proves its answer belongs
+    to this dispatch and no other?"
+  businessAnswer: >-
+    A packet is a bounded grant, not a prompt. It names one op, one brief, a
+    closed read set, a closed write set, one model, one budget and one lease
+    token. The lease is the spine of it: identity is bound at reservation time
+    and enforced at the database trigger level, so an agent physically cannot
+    record evidence for another job.
+  sources:
+    - scripts/kernel/cli.mjs
+    - scripts/agent/lib.mjs
+    - engine/db/ledger.mjs
+
+# ============================================================================
+# THE PACKET — the contract shape from the brief, annotated.
+# ============================================================================
+packet:
+  op: <id>                              # the operation id; resolves to the full durable identity
+  brief: modules/ops/ops/<id>.yaml      # business context the shell agent reads
+  params:                               # resolved tunables; present when the brief declares any
+    <name>: <value>                     # the brief's default unless the owner or the kernel set it
+  context:
+    workflow:                           # approved authority binding, not revision authority
+      id: <workflow-id>
+      goal_revision: <revision>
+      goal_identity: <identity>
+    owner_language: <lang>              # config.yaml language; every owner-facing string is written in it
+    owner_delegation: '{asks, until, excludes} | null'  # config.yaml delegation while active
+    product_locale: '{locale, source} | null'  # layout tree productLocale.default, else brand voice default; UI copy language
+    records: [...]                      # .starciwork records it touches (the read set)
+    selected_op: '{mode, contract, checks:{required,candidates}} | absent'  # immutable selected contract; absent on a planning preview
+    readRefs: '[{path,absolute,rootKind,root,sha256,why}] | absent'  # resolved READ snapshot; no current-Source reconstruction
+    owned_paths: [...]                  # what it may modify — boundary enforcement
+    owner_answers: '[{dispatchId, jobId, attempt, question, options[], chosen:{index,label}|null, picks?, note?, answeredBy, answeredAt, receipt}]'  # present when the retry lineage holds answered asks
+    specs_forced: '{at, by, kind} | absent'  # a test leg the config.yaml specs switches deferred, re-queued by starci kernel run-deferred-tests: it runs its whole brief
+  constraints:
+    model: <runtime-id>                 # allocated runtime, never chosen by the agent
+    budget: <reservation>               # path:* write fences + ai/global + ai/provider:<p> + machine:*
+    lease: <token>                      # the durable lease token — identity binding
+  returns:
+    verdict: pass|fail|blocked          # see modules/kernel/verdict-contract.yaml
+    evidence: [...paths]                # files the verdict stands on
+    suspicion: <string?>                # free-text mid-flight wrongness signal
+
+# ============================================================================
+# FIELD DEFINITIONS + ENFORCEMENT. One row per field: what it means, where the
+# kernel writes it, which mechanism refuses a violation.
+# ============================================================================
+fields:
+
+  op:
+    meaning: >-
+      The operation id is shorthand for the FULL durable identity:
+      {workflowId, opId, attempt, generation} (the api's durable identity —
+      the jobs row in engine/db/ledger.mjs).
+      Each attempt owns a distinct durable job row — jobId
+      `op-<op>-<token>` is minted at enqueue and a retry is a NEW row at
+      attempt+1, never a rewrite of the old one.
+    enforcedBy: >-
+      The jobs table row (engine/db/ledger.mjs) plus the
+      lease-identity-drift guarantee: state, op lease and durable
+      job must share the complete identity or the write refuses.
+
+  params:
+    meaning: >-
+      The op's tunables, resolved. The brief declares each name's type, default,
+      bounds and setter (modules/schemas/op.schema.yaml `params`); the approved
+      goal leg carries what the owner chose and `starci kernel enqueue --params` carries
+      what the kernel chose. The packet holds the merged result, so the agent
+      reads a value rather than inferring a number from the brief's prose.
+    enforcedBy: >-
+      scripts/kernel/dispatch-op.mjs resolveOpParams — the one resolver.
+      `starci kernel enqueue` runs it over the goal leg and the flag and refuses
+      `params-invalid` (modules/kernel/api.yaml enqueue) before a jobs row
+      exists; `starci kernel dispatch` re-runs it over the brief's defaults and lays the
+      row's stored overrides on top, so a value the api refused cannot reach a
+      packet and a default cannot drift from the brief.
+
+  brief:
+    meaning: >-
+      The op's authored contract: modules/ops/ops/<id>.yaml is the canonical
+      manifest (operator contract + business analysis + route: block); the
+      api renders it into the task text the agent receives
+      (scripts/kernel/cli.mjs buildPacket/buildPrompt; the rendered markdown
+      is stored in the contracts table, keyed by workflow/op/attempt — the
+      worker reads it back via `starci kernel op-contract --job <id>`; the row, not
+      the prompt text, is the dispatch authority).
+    enforcedBy: >-
+      The agent reads the brief; it does not renegotiate it. Reads/writes the
+      brief declares become the packet's context. A brief that cannot produce
+      every criterion assigned returns blocked with the exact gap
+      (modules/ops/ops/task.execute.yaml outcome requirement).
+
+  context.selected_op:
+    meaning: >-
+      The effective shared-expanded contract for exactly one concrete execution mode, with common
+      obligations retained by ID and sibling permissions excluded. Required named layout checks and mechanical proof owners
+      remain distinct from broad kind route candidates and semantic completion/proof obligations.
+      A planning preview may retain mode select; a launched attempt cannot. A filed attempt keeps the
+      snapshot it was admitted with and is never rebuilt from a current manifest or params.
+    enforcedBy: >-
+      scripts/lib/op-shared.mjs resolveOpContract is the single selector. scripts/kernel/dispatch-admission.mjs
+      selectDispatchContract validates the authored shape/defaults before effects and files selected_op
+      in the existing packet carried by contracts.context_json. The worker reads that filed contract.
+
+  context.readRefs:
+    meaning: >-
+      Canonical runtime Source, product Work and bound app files are identified separately by relative
+      path, absolute path, explicit root and sha256. These are the bytes the selected context actually
+      measured at admission. Instance/prose/new-record templates stay declared; concrete required
+      Source files and bounded expansions cannot disappear silently.
+    enforcedBy: >-
+      scripts/context/pack.mjs buildContext uses scripts/context/read-refs.mjs to resolve each selected
+      reference. scripts/kernel/dispatch-admission.mjs captureDispatchInputs refuses missing or
+      truncated required reads and failed input measurement before environment/provider effects.
+
+  context.records:
+    meaning: >-
+      The closed READ set: the .starciwork records (and resolved references)
+      this op may consult. In dispatch-planning terms these are the op's
+      `reads` — resolved references and binding inputPaths resolved through
+      the loaded Work tree by the api before launch. They are supplied by
+      `starci kernel enqueue --records`; an empty list is no authority to scan for a
+      convenient substitute. A consumer of a scope.define proposal must name
+      that exact predecessor scope record here.
+    enforcedBy: >-
+      Read sets matter at the file level: an op must never READ a path another
+      in-flight op is rewriting — the api's conflict check compares my reads
+      against their writes both directions. The one deliberate exception:
+      two provision.ask ops may share a feature's decision folder — each
+      writes a new slug of its own (the provision.ask exception).
+
+  context.product_locale:
+    meaning: >-
+      The language product UI copy is written in - every label, message and
+      sample datum a product user reads, in a drawing prompt, a message file
+      or a rendered screen. It is the Work tree's shell record - the layout
+      tree - productLocale.default (.starciwork/shell/index.yaml,
+      work/layout-tree@1), else the brand record's voice.locales default, with the source it was
+      read from; null when the tree has neither. It is not owner_language:
+      that is who reads the logs, this is who uses the product.
+    enforcedBy: >-
+      `productLocaleFor()` in scripts/kernel/product-locale.mjs resolves it
+      from the target repository's .starciwork when the packet is built
+      (scripts/kernel/cli.mjs buildPacket) and the prompt states it beside
+      owner_language. scripts/work/ui/shell-conformance.mjs refuses a
+      content prompt that does not state `Product locale: <default>`
+      (SHELL_LOCALE_DRIFT); modules/ops/_common.yaml carries the rule.
+
+  context.owner_answers:
+    meaning: >-
+      The owner questions this job's retry lineage ALREADY had answered: every
+      `ask` report filed by an earlier attempt of the chain payload.retry.retryOf
+      (or resumeOf) that enqueue writes (engine/admission.mjs deriveRetryLineage;
+      a cut ordinal chains only to its own ordinal) and that holds an
+      `ask-answered` event - by the owner, an active delegate, or config.yaml
+      asks.autoAcceptRecommended (answeredBy auto-recommended). One row per ask,
+      oldest first: the question text and option labels as filed, the chosen
+      option (0-based index and label, from the event, else the
+      starci/ask-answer@1 receipt), picks and note when the receipt has them,
+      who answered and when, and the receipt path. Absent when the lineage holds
+      no answered ask (every first attempt). The answer is binding input for
+      this attempt; the op applies it and records the decision with its
+      answeredBy source, and never asks it again.
+    enforcedBy: >-
+      scripts/machine/owner-answers.mjs ownerAnswersOf, read by `starci kernel dispatch`
+      into buildPacket; buildPrompt renders an `owner_answers:` block at the
+      top of the prompt saying each question is ANSWERED and must not be
+      re-asked. `starci kernel report` refuses an `ask` whose question repeats one of
+      them - the same text, or the same two or more options; handover.review
+      rounds are exempt - with ask-already-answered (modules/kernel/api.yaml report); the
+      one way past is a declared re-ask, question.reasks {dispatchId, reason},
+      for an answer that provably could not take effect, filed with a warning
+      and recorded on the report-filed event.
+
+  context.workflow:
+    meaning: >-
+      The immutable workflow id plus latest approved goal revision and stable
+      goal identity the job was dispatched against. This lets a consumer prove
+      that an explicitly bound proposal belongs to the same approved chain;
+      it grants no goal-revision authority.
+    enforcedBy: >-
+      scripts/kernel/cli.mjs freezes the latest approved goal revision and
+      identity into jobs.payload_json at enqueue, then combines that binding
+      with the job's workflow_id while building the durable contract packet.
+      A later goal revision never silently retargets an already queued job.
+      The op may compare bindings and report a mismatch, but never revise or
+      substitute them.
+
+  context.owned_paths:
+    meaning: >-
+      The closed WRITE set — the op's allowlist. Disjointness of sibling
+      allowlists is what makes fan-out legal at all
+      (modules/goal/legality.yaml splitRules; modules/schemas/goal-plan.yaml
+      makes disjoint path-prefix allowlists a schema constraint on
+      independent ops).
+    enforcedBy: >-
+      Four independent walls, so a slip is caught before enqueue, at plan
+      time, at report time and at effect time:
+      (0) PREFLIGHT — owned_paths must satisfy the target repo's layout/lint
+          contracts; contradictions -> incident, never dispatch (the
+          `preflight` section below);
+      (1) PLAN — the api's dispatch planning refuses launch when my writes
+          meet another in-flight write or read scope;
+      (2) REPORT — the api's validateOpReport rejects report.files outside the
+          allowlist ('file <f> is outside owned_paths';
+          modules/kernel/verdict-contract.yaml);
+      (3) EFFECT — the candidate seal covers only what the declared
+          scope covers; outside-allowlist / canonical-drift / baseline-touched
+          reasons keep the writer fence (the api's settle-time seal reasons).
+      And over time: a done record whose deps moved since baseline refuses
+      DEP_STALE — writing a path re-arms the re-verification debt of every
+      record that owns it (scripts/work/validate/check-work-deep.mjs DEP_STALE;
+      modules/goal/legality.yaml done-record-reverify).
+
+  constraints.model:
+    meaning: >-
+      The allocated runtime/model for this dispatch — the persisted output
+      of `starci kernel route --job <id>` (run BEFORE dispatch; it writes
+      {model, modelId, effort, routeChain} onto the job payload and a
+      'route-decided' event), never an agent choice and never an ad hoc
+      kernel pick. Selection rules live in modules/models/selection.yaml
+      (eligibility by risk/qualityFloor, probation gates, highKinds that may
+      never run on probation) over the pool cards in
+      modules/models/runtimes.yaml: eligibility first, budget orders the
+      eligible, cooling/capacity park. Dispatch launches what route wrote.
+    enforcedBy: >-
+      Eligibility is evaluated against the kind's ROLE
+      (modules/models/kinds.yaml role: resolved through
+      modules/models/runtimes.yaml roleOfKind;
+      scripts/agent/op-pick.mjs pickOpModel over the tier chain of
+      modules/models/tiers.yaml). A
+      model NAME is an
+      availability fact, never proof of capability
+      (modules/models/selection.yaml, modules/models/capabilities.yaml rule).
+
+  constraints.budget:
+    meaning: >-
+      The resource reservation the dispatch holds: the path:* write fences
+      (one capacity-1 lease per owned_path, the api's reserveOpLeases) —
+      assembled by the api's reserve. The workflow's concurrent-operation
+      ceiling is checked at preflight and again inside the same ledger transaction that leases the job, never a lease row
+      (engine/admission.mjs workflowOpSlots/admitOpSlot; engine/db/ledger.mjs reserveTwoPhase; api.yaml route.maxOps).
+      A concurrent max-ops refusal leaves the job queued with no lease, token or event write.
+    enforcedBy: >-
+      The api's admission takes the leases atomically with a TTL
+      (DISPATCH_LEASE_TTL_MS=30min default, --lease-ttl overrides;
+      scripts/kernel/cli.mjs); expiry is lazy — an expired row stops
+      counting against capacity at admission but a path:* row still fences
+      its write set until settle/reconcile deletes it — and an unproved
+      timed-out worker moves to effect_unknown and DELIBERATELY retains its
+      lease: uncertainty never becomes free capacity.
+
+  constraints.lease:
+    meaning: >-
+      The lease token is the packet's spine. The api's reserveOpLeases seeds
+      the path:* resources and reserveTwoPhase takes the lease atomically
+      (intent-v1 exact-binding, engine/db/schema/runtime.sql §6); the token is what
+      every later
+      fact must match. The agent's writes, its report and its settlement all
+      hang off {jobId, leaseToken} — the op physically cannot record evidence
+      for another job, because no lease row can exist unless it matches the
+      job's complete identity.
+    enforcedBy: >-
+      The leases_match_job BEFORE INSERT/UPDATE triggers RAISE(ABORT,
+      'lease-identity-drift') when a lease row does not match its job's
+      {workflow_id, op_id, attempt, generation, lease_token}
+      (engine/db/ledger.mjs / engine/db/schema/runtime.sql); the api wraps that as a
+      typed {ok:false, code:'lease-identity-drift'}. A reservation whose
+      durable status or resource
+      binding no longer matches exactly is status 'effect_unknown' — it stops the
+      launch, it is never guessed past (a lease field proven stale from the
+      ledger's own rows is cleared, never assumed).
+
+  returns:
+    meaning: "what the [Op] owes the kernel when it dies — the verdict contract"
+    enforcedBy: "modules/kernel/verdict-contract.yaml — accepted/rejected shapes, evidence byte checks, suspicion mapping"
+    timing: >-
+      Row first, file second, signal third: the op files its answer through
+      `starci kernel report --job <id> --report <file>` — the file is a
+      starci/op-report@1 JSON envelope and the reports row
+      (UNIQUE(workflow_id, dispatch_id)) is the durable verdict, the file is
+      the bound artifact, the Orca message only the wake-up
+      (verdict-contract.yaml envelope). The kernel then consumes the row
+      (`starci kernel consume-report`),
+      re-runs the checks (`starci kernel record-checks`) and settles. The op's terminal dies
+      when its verdict settles — `starci kernel settle` closes the worker terminal
+      (scripts/agent/lib.mjs) and releases the job's lease rows
+      (releaseTwoPhase, engine/db/ledger.mjs).
+
+# ============================================================================
+# PATH-LEGALITY PREFLIGHT — owned_paths are checked against the target repo's
+#    own layout/lint contracts BEFORE enqueue, not discovered at settle.
+# ============================================================================
+preflight:
+  rule: >-
+    owned_paths must satisfy the target repo's layout/lint contracts;
+    contradictions -> starci kernel incident, never dispatch.
+  detail: >-
+    Before `starci kernel enqueue`, the kernel checks each candidate owned_paths grant
+    against the target repo's declared layout and lint rules — the
+    applicability/ruleIds tables in modules/models/code-patterns.yaml and
+    the check surface under scripts/checks/ that enforces them
+    (gate.mjs, architecture/*). A grant that contradicts a layout
+    rule — e.g. `src/tests/**` claimed while the repo profile enforces
+    starci-be/unit-test-colocated — is `starci kernel incident --kind
+    path-illegality`, never a job row that dispatches and settles red.
+    Disjointness between sibling ops is a different wall (fields
+    .owned_paths above); this one is grant-vs-repo-legality. It is kernel
+    discipline: the api does not refuse an illegal path.
+  citation: "modules/models/code-patterns.yaml applicability/ruleIds; scripts/gates/gate.mjs; modules/kernel/api.yaml dispatch layoutPreflight"
+
+# ============================================================================
+# SPAWN MECHANICS — how a packet becomes a running agent on Orca.
+# ============================================================================
+  context.workflow_worktree:
+    meaning: >-
+      Where an isolated op works (scripts/kernel/workflow-worktree.mjs): the ONE worktree of its workflow, never a
+      worktree of its own. Orca creates it before the Kernel starts (ensureWorkflowWorktree: Orca's worktree create
+      call --name wf-<workflowId> --base-branch main --setup run, branch wf-<workflowId> as the registry records it, a
+      real npm ci at the app root, no node_modules junctions) and the Kernel starts in it with --worktree <its
+      path>; the runtime registers it in machine.sqlite worktrees as kind workflow, keyed by Orca's worktree id,
+      against the per-repository cap. `starci kernel dispatch --spawn` starts the op with
+      worker-start --worktree <that worktree> (opWorktreeArgs) and places owned paths and packet paths there. Ops
+      of the same side (be/ or fe/, from the owned paths) run serially; ops on different sides run in parallel; an
+      op owning both sides runs alone (canDispatchConcurrently). An explicit --worktree names the same registered
+      tree; requireWorkflowPlacement refuses a missing, unavailable or mismatched Git placement before spawn.
+      The immutable contract and attempt retain the actual path for settle. A non-Git ledger has no Git
+      checkpoint. Dev servers, UAT and drawing run against the live
+      checkout (main). A dry-run shows the planned paths (preview: true).
+    settle: >-
+      settle never lands an op into main (WFWT, scripts/kernel/workflow-checkpoint.mjs). In the registered workflow
+      worktree, once every acceptance refusal passed, a pass commits exactly the op's owned paths (leasesOf(...).own)
+      on the registered workflow branch as the workflow's checkpoint (checkpointOp, event
+      workflow-checkpoint), and the next op's gate measures against it (gateBaseOf); a fail or blocked verdict keeps
+      the op's owned changes and foreign changes as preserved/<workflowId>/<op> and resets them to the last checkpoint (preserveAndReset,
+      event workflow-op-preserved). Only the runtime commits on the workflow branch: the op owes no commit, the branch
+      head must be the last checkpoint, and a commit checkpointOp did not make refuses a pass (workflow-foreign-commit;
+      a failed op's foreign commits are folded into its preserved ref). The op's gate JSON must measure against
+      gateBaseOf (op-gate-base-mismatch). Other refusals: workflow-worktree-missing, workflow-branch-mismatch,
+      workflow-checkpoint-failed, workflow-snapshot-failed, workflow-preserve-failed, workflow-reset-failed.
+      The acceptance order, workflow lock, placement validation and attempt-bound recovery receipts have one
+      owner: modules/cli/commands/kernel/settle.yaml checkpoint. main
+      moves only at starci kernel finish (finishWorkflow: the full gate, the merge guard, review.verify of the exact head that
+      lands, the rebase - a moved head forces a re-review, workflow-finish-verify-stale - main fast-forwarded and
+      pushed, then the worktree marked release-pending; part A's GC removes it and the workflow branch; event
+      workflow-landed).
+    refusals:
+      product-worktree-unavailable: the workflow's worktree is not registered or not reachable (reason in detail); the job stays queued
+      worktree-cap: the product repository holds its cap of live workflow worktrees; the workflow waits (no attempt spent)
+
+spawnMechanics:
+  caller: >-
+    The kernel agent invokes `starci kernel dispatch --job
+    <job_id> --spawn` and reads the JSON receipt — it never runs an orca
+    terminal-* command itself (modules/kernel/api.yaml conventions.neverDoes;
+    its one look at a running op is driver-loop.yaml
+    boundary.opTerminalObservation). Without --spawn the same call is a dry-run: the packet prints, nothing is
+    reserved and nothing launches.
+  sequence: >-
+    Inside the api call: reserve (durable lease, intent-v1) -> create or reuse
+    the workflow Orca Run whose coordinator is the Kernel's own terminal
+    -> launch exactly one agent with its operation Task, the one way
+    (modules/kernel/start-workflow.yaml; scripts/agent/lib.mjs
+    spawnAgent): worker-start --spec <packet> --agent <provider> [--model --effort]
+    on the op's worktree, which creates the Task and owns its injection; the api
+    reads the start receipt and worker-show for terminal/model attestation and never dispatches the Task a
+    second time. It persists starci/agent-hierarchy@1 plus Run/Task/Dispatch and
+    terminal metadata before job -> running. Failure = dispatch-rejected, job
+    not running, slot released, and the worker the attempt created stopped and
+    released inside the same rejection, which records terminalClosed
+    (modules/kernel/start-workflow.yaml orcaTree). Orca composes the agent
+    command with the owner's per-agent default args; no caller builds one.
+    The kernel's own launch is the same worker-start (scripts/kernel/start-workflow.mjs
+    via startAgent: entry Run -> Kernel Task -> worker-start -> attest).
+  naming: >-
+    Orca titles are the workers' address book and are written at creation, not
+    left to the provider's own summary; a terminal nobody reads is closed
+    (scripts/agent/lib.mjs terminal close). The exact titles and the tree they
+    render are one rule, stated once in modules/kernel/start-workflow.yaml
+    orcaTree: one live kernel terminal per workflow, one Run that survives
+    kernel restarts, every operation Task created in it with the CURRENT
+    kernel terminal as `from`, and nothing live left behind by
+    a settle, a reject or a finish. scripts/checks/check-orca-tree.mjs is the
+    executable half.
+  launchWindow: >-
+    A launch that never acquires is bounded, not awaited forever — the agent
+    card's readiness.timeoutMs caps the readiness/attestation read
+    (modules/models/agents/<agent>.yaml; scripts/agent/lib.mjs), and the
+    lease TTL bounds how long a crashed worker's fence holds its successors
+    back — an expired row stops counting as a live holder and becomes a
+    recovery signal for reconcile/settle
+    (scripts/kernel/cli.mjs DISPATCH_LEASE_TTL_MS).
+  oneOpOneAgent: >-
+    One operation = one agent = one Dispatch = one terminal. An operation is
+    never split among several agents, and a failed agent is never silently
+    continued — the attempt is settled and a NEW dispatch carries a fresh
+    attempt number (driver-loop.yaml failureHandling.respawnPolicy).
+  hierarchy: >-
+    `starci kernel hierarchy --workflow <id> --json` is the
+    canonical workflow -> Kernel -> Op projection. Orca tab/pane layout is a
+    rendering surface, not the relationship source.
+  spawnLines: >-
+    The agent card injects the permission-gate answer into the
+    spawn line — Devin `--permission-mode dangerous`. Both Kernel and Op seats are unattended;
+    their distinct authority comes from the Kernel packet versus the exact
+    operation contract + owned-path lease, not from a per-command UI menu.
+    Verify the spawn actually landed with
+    terminal-read --screen — a long typed command can leave Enter
+    un-landed, which is exactly the launch-window case above.
+
+# ============================================================================
+# NON-GOALS — what a packet never carries.
+# ============================================================================
+nonGoals:
+  - "no goal-identity authority — the op cannot revise the goal; suspicion travels back as a report field (verdict-contract.yaml)"
+  - "no other op's write scope — dispatch planning proved disjointness before this packet existed; an op that needs a foreign path reports blocker shared-change"
+  - "no credential values — custody asks go through provision.ask and the owner's Orca GUI; an agent never sees a secret (modules/ops/ops/provision.ask.yaml)"
+  - "no model/agent override — the agent runs what constraints.model names; host calls come only from the loaded Orca contracts, never inferred (CONTEXT.md provider rule)"
+  - "no second dispatch of the same op — one lease, one agent, one verdict (oneOpOneAgent above)"

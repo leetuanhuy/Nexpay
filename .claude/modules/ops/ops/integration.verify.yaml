@@ -1,0 +1,399 @@
+schema: starci/op@1
+id: integration.verify
+goal:
+  en: >-
+    Runs only on explicit request or before release (owner ruling 2026-09-29, live verification belongs with e2e/UAT and never
+    in a default chain; a leg the goal did not ask for settles deferred). Prove one declared external integration against the
+    real provider, in its sandbox account, with the credential the owner supplies, read at the moment of use from the selected
+    backend Stack environment's encrypted identity custody, and keep the live exchange as evidence.
+params:
+  gateRounds:
+    type: integer
+    default: 5
+    min: 1
+    max: 10
+    setBy: owner
+    doc:
+      en: "Rounds of FIX then gate.mjs the op loop runs before it stops: a gate still red after the last round is reported blocked with the exact findings of that round (knowledge/op-gate.yaml)."
+      vi: "Số vòng SỬA rồi chạy lại gate.mjs của vòng lặp op trước khi dừng: hết vòng cuối mà cổng vẫn đỏ thì báo blocked kèm đúng các lỗi của vòng đó (knowledge/op-gate.yaml)."
+nodeKinds: [integration]
+completionProfile: integration
+sideEffects:
+  - integration and contract spec authoring inside the selected allowlist (be/src/tests/integration/, be/src/tests/contract/)
+  - one live exchange with the declared provider's sandbox account, inside the scenario's declared
+    scope
+  - scenario-owned data created in that sandbox account and disposed by the same run
+  - reading the owner-provided credential through sops from the declared identity custody
+    (.starcistacks/<env>/secrets/<slug>.enc, app-relative), inside the checking process only,
+    never writing its value
+graphPolicy:
+  mode: read-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+reads:
+  - id: application-stacks
+    path: knowledge/application-stacks.yaml + docs/application-stacks.md +
+      docs/application-stacks.md + modules/schemas/application-stacks.schema.yaml
+    purpose:
+      en: Resolve the selected backend Stack environment and its identity custody for every credential
+        read. When the selected scope touches application deployment, bootstrap or recovery,
+        load the whole-application dev/VPS contract. Reconcile component ownership, encrypted
+        credential custody, lifecycle commands and existing consumers. Run the `starci-stacks-check`
+        when validating a materialized stack; bind its exact inputs and limitations. Acceptance
+        additionally requires the selected real startup, persistence, recovery and application
+        checks. This conditional read grants no extra deployment or source scope.
+  - id: official-docs
+    path: current provider official documentation + owning integration declaration preparation
+    purpose:
+      en: Read the official sources before deciding authentication, account, scopes, lifecycle,
+        configuration or owner prerequisites. Missing research returns to the owning operation
+        before credential input. Research completeness, executable setup, owner input and successful
+        live verification are distinct states.
+  - id: target
+    path: N/index.yaml
+    purpose:
+      en: "Read the existing selected integration node: which declared integration it proves, its
+        assertions, its declared refs and dependencies and its validator freshness. This consumer op
+        requires its target node to exist. An absent target is a scope/graph gap; report it and
+        propose a separately selected scope op."
+  - id: integration
+    path: .starciwork/features/<feature>/**/index.yaml extensions.work3.integrations[] +
+      .starciwork/features/<feature>/integration/**/index.yaml
+    purpose:
+      en: "Read the declaration the business or architecture record made: the integration id, the
+        provider, the sandbox account to use, and the credential entry - its exact variable name,
+        that the owner provides it, and the custody identity:<slug> that holds it. This declaration,
+        not the source, says which provider is under proof and which variable carries the key."
+  - id: architecture
+    path: .starciwork/features/<feature>/{sds,contract,integration}/**/index.yaml
+    purpose:
+      en: Where the design is silent about the observable effect, report the gap instead of inventing an
+        expectation.
+  - id: repo
+    path: <app>/<bound-paths>
+    purpose:
+      en: Resolve the repository resource, actual checkout/root/HEAD and dirty state, and read the
+        delivered client of this integration - its entry point, its configuration and the variable
+        it actually reads the credential from. The proof binds the exact tested tree, so a claim
+        without a resolved repository and a named client is not a proof.
+  - id: credential
+    path: .starciwork/_resources/identities/<slug>/resource.yaml + .starcistacks/<env>/secrets/<slug>.enc (the one sealed location, app-relative; the record's custody.sealed names it), read with the runtime's sops-exec-env helper (format stated with --input-type) at the moment of use
+    purpose:
+      en: Resolve the identity alias, variable names and selected environment from the backend Stack
+        declaration and readable resource metadata. The encrypted value authenticates the live call
+        and is written nowhere - not into Work, a record, a report, a log or a chat.
+  - id: effects
+    path: current request authorization + declared sandbox account allowed effects
+    purpose:
+      en: Bind the live exchange and the scenario-owned data it creates to the selected assertions and to
+        the sandbox account the declaration names. A production account, a real customer's channel
+        or an unbounded retry is outside this op; discover an unknown external outcome by read-only
+        correlation before repeating an attempt.
+  - id: profile
+    path: modules/models/registry.yaml + selected runtime execution profile + actual host tools/model
+    purpose:
+      en: Resolve this operator's request-bound external-agent chain from the selected StarCi skill and
+        active profiles, and the actual host network and tool availability the live call needs.
+        Capabilities are the intersection of actual tools, selected profile policy, op permissions
+        and existing task authority.
+  - id: workflow
+    path: shared
+    purpose:
+      en: shared
+  - id: op-loop
+    path: shared
+    purpose:
+      en: shared
+      vi: "Dữ liệu của vòng lặp op: bảng loại tệp sang tệp pattern, app ví dụ cho từng phía, và schema của cổng và bản tóm tắt đọc mà read-digest.mjs và gate.mjs dùng."
+  - id: world
+    path: <app>/be/src/tests/world/** + <app>/be/src/tests/{integration,contract}/** + <app>/be/jest.config.js
+    purpose:
+      en: "The app's test world: be/src/tests/world/test-world.config.ts (export const { useTestWorld, useSandbox } = defineTestWorld({ stack: '.starcistacks/<env>', stacks, fakes, apps, migrate, identity, modules }) - the stack declaration at the app root names the services that run REAL, and third-party SaaS alone is faked at the network edge), use-test-world.ts (the spec entry), global-setup.ts and global-teardown.ts, the repo-specific fakes under fakes/<provider>/, be/jest.config.js (@starci/jest-preset starciJestConfig(): the world projects run on the preset's world runner, up to min(--maxWorkers, slots) files at once, each in a fresh process on its own data slot) and packages/test-world/README.md (the frozen spec-facing API and its hard rule). Then the existing integration and contract specs of the capability: the modules each integration spec composes, the provider fakes it drives and the sandbox clients each contract spec builds."
+      vi: "Test world của app: be/src/tests/world/test-world.config.ts (export const { useTestWorld, useSandbox } = defineTestWorld({ stack: '.starcistacks/<env>', stacks, fakes, apps, migrate, identity, modules }) - khai báo stack ở gốc app nêu các dịch vụ chạy THẬT, chỉ SaaS bên thứ ba được giả ở rìa mạng), use-test-world.ts (lối vào của spec), global-setup.ts và global-teardown.ts, các fake riêng của repo dưới fakes/<provider>/, be/jest.config.js (@starci/jest-preset starciJestConfig(): các dự án world chạy trên world runner của preset, tối đa min(--maxWorkers, số slot) tệp cùng lúc, mỗi tệp trong một tiến trình mới trên slot dữ liệu riêng) và packages/test-world/README.md (API cố định cho spec và luật cứng của nó). Sau đó là các spec integration và contract hiện có của capability: các module mỗi spec integration ghép, các fake nhà cung cấp nó điều khiển và các client sandbox mỗi spec contract dựng."
+writes:
+  - id: node
+    path: N/index.yaml
+    fields: [state, blocker, completion.inputDigest, completion.evidence, completion.codeRefs]
+    content:
+      en: Read the existing selected scope, expected assertions and .starciwork graph unchanged. Write
+        only state/blocker/completion here; the exchange itself, the observed responses and the
+        findings belong to the evidence result. Missing refs/dependencies/assertions require a
+        reported gap or a separately selected scope update; never add or remove them to obtain pass.
+  - id: evidence
+    path: evidence/**
+    fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, proof, extensions]
+    artifacts: [manifest.yaml, scenario.yaml, exchange.json, readback.json, result.md]
+    content:
+      en: "Keep the original assertion IDs and map each one to the exchange it performed: the request the
+        product sent to the provider, the expected observable effect, and the response the provider
+        actually returned, read back through the provider's own surface where one exists. Record the
+        provider, the sandbox account identity as observed rather than as configured, the credential
+        variable name with no value, the exact commands, cwd, tested tree/commit, exit codes and
+        sanitized output, including every attempt when something was retried. The manifest carries
+        `proof: {boundary: live, fakes: []}`; a run that stood in for the provider is not this proof
+        and is recorded as a spec defect. Every credential, token, personal identifier and provider
+        secret is redacted before the assets are hashed. This op runs only its declared live exchange and
+        the specs its changed files affect, never a whole repository suite or e2e (owner 2026-09-29)."
+  - id: read-digest
+    path: shared
+    content:
+      en: shared
+      vi: "Bản tóm tắt ĐỌC: các tệp sẽ sửa, bản đồ slot của chúng từ starci app explain, và mọi tệp pattern và ví dụ đã đọc kèm sha256."
+  - id: gate-proof
+    path: shared
+    content:
+      en: shared
+      vi: "Báo cáo cổng của vòng cuối: exit, commit gốc, head, các tệp đã đổi, số lỗi mới và lỗi có sẵn, và từng lỗi mới."
+  - id: source
+    path: <app>/<write-ceiling>
+    content:
+      en: "The integration spec (be/src/tests/integration/<feature>/<name>.integration-spec.ts) and the contract spec (be/src/tests/contract/<provider>/<name>.contract-spec.ts) of the declared integration, with their fixtures inside the allowlist. Product code, the delivered client, configuration and declared expectations stay untouched."
+      vi: "Spec integration (be/src/tests/integration/<feature>/<name>.integration-spec.ts) và spec contract (be/src/tests/contract/<provider>/<name>.contract-spec.ts) của tích hợp đã khai báo, cùng fixture của chúng trong phạm vi cho phép. Mã sản phẩm, client đã giao, cấu hình và kỳ vọng đã khai báo giữ nguyên."
+  - id: test-world-integration
+    path: STARCI_JOB_SCRATCH/test-world-integration.json
+    schema: starci/test-world-run@1
+    content:
+      en: "The test-world run summary of the integration project (scripts/gates/test-world-run.mjs): the harness, every selected spec with its world form, outage calls and forbidden infrastructure, and the run's exit, totals, failures and skips."
+      vi: "Tóm tắt lần chạy test-world của dự án integration (scripts/gates/test-world-run.mjs): bộ khung, từng spec đã chọn với dạng world, số lần gọi outage và hạ tầng bị cấm, cùng exit, tổng số, lỗi và số test bị bỏ qua của lần chạy."
+  - id: test-world-contract
+    path: STARCI_JOB_SCRATCH/test-world-contract.json
+    schema: starci/test-world-run@1
+    content:
+      en: "The test-world run summary of the contract project (scripts/gates/test-world-run.mjs): the harness, every selected spec with its world form, outage calls and forbidden infrastructure, and the run's exit, totals, failures and skips."
+      vi: "Tóm tắt lần chạy test-world của dự án contract (scripts/gates/test-world-run.mjs): bộ khung, từng spec đã chọn với dạng world, số lần gọi outage và hạ tầng bị cấm, cùng exit, tổng số, lỗi và số test bị bỏ qua của lần chạy."
+steps:
+  - reads: [op-loop]
+    writes: [read-digest]
+    action:
+      en: "READ before coding (op loop, knowledge/op-gate.yaml): run starci gate read --root <app> --touch <every file the slice will create or change> --out $STARCI_JOB_SCRATCH/read-digest.json and read exactly what it lists, nothing wider - the knowledge/patterns/{be|fe}/*.yaml of each touched file kind, the matching example files of examples/<app>/{fe,be} and the slot map starci app explain prints per path (slot, tier, allowed imports, rules). Code only after this read; a file the slice comes to touch later is added with --touch and read the same way."
+      vi: "ĐỌC trước khi viết code (vòng lặp op, knowledge/op-gate.yaml): chạy starci gate read --root <app> --touch <mọi tệp slice sẽ tạo hoặc sửa> --out $STARCI_JOB_SCRATCH/read-digest.json và đọc đúng những gì nó liệt kê, không rộng hơn - các tệp knowledge/patterns/{be|fe}/*.yaml của từng loại tệp sẽ sửa, các tệp ví dụ cùng slot trong examples/<app>/{fe,be} và bản đồ slot mà starci app explain in cho từng đường dẫn (slot, tầng, import được phép, luật). Chỉ viết code sau bước đọc này; tệp phát sinh về sau được thêm bằng --touch và đọc theo cùng cách."
+  - reads:
+      - official-docs
+      - integration
+    writes: []
+    action:
+      en: Validate the declaration's documentation-backed preparation before any credential request or
+        live effect. Read the primary sources and check each interpretation independently; a URL
+        alone is not research evidence. Complete authorized machine-owned setup before asking for
+        owner-only actions; setup that depends on those actions follows them in the recorded order.
+        Report inaccessible docs as a research failure and a missing preparation as an owning-record
+        gap, never as a missing secret. Keep actual read dates and supported observations in the
+        owning preparation; callbacks and webhooks are assessed for this intended use, never assumed
+        universal. A declaration that names no credential variable, or no custody, is a reported
+        gap, never a guessed name and never a key read from somewhere else.
+  - reads:
+      - target
+      - integration
+      - architecture
+      - profile
+    writes: [evidence]
+    action:
+      en: Freeze the assertion set before any effect and restate every assertion as one exchange with the
+        declared provider plus the observable effect it must show - the accepted response and its
+        identity, the declared refusal, the invalid-input case and the applicable retry or
+        idempotency case. One assertion is one exchange; no assertion is merged, dropped or
+        re-worded, and no expectation is inferred from how the client currently behaves. Record the
+        provider, the sandbox account and the exact credential variable name the declaration gives.
+        Never create the node, never invent its assertions, and never re-word one so a scenario that
+        already ran can be called a pass. Read the declared contract with the external system - the
+        request the product sends, the response and error identities it expects, the retry,
+        idempotency and timeout boundaries, and what the product must do when the provider refuses.
+        These define, per assertion, the exchange the scenario performs and the effect the provider
+        must show.
+  - reads:
+      - credential
+      - effects
+      - integration
+    writes: [evidence]
+    action:
+      en: "Run everything that needs the credential inside `node <Source>/.claude/scripts/gates/custody-exec.mjs
+        --input-type yaml .starcistacks/<env>/secrets/<slug>.enc '<command>'` from the app root (the sealed file is
+        `<slug>.enc` and the helper states its format to sops; plain `sops exec-env` cannot read it),
+        so the value is
+        resolved from exactly that variable in exactly that process and nowhere else. If sops is not
+        installed, the key for the selected Stack environment is unavailable, or that custody holds
+        no such variable, stop here and report `blocked` with reason `environment` naming the
+        environment, slug and variable,
+        so the owner can provide it: do not substitute a second variable, do not export it into the
+        shell or an .env file, do not read a key out of the repository, do not generate one, and do
+        not continue with the provider replaced by a stand-in. Confirm the resolved account is the
+        declared sandbox one by observing the provider's own answer rather than by trusting a
+        hostname, and confirm the effects this run is authorized to cause. Resolve the
+        owner-provided credential by the exact variable name the declaration gives, out of the
+        custody the declaration names, and nothing else: run the check inside `node <Source>/.claude/scripts/gates/custody-exec.mjs <that
+        file> '<check>'` so the value exists only in that one process. It is never invented, never
+        defaulted, never read from a second variable that looks similar, never exported into a shell
+        or an .env file and never taken from a checked-in file. No sops, no key for this tree, no
+        such custody or no such variable in it is reported `blocked` with reason `environment`
+        naming the environment, slug and that exact variable, which is the owner's question; it is never a reason
+        to fake the provider, skip the assertion or report a pass."
+  - reads: [repo, architecture, integration, world]
+    writes: [source, evidence]
+    action:
+      en: "Write the two layers of the declared integration, following the test layers of knowledge/patterns/be/test.yaml. The INTEGRATION spec (be/src/tests/integration/<feature>/<name>.integration-spec.ts) composes the capability with const world = useTestWorld({ modules: [...] }) - our own stack real, the provider faked at the network edge by the declaration's fake (world.fake.<provider>) - and proves the product's side of the contract: the request it sends (world.fake.<provider>.requests()), the refusal, timeout and bad-signature paths through failNext, the retry and idempotency boundaries, and a failure of our own stack through world.infra.<svc>.cut() then restore() or during(fn). The CONTRACT spec (be/src/tests/contract/<provider>/<name>.contract-spec.ts) builds the delivered client with useSandbox({ provider, keys, module, client }) and drives it against the provider's real sandbox, so what is proven is the product's own path to the provider; no mock, stub, fake, spy, recorded cassette or in-process shortcut stands in for the provider in the contract spec. Create only the preconditions the exchange needs, inside the sandbox account; no docker, DataSource, process.env or sleep in either spec."
+      vi: "Viết hai tầng của tích hợp đã khai báo, theo các tầng test của knowledge/patterns/be/test.yaml. Spec INTEGRATION (be/src/tests/integration/<feature>/<name>.integration-spec.ts) ghép capability bằng const world = useTestWorld({ modules: [...] }) - stack của chính ta chạy thật, nhà cung cấp được giả ở rìa mạng bằng fake của khai báo (world.fake.<provider>) - và chứng minh phía sản phẩm của hợp đồng: yêu cầu nó gửi (world.fake.<provider>.requests()), các đường từ chối, quá hạn và sai chữ ký qua failNext, ranh giới thử lại và idempotency, và lỗi của stack của chính ta qua world.infra.<svc>.cut() rồi restore() hoặc during(fn). Spec CONTRACT (be/src/tests/contract/<provider>/<name>.contract-spec.ts) dựng client đã giao bằng useSandbox({ provider, keys, module, client }) và chạy nó với sandbox thật của nhà cung cấp, để thứ được chứng minh là đường riêng của sản phẩm tới nhà cung cấp; không mock, stub, fake, spy, băng ghi hay đường tắt trong tiến trình nào thay cho nhà cung cấp trong spec contract. Chỉ tạo các điều kiện trước mà lần trao đổi cần, trong tài khoản sandbox; không docker, DataSource, process.env hay sleep trong cả hai spec."
+  - reads: [effects, repo, credential, world]
+    writes: [evidence, test-world-integration, test-world-contract]
+    action:
+      en: "Run both layers through the runtime's test-world runner and keep what happened. The integration layer: starci gate test-world --root <app> --project integration [--tests <the capability's spec pattern>] --out $STARCI_JOB_SCRATCH/test-world-integration.json. The live layer, inside the credential process of the sops step: node <Source>/.claude/scripts/gates/custody-exec.mjs --input-type yaml .starcistacks/<env>/secrets/<slug>.enc 'node <Source>/.claude/scripts/gates/test-world-run.mjs --root . --project contract --tests <the provider spec pattern> --out $STARCI_JOB_SCRATCH/test-world-contract.json'. Keep the request as sent with every secret redacted, the response as received with its status and error identity, timings, exit codes and every attempt. Then read the effect back through the provider's own surface where one exists, so a send the provider accepted but never delivered is visible. A contract spec that failed for missing sandbox keys is no live proof, and a scenario that stays green with the credential removed is a defect of the scenario, not a pass."
+      vi: "Chạy cả hai tầng qua bộ chạy test-world của runtime và giữ lại những gì đã xảy ra. Tầng integration: starci gate test-world --root <app> --project integration [--tests <mẫu spec của capability>] --out $STARCI_JOB_SCRATCH/test-world-integration.json. Tầng live, bên trong tiến trình giữ credential của bước sops: node <Source>/.claude/scripts/gates/custody-exec.mjs --input-type yaml .starcistacks/<env>/secrets/<slug>.enc 'node <Source>/.claude/scripts/gates/test-world-run.mjs --root . --project contract --tests <mẫu spec của nhà cung cấp> --out $STARCI_JOB_SCRATCH/test-world-contract.json'. Giữ yêu cầu như đã gửi với mọi bí mật bị che, phản hồi như đã nhận kèm status và danh tính lỗi, thời gian, exit code và mọi lần thử. Sau đó đọc lại hiệu ứng qua bề mặt riêng của nhà cung cấp khi có, để một lần gửi được nhận mà không bao giờ tới nơi vẫn hiện ra. Spec contract tự bỏ qua (không có khóa sandbox) không phải chứng minh live, và kịch bản vẫn xanh khi bỏ credential là lỗi của kịch bản, không phải đạt."
+  - reads:
+      - effects
+      - integration
+      - target
+    writes: [evidence]
+    action:
+      en: Dispose the scenario-owned data this run created in the sandbox account and confirm it is gone,
+        and confirm no authorized external effect is left open. A leftover remote resource is
+        recorded with its exact identity and a resumable disposal command; unresolved effects cannot
+        be presented as a clean run. Nothing that could carry the credential value leaves this step.
+  - reads:
+      - target
+      - repo
+      - workflow
+      - integration
+    writes: [node, evidence]
+    action:
+      en: "Report done exactly once, and only with a live green run - every assertion covered by an
+        exchange that actually reached the declared provider, with the manifest's `proof.boundary`
+        set to `live` and `proof.fakes` empty, bound to the exact tested tree. A refused or wrong
+        response is failed, naming the assertion and what the provider returned; a missing
+        credential is blocked with reason `environment` and the exact variable name; an unreachable
+        provider is blocked with reason `environment` and the observed failure. Never report done on
+        an unrun, skipped or faked exchange, and never claim a proof from an earlier run. Keep the
+        repair of any defect found here as a separate operation, and stop; never self-advance. For
+        workflow execution submit the exact response to the kernel gate. If the declared live check
+        explicitly identifies an invalid or expired credential, report blocked/environment with
+        --credential-request-file naming a JSON file containing exactly reason (invalid or expired),
+        variables (the declared names), and check (the declared failing check name). Keep its
+        nonzero exit and safe observed evidence in checks. Include no value, custody path or
+        baseline: the kernel binds replacement to the tested custody version and owns the input
+        form. Generic provider errors, scope/configuration defects and outages do not authorize
+        credential replacement."
+  - reads: [op-loop]
+    writes: [gate-proof]
+    action:
+      en: "FORCE THE CHECKS after coding: run starci gate run --root <app> --changed <the files the slice changed> [--tests <the slice spec pattern>] --out $STARCI_JOB_SCRATCH/gate.json. FIX what it reports and run it again, at most params.gateRounds rounds: exit 0 is green; exit 1 lists the new findings (lint per file and rule, tsc per message, failing specs - a finding the base already has never counts); exit 2 means a tool could not run and is never green. Still red after the last round: report blocked with the exact findings of that gate.json. Never report done while the gate is red or could not run. REPORT with gate.json and read-digest.json attached."
+      vi: "ÉP CHẠY KIỂM TRA sau khi viết code: chạy starci gate run --root <app> --changed <các tệp slice đã đổi> [--tests <mẫu spec của slice>] --out $STARCI_JOB_SCRATCH/gate.json. SỬA những gì nó báo rồi chạy lại, tối đa params.gateRounds vòng: exit 0 là xanh; exit 1 liệt kê lỗi mới (lint theo tệp và luật, tsc theo thông điệp, spec thất bại - lỗi đã có trên commit gốc không bao giờ bị tính); exit 2 là một công cụ không chạy được và không bao giờ là xanh. Hết vòng cuối mà vẫn đỏ: báo blocked kèm đúng các lỗi trong gate.json đó. Không bao giờ báo done khi cổng đỏ hoặc không chạy được. BÁO CÁO kèm gate.json và read-digest.json."
+proofs:
+  - id: binding
+    requirement:
+      en: "`starci runtime validate` ran, and `starci runtime validate --strict` ran on every record directory it
+        writes; every cited ID and path exists or is explicitly proposed, the input
+        bindings are current, and an honest not-run or fail cannot earn done."
+  - id: declaration
+    requirement:
+      en: The integration under proof is the one a business or architecture record declared, with its
+        provider, its sandbox account and its credential variable named in that declaration. An
+        integration the tree does not declare is not proven here and is reported as a gap.
+  - id: live
+    requirement:
+      en: "Every assertion was proven by an exchange that reached the declared provider itself: the contract spec drove the delivered client through useSandbox against the provider's sandbox, with no mock, stub, fake, spy or recorded response standing in for it. The manifest records proof.boundary live with no fakes; the integration layer's edge fake proves the product's handling and never stands in for this live proof."
+      vi: "Mọi khẳng định đã được chứng minh bằng một lần trao đổi tới chính nhà cung cấp đã khai báo: spec contract chạy client đã giao qua useSandbox với sandbox của nhà cung cấp, không mock, stub, fake, spy hay phản hồi ghi sẵn nào thay thế. Manifest ghi proof.boundary live không có fake; fake ở rìa của tầng integration chứng minh cách sản phẩm xử lý và không bao giờ thay cho chứng minh live này."
+  - id: credential
+    requirement:
+      en: The credential came from the exact variable the declaration names, out of the identity custody
+        it names, read through sops at the moment of use and from nowhere else; it was never
+        invented, defaulted, substituted, exported into a shell or an .env file, or silently
+        skipped, and its value appears in no record, report, asset, log or message. A custody that
+        cannot give it is blocked with the environment, slug and that variable named.
+  - id: readback
+    requirement:
+      en: The observed effect was read back through the provider's own surface where one exists, so an
+        accepted request that produced no effect is visible. Every attempt is retained with its
+        request redacted and its response as received.
+  - id: cleanup
+    requirement:
+      en: The scenario-owned data created in the sandbox account is disposed and verified absent, no
+        production or shared account was touched, and any remaining remote resource is recorded with
+        its identity and a resumable disposal command.
+  - id: op-gate
+    requirement:
+      en: "starci kernel settle re-reads the attached gate.json (exit 0 over the slice's changed files) and read-digest.json (a pattern file named for every touched file kind) and records the runtime check op-gate; a done without them, with a tool that could not run or with a new finding is refused, and the Kernel re-runs the same gate on the branch at landing."
+      vi: "starci kernel settle tự đọc lại gate.json đính kèm (exit 0 trên các tệp slice đã đổi) và read-digest.json (có tệp pattern cho mọi loại tệp đã sửa) rồi ghi check op-gate; done thiếu chúng, có công cụ không chạy được hoặc có lỗi mới đều bị từ chối, và Kernel chạy lại đúng cổng đó trên nhánh khi land."
+  - id: test-world
+    requirement:
+      en: "starci kernel settle re-reads the attached test-world run summary (runtime check op-proof, proof test-world, project integration and contract), every attached summary judged: a done without it (op-test-world-proof-missing), with a hand-rolled world - no preset world runner, no defineTestWorld declaration, a spec outside the layer's form, docker, testcontainers, a DataSource, process.env or a sleep in a spec (op-test-world-hand-rolled) - or with a run that is not green, ran no test or skipped one (op-test-world-run-red) is refused."
+      vi: "starci kernel settle tự đọc lại tóm tắt lần chạy test-world đính kèm (check op-proof, proof test-world, dự án integration and contract), mọi tóm tắt đính kèm đều được chấm: done thiếu nó (op-test-world-proof-missing), có world tự dựng - không có world runner của preset, không có khai báo defineTestWorld, spec sai dạng của tầng, docker, testcontainers, DataSource, process.env hoặc sleep trong spec (op-test-world-hand-rolled) - hoặc lần chạy không xanh, không chạy test nào hay bỏ qua test (op-test-world-run-red) đều bị từ chối."
+    check: scripts/kernel/gate-settle.mjs
+judge:
+  - by: machine
+    measures: [declared-checks, op-gate, op-proof:test-world, acceptance-trace]
+    proofs: [live, readback, test-world, op-gate]
+    why: "the exchange reached the provider's own sandbox and was read back through the provider's surface, and settle re-runs the test-world project natively; the contract specs it runs are written by this op, so they count as proof only as they trace to acceptance records it did not write (acceptance-trace, report mode until the first live run)"
+blockers:
+  - code: PRODUCT_DEFECT_OWNER
+    condition:
+      en: "A red result that is the product's fault is filed failed with failureClass product and a rootCause
+        naming its owner (node: the Work record or op whose output is wrong; op: the build op that repairs
+        it; files: the paths it touches; claim, evidence, counterCheck, expectedFix, recheck). The kernel
+        routes a repair to that owner instead of re-running this op. A checker that could not run is
+        failureClass tool; a stack that was not up is blocked with kind environment."
+  - code: INTEGRATION_UNDECLARED
+    condition:
+      en: No business or architecture record declares this integration, or its declaration names no
+        provider, no sandbox account, no credential variable or no credential custody, so what to
+        call and what to authenticate with cannot be stated. Report the gap; never infer the
+        provider, the variable or the custody from source.
+  - code: CREDENTIAL_MISSING
+    condition:
+      en: "The declared identity custody holds no value under the exact variable the declaration names.
+        After official research and executable setup, report blocked with reason environment, the
+        selected Stack environment, slug and that variable name so the kernel presents its workflow-owned form in Orca or hidden
+        fill prompt in Orca. Missing sops or a host decryption key is a setup failure: repair it
+        within authority or report its actual environment/authority boundary, never ask for another
+        provider credential to fix it. Never invent, default, substitute or skip a key, fall back to
+        an environment variable, or replace the provider with a stand-in to proceed."
+  - code: PROVIDER_UNREACHABLE
+    condition:
+      en: The declared provider's sandbox cannot be reached in this environment - no network egress, a
+        refused host, an unavailable endpoint or an exhausted quota - and the cause is provably
+        unfixable from the allowlist.
+  - code: CLIENT_UNAVAILABLE
+    condition:
+      en: The delivered client of this integration does not exist, exposes no entry point a scenario can
+        drive, or reads its credential from somewhere the declaration does not name; report the
+        finding instead of writing a second client beside it.
+  - code: SCOPE_OUTSIDE_ALLOWLIST
+    condition:
+      en: Proving an assertion would require changing product code, configuration or a declared
+        expectation outside the allowlisted paths; report the finding and never widen the ceiling.
+  - code: DECLARED_DEPENDENCY_UNMET
+    condition:
+      en: A declared prerequisite is not effectively done, or a required declared input/scope is missing.
+        Report node/resource IDs and propose a separately selected graph update when needed; never
+        run predecessors or weaken dependsOn/refs/required to proceed.
+  - code: TEST_WORLD_MISSING
+    condition:
+      en: "The app has no @starci/test-world declaration (be/src/tests/world/test-world.config.ts calling defineTestWorld) or its be/jest.config.js is not @starci/jest-preset starciJestConfig(): report the exact gap for the owning build op; a spec never hand-rolls the world instead."
+      vi: "App không có khai báo @starci/test-world (be/src/tests/world/test-world.config.ts gọi defineTestWorld) hoặc be/jest.config.js không phải starciJestConfig() của @starci/jest-preset: báo đúng khoảng trống cho op build sở hữu; spec không bao giờ tự dựng world thay vào."
+placeholders:
+  feature: Feature folder of the selected records, inside the operation allowlist
+  env: shared
+  slug: Identity custody slug the integration declaration names (custody identity:<slug>)
+  app: shared
+  bound-paths: Inspected source read set covering the delivered client of this integration
+  write-ceiling: Explicit owned spec paths under be/src/tests/integration/ and be/src/tests/contract/
+layoutPolicy:
+  checks: [starci-validate, starci-stacks-check]
+policy:
+  # explicitAsk: this op runs only when the goal asks for it (phraseSets.integrationIntent in modules/goal/archetypes.yaml)
+  # or the owner forces it (starci kernel run-deferred-tests); otherwise the kernel settles its leg deferred, never dispatched (scripts/route/spec-deferral.mjs).
+  explicitAsk: integration
+  integrationPolicy:
+    proofSurface: real-provider
+    fakes: none-in-the-contract-layer
+    layers: {integration: useTestWorld-modules-provider-faked-at-the-edge, contract: useSandbox-real-provider-sandbox}
+    outage: world-infra-cut-restore
+    credential: owner-provided-named-variable-in-identity-custody
+    credentialCustody: identity-resource-sops-exec-env
+    missingCredential: blocked-environment-with-custody-slug-and-variable-name
+    secretValues: never-written
+    evidenceProof: live
+route:
+  nodeKinds: [integration]
+  phase: [verify, post-implementation]
+  intent: [integration, live-provider, verify]
+  prerequisites: [implementation done]
+  riskHints: [external-effects, live-provider, high-kind]

@@ -1,0 +1,533 @@
+schema: starci/op@1
+id: release.deliver
+goal:
+  en: Deliver one explicitly selected publication, deployment or database migration and verify its
+    exact remote outcome.
+params:
+  mode:
+    type: enum
+    enum: [select, publish, deploy, migrate]
+    default: select
+    setBy: kernel
+    doc:
+      en: The execution mode this dispatch runs; starci kernel dispatch binds that mode's reads into the input
+        digests. select leaves the choice to the request.
+nodeKinds: [operations]
+completionProfile: operations
+sideEffects:
+  - Only the selected operation contract permits effects; no union of mode permissions.
+graphPolicy:
+  mode: read-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+reads:
+  - id: application-stacks
+    path: shared
+    purpose:
+      en: shared
+  - id: target
+    path: N/index.yaml
+    purpose:
+      en: Read current target, ancestor scope, refs, dependencies, assertions and validator freshness.
+        Preserve unaffected accepted content.
+  - id: selection
+    path: shared
+    purpose:
+      en: shared
+  - id: profile
+    path: shared
+    purpose:
+      en: shared
+  - id: release-proof
+    path: knowledge/op-gate.yaml + scripts/gates/release-proof.mjs + scripts/gates/release-app-installs.mjs + knowledge/hfs/canon-pins.yaml + modules/models/code-patterns.yaml
+    purpose:
+      en: "The release proof a publish or a deploy owes: release-app-installs (the published hfs scaffolds an app, the app installs fresh from the npm registry, the scaffold spec runs lint, typecheck and the api boot with installs required), check-canon-pins (every pin, and every code-pattern profile bound to its published canon by the content digest), the merge guard over the release range and npm run check of the runtime."
+      vi: "Bằng chứng phát hành mà một lần publish hoặc deploy phải có: release-app-installs (hfs đã publish dựng một app, app cài mới từ npm registry, spec scaffold chạy lint, typecheck và khởi động api với yêu cầu có bản cài), check-canon-pins (mọi pin, và mọi profile code-pattern gắn với canon đã publish bằng digest nội dung), merge guard trên dải phát hành và npm run check của runtime."
+writes:
+  - id: node
+    path: shared
+    content:
+      en: shared
+  - id: evidence
+    path: shared
+    content:
+      en: shared
+  - id: release-proof
+    path: STARCI_JOB_SCRATCH/release-proof.json
+    schema: starci/release-proof@1
+    content:
+      en: "The release proof (scripts/gates/release-proof.mjs): each required step - app-installs, canon-pins, merge-guard, check - with its command, exit, status (pass, red, skipped, tool-failed) and detail."
+      vi: "Bằng chứng phát hành (scripts/gates/release-proof.mjs): từng bước bắt buộc - app-installs, canon-pins, merge-guard, check - kèm lệnh, exit, trạng thái (pass, red, skipped, tool-failed) và chi tiết."
+steps:
+  - reads:
+      - application-stacks
+      - target
+      - selection
+      - profile
+    writes: []
+    action:
+      en: "Resolve the exact named operation and load only its contract. Its reads/writes, effect ceiling
+        and completion profile replace this selector envelope, except the mechanism steps and proofs
+        below (the release proof), which every mode they name keeps; the union of modes never grants
+        authority. Resolve the execution profile and actual tool availability before selecting
+        instruments; this does not switch the model/runtime or spawn workers. For an explicitly new
+        target, absence is expected: inspect the nearest existing ancestor/workspace, then create
+        only that selected scope."
+  - reads: [target, selection, release-proof]
+    writes: [node, evidence, release-proof]
+    action:
+      en: "Before any publish or deploy effect, prove the release: starci release proof --repo <the released repository> --base <the first commit of the release range>^ --out $STARCI_JOB_SCRATCH/release-proof.json. Every step is required - release-app-installs (fresh npm installs, lint, typecheck and the api boot; a SKIPPED proof is a skip, never a pass), check-canon-pins with the canon content digest, the merge guard over the release range and a green npm run check; a red, skipped or unrunnable step stops the release and is reported failed or blocked with that step's detail, never published around. Then execute the selected mode procedure through its actual postconditions. Return operation, scope, per-criterion results and real output refs; no other mode, source repair or successor is implied. A migrate dispatch owes no release proof (it ships no package). REPORT with release-proof.json attached."
+      vi: "Trước mọi hiệu ứng publish hay deploy, chứng minh bản phát hành: starci release proof --repo <repo được phát hành> --base <commit đầu tiên của dải phát hành>^ --out $STARCI_JOB_SCRATCH/release-proof.json. Mọi bước đều bắt buộc - release-app-installs (cài mới từ npm, lint, typecheck và khởi động api; chứng minh bị SKIPPED là bỏ qua, không bao giờ là đạt), check-canon-pins với digest nội dung canon, merge guard trên dải phát hành và npm run check xanh; bước đỏ, bị bỏ qua hoặc không chạy được sẽ dừng việc phát hành và được báo failed hoặc blocked kèm chi tiết của bước đó, không bao giờ phát hành vòng qua. Sau đó thực hiện quy trình của chế độ đã chọn tới các hậu điều kiện thật. Trả về thao tác, phạm vi, kết quả theo từng tiêu chí và tham chiếu đầu ra thật; không ngầm định chế độ khác, sửa mã hay bước kế tiếp. Lần dispatch migrate không cần bằng chứng phát hành (nó không giao gói nào). BÁO CÁO kèm release-proof.json."
+proofs:
+  - id: mode-result
+    requirement:
+      en: Exactly the selected mode contract and all requested criteria pass with real evidence before
+        delivery.
+  - id: release
+    requirement:
+      en: "For a publish or a deploy starci kernel settle re-reads the attached release-proof.json (runtime check op-proof, proof release): a done without it (op-release-proof-missing), with a required step missing or skipped (op-release-step-skipped) or with a step red or unrunnable (op-release-step-red) is refused."
+      vi: "Với publish hoặc deploy starci kernel settle tự đọc lại release-proof.json đính kèm (check op-proof, proof release): done thiếu nó (op-release-proof-missing), thiếu hoặc bỏ qua một bước bắt buộc (op-release-step-skipped) hoặc có bước đỏ hay không chạy được (op-release-step-red) đều bị từ chối."
+    check: scripts/kernel/gate-settle.mjs
+judge:
+  - by: machine
+    measures: [declared-checks, op-proof:release]
+    proofs: [release]
+    why: "for a publish or a deploy settle re-runs the release proof natively (fresh installs, lint, typecheck, boot, canon pins, merge guard, a green repository check) and refuses a skipped step"
+blockers:
+  - code: OPERATION_REQUIRED
+    condition:
+      en: Missing, unknown or multiple operations; select a single mode under existing task authority.
+placeholders:
+  feature: Feature folder of the selected records, inside the operation allowlist
+  app: shared
+  bound-paths: shared
+  environment: shared
+  resource: shared
+layoutPolicy:
+  checks: [starci-validate]
+policy:
+  modePolicy:
+    selection: required-exactly-one
+    implicitChain: false
+    permissionUnion: false
+    completion: selected-mode-profile
+  executionModes:
+    publish:
+      id: release.deliver
+      goal:
+        en: Publish only the explicitly selected verified Git commit/ref boundary and read it back.
+      nodeKinds: [release]
+      completionProfile: release
+      sideEffects: [explicitly authorized local integration and/or non-force remote publication]
+      graphPolicy:
+        mode: read-only
+        location: .starciwork node dependsOn/refs with direct sourceRefs and collocated assets
+        prerequisiteState: done
+        dispatch: never
+      reads:
+        - id: target
+          path: N/index.yaml
+          purpose:
+            en: "Read the existing selected N/index.yaml, ancestor scope, declared refs/dependencies/assertions
+              and validator freshness. This consumer op requires its target node to exist. An absent
+              target is a scope/graph gap: report it and propose a separately selected scope op; do
+              not create a target or invent its acceptance/graph here."
+        - id: repo
+          path: <app>/<bound-paths>
+          purpose:
+            en: When source exists/is selected, resolve repository resource, actual checkout/root/HEAD and dirty
+              state; read applicable instructions, manifests, owning code, callers and relevant
+              tests. Greenfield/spec-only work records source not-yet-created and grounds intent in
+              the user request; no invented repository or fact citation. Source implementation still
+              needs an actual selected writable repository.
+        - id: publication
+          path: actual Git remote/ref policy + selected commits/evidence + explicit publish request
+          purpose:
+            en: Read target remote/ref, exact delivered full SHAs, changed-file scope, hooks and required
+              checks. A local commit request is not push, tag, PR, merge or cleanup permission.
+      writes:
+        - id: node
+          path: N/index.yaml
+          fields: [state, blocker, completion.inputDigest, completion.evidence, completion.codeRefs]
+          content:
+            en: Read the existing selected scope, expected assertions and .starciwork graph unchanged. Write
+              only state/blocker/completion here; actual observations, findings, commit mappings and
+              remaining cleanup belong to the evidence result, not semantic node prose. Missing
+              refs/dependencies/acceptance require a reported gap or separately selected scope
+              update; never add/remove them to obtain pass.
+        - id: evidence
+          path: evidence/manifest.yaml
+          fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+          content:
+            en: "Record observed local/remote refs before/after, exact command/exit, verified diff/ancestry and
+              checks at the actual integrated head. Operator-specific observed result in
+              evidence/result.md: Record original, integrated and published full SHAs separately, target
+              ref and actual publication result; no worktree cleanup implied."
+        - id: evidence-git-publication
+          path: evidence/git-publication.json
+          content:
+            en: Retain only the selected publish git-publication.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-lineage
+          path: evidence/lineage.json
+          content:
+            en: Retain only the selected publish lineage.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-result
+          path: evidence/result.md
+          content:
+            en: Retain only the selected publish result.md at this exact destination; its scope and provenance remain those of evidence.
+      steps:
+        - reads:
+            - repo
+            - publication
+            - target
+          writes: [node]
+          action:
+            en: Verify explicit selected remote/ref/action and full source commits; inspect dirty changes and
+              staged scope without absorbing unrelated work. Verify implementation-produced quality
+              evidence and the exact immutable revision/artifact before the selected release effect.
+              Missing required gates block release; do not run or repair implementation checks here.
+              Read back uncertain effects before retry and record partial outcomes and rollback
+              status.
+        - reads:
+            - repo
+            - publication
+          writes: [evidence, evidence-git-publication, evidence-lineage, evidence-result]
+          action:
+            en: Inspect current remote and local refs, branch policy and required checks/hooks. If integration
+              is included, review exact diff/conflicts and retest the actual result; no
+              amend/rebase/squash or force as a workaround.
+        - reads:
+            - publication
+            - repo
+          writes: [evidence, evidence-git-publication, evidence-lineage, evidence-result]
+          action:
+            en: Perform only explicitly requested integration/publication action, non-force and with hooks
+              preserved. Tag/PR actions occur only when named; rejected or uncertain effects require
+              read-back before retry.
+        - reads:
+            - publication
+            - repo
+            - target
+          writes: [node, evidence, evidence-git-publication, evidence-lineage, evidence-result]
+          action:
+            en: Read target ref back and compare exact expected SHA, record true lineage and limits, then stop
+              without deleting branch/worktree/evidence or stopping runtime.
+      proofs:
+        - id: binding
+          requirement:
+            en: Run the record-class validator `starci runtime validate` and, on every record directory it writes, `starci runtime validate --strict`; every cited ID/path exists or is explicitly
+              proposed, required assertions are covered, input bindings are current, and an honest
+              not-run/fail cannot earn done.
+        - id: published-ref
+          requirement:
+            en: Actual remote/ref equals selected verified publication; failed hook/push or unresolved remote
+              read-back is not success.
+      blockers:
+        - code: PUBLISH_NOT_AUTHORIZED
+          condition:
+            en: Requested scope does not authorize this remote/ref/tag/integration effect.
+        - code: GIT_DIVERGED
+          condition:
+            en: Unexpected divergence, hook failure or dirty overlap prevents safe selected publication.
+        - code: DECLARED_DEPENDENCY_UNMET
+          condition:
+            en: A declared prerequisite is not effectively done, or a required declared input/scope is missing.
+              Report node/resource IDs and propose a separately selected graph update when needed;
+              never run predecessors or weaken dependsOn/refs/required to proceed.
+      placeholders:
+        feature: Feature folder of the selected records, inside the operation allowlist
+        app: The bound app checkout (its root); every path written <app>/<path> is app-relative - be/..., fe/..., .starciwork/... or a path of the app root
+        bound-paths: Inspected source read set
+        environment: Resolved environment resource slug
+        resource: Selected owned resource slug
+    deploy:
+      id: release.deliver
+      goal:
+        en: Deploy one authorized immutable artifact to one target and verify actual steady state or
+          explicit rollback outcome.
+      nodeKinds: [release]
+      completionProfile: release
+      sideEffects: [exact selected deployment and explicitly bounded recovery/rollback]
+      graphPolicy:
+        mode: read-only
+        location: .starciwork node dependsOn/refs with direct sourceRefs and collocated assets
+        prerequisiteState: done
+        dispatch: never
+      reads:
+        - id: application-stacks
+          path: knowledge/application-stacks.yaml + docs/application-stacks.md +
+            docs/application-stacks.md + modules/schemas/application-stacks.schema.yaml
+          purpose:
+            en: Reconcile component ownership, encrypted credential custody, lifecycle commands and existing
+              consumers. This conditional read grants no extra deployment or source scope.
+        - id: target
+          path: N/index.yaml
+          purpose:
+            en: This consumer op requires its target node to exist.
+        - id: repo
+          path: <app>/<bound-paths>
+          purpose:
+            en: Source implementation still needs an actual selected writable repository.
+        - id: environment
+          path: .starciwork/_resources/environments/<environment>/resource.yaml
+          purpose:
+            en: Read exact target/origins, owner, configuration revision, declared probes and allowed effects;
+              validate live observations without inferring identity from hostname alone.
+        - id: release
+          path: .starciwork/_resources/releases/<resource>/resource.yaml + selected quality/UAT/migration
+            evidence
+          purpose:
+            en: Read immutable artifact digest, source mapping, configuration/schema compatibility, intended
+              target/revision, required gates, deployment authority, previous safe digest and
+              recovery limits. Quality pass is not deploy permission.
+      writes:
+        - id: node
+          path: N/index.yaml
+          fields: [state, blocker, completion.inputDigest, completion.evidence, completion.codeRefs]
+          content:
+            en: Read the existing selected scope, expected assertions and .starciwork graph unchanged.
+        - id: resource
+          path: .starciwork/_resources/releases/<resource>/resource.yaml
+          fields:
+            - schema
+            - id
+            - kind
+            - owner
+            - revision
+            - details.artifact
+            - details.sourceRefs
+            - details.configurationRef
+            - details.target
+            - details.deploymentEvidence
+          content:
+            en: Keep immutable artifact identity and actual deployment evidence on the work/resource@1 record;
+              do not retag/rebuild and call it the same release.
+        - id: evidence
+          path: evidence/manifest.yaml
+          fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+          content:
+            en: "Retain actual target generation/digest before/after, requested command/tool outcome, probe
+              observations over declared stability interval and bounded recovery/rollback effects.
+              Operator-specific observed result in evidence/result.md: Name actual deployed/restored
+              identity and unresolved acceptance; rollback success is not delivery of the rejected
+              release."
+        - id: evidence-deployment
+          path: evidence/deployment.json
+          content:
+            en: Retain only the selected deploy deployment.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-probes
+          path: evidence/probes.json
+          content:
+            en: Retain only the selected deploy probes.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-recovery
+          path: evidence/recovery.json
+          content:
+            en: Retain only the selected deploy recovery.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-result
+          path: evidence/result.md
+          content:
+            en: Retain only the selected deploy result.md at this exact destination; its scope and provenance remain those of evidence.
+      steps:
+        - reads:
+            - application-stacks
+            - target
+            - release
+            - environment
+            - repo
+          writes: [node]
+          action:
+            en: Verify explicit deploy authority, exact immutable artifact/source mapping and required current
+              quality/UAT/schema admissions. Record approved deferrals without turning them into
+              passes.
+        - reads:
+            - release
+            - environment
+          writes: [evidence, evidence-deployment, evidence-probes, evidence-recovery, evidence-result]
+          action:
+            en: Inspect actual active release/target/config revisions, artifact availability and rollback
+              viability; compare again immediately before mutation.
+        - reads:
+            - release
+            - environment
+          writes: [resource, evidence, evidence-deployment, evidence-probes, evidence-recovery, evidence-result]
+          action:
+            en: Deploy exact artifact through available authorized provider mechanism. Do not modify
+              DNS/host/credentials/schema unless those exact effects are included.
+        - reads:
+            - release
+            - environment
+          writes: [evidence, evidence-deployment, evidence-probes, evidence-recovery, evidence-result]
+          action:
+            en: Observe declared useful health/readiness probes and active digest through a bounded stability
+              interval. Detect concurrent target changes before any recovery; only authorized
+              bounded same-release recovery/rollback can run.
+        - reads:
+            - release
+            - target
+          writes: [node, resource, evidence, evidence-deployment, evidence-probes, evidence-recovery, evidence-result]
+          action:
+            en: Report deployed, failed, uncertain or restored identity accurately, keep partial effects and
+              unmet probes, validate and stop. No source fixes, wider provisioning or release chain.
+      proofs:
+        - id: deployment
+          requirement:
+            en: Actual target runs intended immutable artifact and required probes hold for the declared window;
+              a single green probe is not steady-state proof.
+      blockers:
+        - code: RELEASE_AUTHORITY_MISSING
+          condition:
+            en: Artifact/target/effect is not covered by explicit authority.
+        - code: CONCURRENT_RELEASE
+          condition:
+            en: A foreign generation appeared during execution; do not roll it back.
+        - code: STEADY_STATE_UNPROVEN
+          condition:
+            en: Required probes or exact served digest cannot be proved within the bounded window.
+      placeholders:
+        feature: Feature folder of the selected records, inside the operation allowlist
+        app: The bound app checkout (its root); every path written <app>/<path> is app-relative - be/..., fe/..., .starciwork/... or a path of the app root
+        bound-paths: Inspected source read set
+        environment: Resolved environment resource slug
+        resource: Selected owned resource slug
+    migrate:
+      id: release.deliver
+      goal:
+        en: Apply the explicitly selected source-owned migration set to one verified target and prove its
+          migration-history/data outcome.
+      nodeKinds: [release]
+      completionProfile: release
+      sideEffects:
+        - exact authorized schema/data migration only; no automatic down/restore/deploy
+      graphPolicy:
+        mode: read-only
+        location: .starciwork node dependsOn/refs with direct sourceRefs and collocated assets
+        prerequisiteState: done
+        dispatch: never
+      reads:
+        - id: application-stacks
+          path: knowledge/application-stacks.yaml + docs/application-stacks.md +
+            docs/application-stacks.md + modules/schemas/application-stacks.schema.yaml
+          purpose:
+            en: Reconcile component ownership, encrypted credential custody, lifecycle commands and existing
+              consumers. This conditional read grants no extra deployment or source scope.
+        - id: target
+          path: N/index.yaml
+          purpose:
+            en: This consumer op requires its target node to exist.
+        - id: architecture
+          path: .starciwork/features/<feature>/{sds,contract,integration}/**/index.yaml
+          purpose:
+            en: Read data ownership, operations/API/events, boundaries, code-scope and rationale declared by the
+              selected .starciwork graph; distinguish proposed paths from observed files. No
+              universal architecture-first op chain is implied; report genuinely missing required
+              scope before proceeding.
+        - id: repo
+          path: <app>/<bound-paths>
+          purpose:
+            en: Source implementation still needs an actual selected writable repository.
+        - id: migration
+          path: selected source-owned migration files/runner/config + explicit target authority
+          purpose:
+            en: Read exact migration IDs/checksums, intended schema/data delta, source tests, backup/rollback
+              constraints and migration-history inspection method. Creating/editing migration code
+              is a separate implementation scope.
+      writes:
+        - id: node
+          path: N/index.yaml
+          fields: [state, blocker, completion.inputDigest, completion.evidence, completion.codeRefs]
+          content:
+            en: Read the existing selected scope, expected assertions and .starciwork graph unchanged.
+        - id: evidence
+          path: evidence/manifest.yaml
+          fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+          content:
+            en: "Keep migration checksums, actual runner/command, redacted output, before/after
+              migration-history/data checks and safe no-op replay/inspect result; no credentials in
+              logs. Operator-specific observed result in evidence/result.md: Pin exact target/schema/source
+              migration identity and expected postconditions. Production mutation is allowed only by
+              explicit scoped authority, never by completion of code tests."
+        - id: evidence-migrations-before
+          path: evidence/migrations-before.json
+          content:
+            en: Retain only the selected migrate migrations-before.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-migrations-after
+          path: evidence/migrations-after.json
+          content:
+            en: Retain only the selected migrate migrations-after.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-replay
+          path: evidence/replay.json
+          content:
+            en: Retain only the selected migrate replay.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-result
+          path: evidence/result.md
+          content:
+            en: Retain only the selected migrate result.md at this exact destination; its scope and provenance remain those of evidence.
+      steps:
+        - reads:
+            - application-stacks
+            - migration
+            - architecture
+            - repo
+            - target
+          writes: [node]
+          action:
+            en: Verify selected exact target/authority, source revision and migration set; inspect runner
+              behavior and recovery constraints before any database effect.
+        - reads:
+            - migration
+          writes: [evidence, evidence-migrations-before, evidence-migrations-after, evidence-replay, evidence-result]
+          action:
+            en: Inspect current migration history/schema and backup/precondition evidence. Classify applied,
+              safely pending, conflicting or partial/uncertain; never rerun a partial unknown effect
+              blindly.
+        - reads:
+            - migration
+            - repo
+          writes: [evidence, evidence-migrations-before, evidence-migrations-after, evidence-replay, evidence-result]
+          action:
+            en: Run only approved pending set through the actual reviewed source runner, or record inspected
+              no-op. Preserve original migration-history rows and actual error output; no ad hoc SQL
+              repair or automatic down migration.
+        - reads:
+            - migration
+            - target
+          writes: [node, evidence, evidence-migrations-before, evidence-migrations-after, evidence-replay, evidence-result]
+          action:
+            en: Verify declared schema/data invariants and migration history after execution; perform safe
+              supported no-op replay or inspect to prove no pending changes. Report
+              irreversible/partial effects and stop without deploying.
+      proofs:
+        - id: migration
+          requirement:
+            en: Exact selected set applied/no-op with migration-history integrity and declared data invariants
+              proved; successful process exit alone is insufficient.
+      blockers:
+        - code: MIGRATION_TARGET_UNKNOWN
+          condition:
+            en: Exact environment/schema/runner revision or mutation authority is missing.
+        - code: MIGRATION_PARTIAL
+          condition:
+            en: Current migration-history/data or prior effect is partial, conflicting or uncertain; require
+              owner recovery decision.
+      dataCorrectionPolicy:
+        scope: exact-authorized-records-or-source-owned-migration
+        schemaInspection: required-before-mutation
+        preMutationReadback: required
+        postMutationReadback: required
+        recovery: transaction-or-explicit-reviewed-recovery-plan
+        arbitraryCode: false
+        adHocSql: false
+        unknownOrPartial: blocked
+      placeholders:
+        feature: Feature folder of the selected records, inside the operation allowlist
+        app: The bound app checkout (its root); every path written <app>/<path> is app-relative - be/..., fe/..., .starciwork/... or a path of the app root
+        bound-paths: Inspected source read set
+        environment: Resolved environment resource slug
+        resource: Selected owned resource slug
+route:
+  nodeKinds: [operations]
+  phase: [release, post-implementation]
+  intent: [release, publish, deploy, migrate]
+  prerequisites: [implementation + verification evidence]
+  riskHints: [external-effects, terminal, high-kind]

@@ -1,0 +1,215 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {capturesOf} from './impl-captures.mjs';
+import { fileURLToPath } from 'node:url';
+import {parseYaml} from '../../engine/yaml.mjs';
+import {decodePng, checkPalette, checkEntityListInCard, checkMascotSlot, cardClassesOf} from './ui/render.mjs';
+import {readWorkspace, loadRecords} from './record-ownership.mjs';
+import {containedPath, slash} from '../lib/path-key.mjs';
+import {objectList} from '../lib/list.mjs';
+import { isMain } from '../lib/is-main.mjs';
+import { walkFiles } from '../lib/walk.mjs';
+import { exampleArtifactReadOptions, exampleCheckoutOf } from '../lib/example-refs.mjs';
+
+/**
+ * Grit item 55: scripts/work/ui/render.mjs and scripts/work/brand/brand.mjs are real - a
+ * capture's PNG bytes plus its kept markup are checked against the brand record, palette and component
+ * anatomy both - but nothing ever ran them against this example tree, so a frontend work/implementation@1
+ * record could reach `done` with no capture at all. This module is the mechanical wiring: for every done
+ * implementation that is a frontend record (the same predicate concept 8 / IMPL_BEFORE_DIRECTION uses -
+ * it proves a work/ui-screen@1, or its `repository` resolves to a workspace `role: fe` entry), real capture
+ * artifacts must exist in the shape render.mjs reads (a PNG under the implementation node's assets/,
+ * with the kept markup beside it as the same basename .html) and the render/brand checks must pass.
+ *
+ * The check functions are imported from scripts/work/ui/render.mjs itself and composed here rather than calling
+ * its runRenderChecks: that wrapper reads the brand through readBrandRecord, while this example tree reads
+ * the `work/brand@1` record itself (see schemas/work-layout.yaml). The brand's own `brand:` specification - the object every check actually
+ * consumes - is read here with the same leniency the rest of the example toolkit applies, so the canon
+ * mathematics runs unchanged on this tree's records. Anything the canon cannot run stays unproven: a
+ * `skip` on one of the three core checks (palette-off-brand, primary-absent, entity-list-in-card) is
+ * refused exactly as renderChecksFor's `implementation-render-proof-incomplete` refuses it, because an
+ * uncheckable claim is not a pass. `mascot-slot-missing` is advisory like the canon: a fail refuses, a
+ * skip (a surface the brand does not allow the mascot on) does not.
+ *
+ * CLI (`starci work render-proof --work <path-to-.starciwork> --record <id>`) runs the same
+ * proof for one implementation record regardless of its state, printing every refusal and exiting 1 when
+ * any exist - the replayable command an evidence.yaml assertion names when it binds this proof.
+ */
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+
+/** The checks whose `skip` is a refusal: the canon's own core set from renderChecksFor. */
+const CORE_CHECKS = new Set(['palette-off-brand', 'primary-absent', 'entity-list-in-card']);
+
+/**
+ * Whether `rec` (a work/implementation@1) is a frontend record - exactly the predicate check-example-work.mjs's
+ * IMPL_BEFORE_DIRECTION rule uses: it names a work/ui-screen@1 in `proves`, or its `repository` resolves to a
+ * `role: fe` entry in workspace.yaml. Backend records and records proving no screen are untouched.
+ */
+function isFrontendImpl(rec, records, workspaceDoc) {
+  const data = rec?.data ?? {};
+  const provesUi = (Array.isArray(data.proves) ? data.proves : [])
+    .some(pid => records.get(pid)?.schema === 'work/ui-screen@1');
+  const repos = Array.isArray(workspaceDoc?.repositories) ? workspaceDoc.repositories : [];
+  const isFeRepo = data.repository ? repos.find(r => r?.name === data.repository)?.role === 'fe' : false;
+  return provesUi || isFeRepo;
+}
+
+/**
+ * The ui node directories this implementation is rendered against: the ui-screens its `proves` names, or -
+ * when it proves none by id - every ui-screen its own feature owns (concept 8's fallback: a frontend
+ * implementation is for some screen even when it did not name one).
+ */
+function uiDirsFor(rec, records, workRoot) {
+  const proved = (Array.isArray(rec?.data?.proves) ? rec.data.proves : [])
+    .map(pid => records.get(pid))
+    .filter(entry => entry?.schema === 'work/ui-screen@1')
+    .map(entry => entry.dir);
+  if (proved.length) return [...new Set(proved)];
+  const feature = slash(path.relative(workRoot, rec.dir)).split('/')[1];
+  return [...new Set([...records.values()]
+    .filter(entry => entry.schema === 'work/ui-screen@1' && slash(path.relative(workRoot, entry.dir)).split('/')[1] === feature)
+    .map(entry => entry.dir))];
+}
+
+/**
+ * The brand specification this tree declares, from `<workRoot>/brand/index.yaml`'s own `brand:` field.
+ * Deliberately not scripts/work/brand/brand.mjs's readBrandRecord: this reads the `brand:` specification object
+ * itself with the leniency the example toolkit applies, as identical input for the checks.
+ */
+function readExampleBrand(workRoot) {
+  const file = path.join(workRoot, 'brand', 'index.yaml');
+  if (!fs.existsSync(file) || !fs.lstatSync(file).isFile()) {
+    return {error: 'the Work tree carries no brand/index.yaml to check the capture against'};
+  }
+  let record;
+  try {
+    record = parseYaml(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    return {error: `the brand record could not be read (${String(error.message ?? error)})`};
+  }
+  if (!record?.brand || typeof record.brand !== 'object' || Array.isArray(record.brand)) {
+    return {error: 'the brand record carries no brand specification'};
+  }
+  const family = typeof record.brand.identity?.family === 'string' ? record.brand.identity.family : null;
+  return {brand: record.brand, family, rev: record.rev ?? record.brand.rev ?? null, file};
+}
+
+/**
+ * The capture artifacts of one implementation node, in the shape render.mjs's implementationCandidates
+ * reads: every PNG under the node's assets/ (recursively), each paired with the kept markup that shares
+ * its basename. A candidate with no sibling .html is still a candidate - the markup check then reports
+ * its own skip, which is a refusal here rather than a pass.
+ */
+function captureCandidates(implDir, record, blobOptions) {
+  // The captures are the blobs the record's assets[] cites (scripts/work/impl-captures.mjs), never files
+  // kept under its assets/.
+  return capturesOf(implDir, record, blobOptions).map(c => ({png: c.png, markup: c.markup, name: c.name}));
+}
+
+function appendCaptureProblems(candidate, brand, cards, problems) {
+  const rel = candidate.name;
+  if (!candidate.png) {
+    problems.push(`cited capture ${rel} is missing from its selected blob store - every declared PNG must be readable [RENDER_CAPTURE_MISSING]`);
+    return;
+  }
+  let png = null, failure = null;
+  try { png = decodePng(fs.readFileSync(candidate.png)); }
+  catch (error) { failure = String(error.message ?? error); }
+  if (!png) {
+    problems.push(`capture ${rel} could not be decoded (${failure}), so its palette could not be compared against the brand - an uncheckable claim is not a pass [RENDER_PROOF_INCOMPLETE]`);
+  } else {
+    for (const result of checkPalette({png, brand: brand.brand})) {
+      if (result.outcome === 'fail') problems.push(`capture ${rel}: ${result.id} fails - ${result.detail} [RENDER_CHECK_FAILED]`);
+      else if (result.outcome === 'skip' && CORE_CHECKS.has(result.id)) problems.push(`capture ${rel}: ${result.id} could not run - ${result.detail} [RENDER_PROOF_INCOMPLETE]`);
+    }
+  }
+  if (!candidate.markup) {
+    problems.push(`capture ${rel} cites no ${path.basename(candidate.name).replace(/\.png$/i, '.html')} markup - the markup the browser rendered is the half of the proof the entity-list rule reads [RENDER_PROOF_INCOMPLETE]`);
+    return;
+  }
+  const result = checkEntityListInCard(fs.readFileSync(candidate.markup, 'utf8'), {family: brand.family, cards: cards.classes.length ? cards.classes : null});
+  if (result.outcome === 'fail') problems.push(`capture ${rel}: entity-list-in-card fails - ${result.detail} [RENDER_CHECK_FAILED]`);
+  else if (result.outcome === 'skip') problems.push(`capture ${rel}: entity-list-in-card could not run - ${result.detail} [RENDER_PROOF_INCOMPLETE]`);
+}
+
+function appendMascotProblems(dir, brand, workRoot, problems) {
+  const rel = slash(path.relative(workRoot, path.join(dir, 'index.yaml')));
+  let uiRecord;
+  try { uiRecord = parseYaml(fs.readFileSync(path.join(dir, 'index.yaml'), 'utf8')); }
+  catch (error) {
+    problems.push(`the ui node at ${rel} could not be read for the mascot-slot rule (${String(error.message ?? error)}) [RENDER_PROOF_INCOMPLETE]`);
+    return;
+  }
+  for (const surface of objectList(uiRecord?.ui?.surfaces)) {
+    const result = checkMascotSlot({record: uiRecord, brand: brand.brand, screen: surface});
+    if (result.outcome === 'fail') problems.push(`${result.id} fails on ${rel}: ${result.detail} [RENDER_CHECK_FAILED]`);
+  }
+}
+
+/**
+ * The render/brand proof of one work/implementation@1 record: returns a list of refusal strings (empty when
+ * the proof holds). `rec` is an entry of check-example-work.mjs's records map or example-ownership.mjs's
+ * loadRecords - `{schema, data, dir}` is all that is read. The record's own `state` is not consulted here:
+ * the caller decides which states the proof is required for (the gate requires it for `done`; the CLI runs
+ * it for a named record so evidence can bind the actual outcome).
+ */
+export function renderProofProblems({rec, records, workspaceDoc, workRoot, blobOptions = {}}) {
+  const problems = [];
+  if (rec?.schema !== 'work/implementation@1') return problems;
+  if (!isFrontendImpl(rec, records, workspaceDoc)) return problems;
+
+  const brand = readExampleBrand(workRoot);
+  if (brand.error) {
+    problems.push(`state is done but its render proof cannot run: ${brand.error} [RENDER_BRAND_MISSING]`);
+    return problems;
+  }
+  const cards = cardClassesOf({family: brand.family});
+
+  const uiDirs = uiDirsFor(rec, records, workRoot);
+  if (!uiDirs.length) {
+    problems.push('state is done but resolves no ui-screen record to compare its render against - a frontend implementation proves a drawn direction, and without one there is no surface, coverage map or artwork slot to check [RENDER_UI_INPUT_MISSING]');
+    return problems;
+  }
+
+  let candidates;
+  try { candidates = captureCandidates(rec.dir, rec.data, blobOptions); }
+  catch (error) {
+    if (blobOptions.root == null) throw error;
+    problems.push(`state is done but its capture bytes cannot be verified: ${error.message} [RENDER_CAPTURE_INVALID]`);
+    return problems;
+  }
+  if (!candidates.length) {
+    problems.push('state is done but cites no running-page capture in its assets[] - a frontend implementation is proven by a browser PNG plus the markup it rendered, the shape scripts/work/ui/render.mjs reads, and a design/direction image is not an implementation capture [RENDER_CAPTURE_MISSING]');
+    return problems;
+  }
+
+  for (const candidate of candidates) appendCaptureProblems(candidate, brand, cards, problems);
+  for (const dir of uiDirs) appendMascotProblems(dir, brand, workRoot, problems);
+  return problems;
+}
+
+if (isMain(import.meta.url)) {
+  const args = {};
+  for (let i = 2; i < process.argv.length; i += 1) {
+    const token = process.argv[i];
+    if (token === '--work') args.work = process.argv[++i];
+    else if (token === '--record') args.record = process.argv[++i];
+    else { console.error(`REFUSED unrecognized argument: ${token}`); process.exit(1); }
+  }
+  if (!args.work || !args.record) { console.error('REFUSED --work <path-to-.starciwork> and --record <id> are both required'); process.exit(1); }
+  // An agent-supplied --work stays inside the runtime tree (its examples) or the repository the command runs in.
+  let workRoot;
+  try { workRoot = containedPath(root, args.work, {label: '--work'}); }
+  catch { try { workRoot = containedPath(process.cwd(), args.work, {label: '--work'}); } catch (error) { console.error(`REFUSED ${error.message}`); process.exit(1); } }
+  const records = loadRecords(workRoot, walkFiles);
+  const workspaceDoc = readWorkspace(workRoot);
+  const rec = records.get(args.record);
+  if (!rec) { console.error(`REFUSED no record with id ${args.record} was found under ${workRoot}`); process.exit(1); }
+  const problems = renderProofProblems({rec, records, workspaceDoc, workRoot, blobOptions: exampleArtifactReadOptions(exampleCheckoutOf(workRoot) ?? root, workRoot)});
+  for (const problem of problems) console.log(`REFUSED ${slash(path.relative(workRoot, rec.dir))}: ${problem}`);
+  const outcome = problems.length ? `${problems.length} refused` : 'render/brand proof holds for every capture';
+  console.log(`${args.record}: ${outcome}`);
+  process.exitCode = problems.length ? 1 : 0;
+}

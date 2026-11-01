@@ -1,0 +1,22 @@
+schema: starci/schema@1
+describes: starci/interface-audit-operation@1
+module: modules/ops/ops/interface.audit.yaml
+purpose: |-
+  The verdict one interface.audit attempt files as <STARCI_JOB_SCRATCH>/interface-audit.json (starci kernel report --attach):
+  the api writes it as the audit's interface_audits row in the project ledger (operations/ is agent data,
+  never a .starciwork record); its evidence is the attempt's attachments/evidence/** artifacts.
+shape:
+  schema: 'starci/interface-audit-operation@1'
+  id: 'operation.<feature>.<name> - singular operation, the feature, then the folder name'
+  title: 'one line naming the audited screens and the round'
+  state: 'todo | blocked | done'
+  activity: 'idle while no leg runs it'
+  round: 'the audit round this record belongs to, 1..interface.audit params.maxRounds'
+  attempt: 'the leg attempt that last wrote it'
+  blockedBy: 'the blocker code and why, while state is blocked'
+  selectedMatrix: 'the frozen route x state x viewport x theme cells, each with its capture, direction, prompt and their sha256, and its assertion ids'
+  drawBaseline: 'the accepted interface.draw receipt the matrix is audited against'
+  dependencies: 'the records and served build the audit binds'
+  evidenceLineage: 'the evidence/ bundles earlier attempts wrote'
+  findings: 'optional; the actionable drift found'
+  completion: '{inputDigest, evidence: [evidence/<file>...]}'

@@ -1,0 +1,121 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:work:functional-requirement:1
+type: object
+additionalProperties: false
+description: "One thing a person can do with the product, written as the flow they actually walk. It is the
+  family that owns behaviour: the actors, what sets it off, the path through it, the paths out of it when
+  something goes wrong, and what is true afterwards. The rules it relies on stay their own records and are
+  named through `composes`, because a requirement that restated its rules would be a second copy of them
+  that drifts the first time one is revised."
+required:
+  - actors
+  - trigger
+  - mainFlow
+properties:
+  schema:
+    const: work/functional-requirement@1
+    $ref: "urn:work:common:1#/$defs/familyDiscriminator"
+  id:
+    type: string
+    pattern: ^fr(?:\.[a-z0-9]+(?:-[a-z0-9]+)*){2,}$
+    description: "The requirement's stable id, a lowercase dot-path under the fr family: fr.<feature>.<name>;
+      example fr.task.create. The prefix is enforced so a reference to fr.x is unambiguously a behaviour
+      rather than a rule that constrains one."
+  title:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: What the person can do, phrased as the thing they do rather than as the feature that lets
+      them. It is the line a journey cites, so it is settled here once.
+  state:
+    $ref: "urn:work:common:1#/$defs/state"
+  activity:
+    $ref: "urn:work:common:1#/$defs/activity"
+  actors:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/slug"
+    description: Who can carry this out, by role. It is required because a requirement with no actor is a
+      capability nobody was granted, and permission questions are then answered by whoever builds it.
+  trigger:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: What sets the flow off. It is separate from the first step because the thing that starts a
+      flow is often not something the actor does - a worker picking work up, a clock firing - and a flow
+      whose trigger is assumed is one nobody can schedule.
+  mainFlow:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/prose"
+    description: The path when everything works, in order, one step each. It is the shortest honest
+      description of the behaviour, and everything else here is about what happens when it does not hold.
+  exceptionFlows:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/prose"
+    description: The paths out when something goes wrong, one each. They are listed rather than implied
+      because a requirement with only a main flow gets built with only a main flow, and every refusal the
+      product then gives is invented at implementation time.
+  postconditions:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/prose"
+    description: What is true after the flow completes. It is what a test asserts and what a walk checks, so
+      a requirement that stops at the last step leaves both to guess at the outcome.
+  composes:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    description: The rules this flow relies on, each with the module that enforces it. It is the edge that
+      lets the requirement's proof demand grow with the rules rather than being a single tick, so adding a
+      rule here raises the bar by itself.
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - rule
+      properties:
+        rule:
+          $ref: "urn:work:common:1#/$defs/recordId"
+          description: The rule this flow relies on, by id.
+        module:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: The module-root directory that enforces it inside this flow, where the rule's own
+            module is not the whole answer.
+  subscribes:
+    $ref: "urn:work:common:1#/$defs/subscribes"
+  requiresProof:
+    $ref: "urn:work:common:1#/$defs/requiresProof"
+  provenBy:
+    $ref: "urn:work:common:1#/$defs/provenBy"
+  evidence:
+    $ref: "urn:work:common:1#/$defs/slug"
+    description: The single evidence directory under this record's evidence/ folder that carries what was
+      observed of this requirement directly. At most one, because a requirement has one current answer to
+      what was last observed of it.
+  refs:
+    $ref: "urn:work:common:1#/$defs/refs"
+  dependsOn:
+    $ref: "urn:work:common:1#/$defs/dependsOn"
+  blockedBy:
+    $ref: "urn:work:common:1#/$defs/blockedBy"
+  conflictsWith:
+    $ref: "urn:work:common:1#/$defs/conflictsWith"
+  blockers:
+    $ref: "urn:work:common:1#/$defs/blockers"
+  verificationSource:
+    $ref: "urn:work:common:1#/$defs/verificationSource"
+  because:
+    $ref: "urn:work:common:1#/$defs/because"
+  change:
+    $ref: "urn:work:common:1#/$defs/change"
+  extensions:
+    $ref: "urn:work:common:1#/$defs/extensions"
+allOf:
+  - $ref: "urn:work:common:1#/$defs/leafIdentity"
+  - $ref: "urn:work:common:1#/$defs/authoredClaimMustSayWhy"

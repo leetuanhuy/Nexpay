@@ -1,0 +1,150 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:work:data:1
+type: object
+additionalProperties: false
+description: "One thing the product keeps, with the fields it carries and the invariants that hold over
+  them. It is an authored claim by nature - a data shape is true because it was written down and agreed,
+  not because a test ran - which is why the gate does not demand a run behind a done one. What it must not
+  carry is `appliesTo`: a data record's relationship to the rules it embodies is `refs`, an inbound
+  reading, and an outbound constraint from data onto a rule would put the shape in charge of the promise."
+required:
+  - fields
+  - invariants
+properties:
+  schema:
+    const: work/data@1
+    $ref: "urn:work:common:1#/$defs/familyDiscriminator"
+  id:
+    type: string
+    pattern: ^data(?:\.[a-z0-9]+(?:-[a-z0-9]+)*){2,}$
+    description: "The definition's stable id, a lowercase dot-path under the data family:
+      data.<feature>.<name>; example data.task.task."
+  title:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: What this is, in the product's words rather than the table's. A reader should learn what
+      the thing is before learning what columns it has.
+  state:
+    $ref: "urn:work:common:1#/$defs/state"
+  activity:
+    $ref: "urn:work:common:1#/$defs/activity"
+  fields:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    description: What the thing carries, one entry each. The list is the definition, so a field that exists
+      in the product and not here is a field nobody agreed to and a field here that does not exist is a
+      promise the product does not keep.
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - type
+        - required
+      properties:
+        name:
+          $ref: "urn:work:common:1#/$defs/fieldName"
+          description: The field's name as the product uses it.
+        type:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: Its type in the product's vocabulary - text, timestamp, integer - rather than in one
+            runtime's. A type only one language can read is not a shared definition.
+        required:
+          type: boolean
+          description: Whether the field must be present. It is stated on every field rather than implied by
+            omission, because "not mentioned" reads as optional to one person and as an oversight to
+            another.
+        default:
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+          description: What the field is when nobody supplies it. A default written here is part of the
+            definition; one that lives only in a migration is a behaviour nobody agreed to.
+        note:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: What a reader must understand about this field beyond its type - the values it takes,
+            what it means when it is absent, what it is the key for.
+  invariants:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/prose"
+    description: What is always true of this thing, whatever happens to it. It is required because the
+      fields alone describe what can be stored and the invariants describe what may not be, and a definition
+      with only the first accepts every corrupt state its types permit.
+  extends:
+    $ref: "urn:work:common:1#/$defs/recordId"
+    description: A base data record this one specialises, by id. The base's fields are inherited rather than
+      repeated, so this record does not become a second, drifting opinion about the base's shape.
+  adds:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    description: Only the fields the base does not already declare. It is a separate list from `fields` so
+      that a reader of a specialisation can see at a glance what this one adds rather than diffing two
+      records.
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - type
+        - required
+      properties:
+        name:
+          $ref: "urn:work:common:1#/$defs/fieldName"
+        type:
+          $ref: "urn:work:common:1#/$defs/prose"
+        required:
+          type: boolean
+        default:
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+        note:
+          $ref: "urn:work:common:1#/$defs/prose"
+  module:
+    oneOf:
+      - $ref: "urn:work:common:1#/$defs/prose"
+      - $ref: "urn:work:common:1#/$defs/proseList"
+    description: The module-root directory or directories holding the entity that realises this definition,
+      where one exists. It is a directory a reader would call the module's root, never an individual file.
+  stateMachine:
+    $ref: "urn:work:common:1#/$defs/stateMachine"
+  refs:
+    $ref: "urn:work:common:1#/$defs/refs"
+  dependsOn:
+    $ref: "urn:work:common:1#/$defs/dependsOn"
+  subscribes:
+    $ref: "urn:work:common:1#/$defs/subscribes"
+  requiresProof:
+    $ref: "urn:work:common:1#/$defs/requiresProof"
+  provenBy:
+    $ref: "urn:work:common:1#/$defs/provenBy"
+  evidence:
+    $ref: "urn:work:common:1#/$defs/slug"
+    description: The single evidence directory under this record's evidence/ folder, where somebody did go
+      and check the shape against the product. It is optional because this family is an authored claim.
+  blockedBy:
+    $ref: "urn:work:common:1#/$defs/blockedBy"
+  conflictsWith:
+    $ref: "urn:work:common:1#/$defs/conflictsWith"
+  blockers:
+    $ref: "urn:work:common:1#/$defs/blockers"
+  verificationSource:
+    $ref: "urn:work:common:1#/$defs/verificationSource"
+  because:
+    $ref: "urn:work:common:1#/$defs/because"
+  change:
+    $ref: "urn:work:common:1#/$defs/change"
+  extensions:
+    $ref: "urn:work:common:1#/$defs/extensions"
+dependentRequired:
+  adds:
+    - extends
+allOf:
+  - $ref: "urn:work:common:1#/$defs/leafIdentity"
+  - $ref: "urn:work:common:1#/$defs/authoredClaimMustSayWhy"

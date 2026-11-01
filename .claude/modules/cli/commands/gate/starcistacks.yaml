@@ -1,0 +1,18 @@
+group: gate
+verb: starcistacks
+owner: runtime
+summary: check a repository's stack declaration and custody layout
+impl: {script: scripts/gates/starcistacks.mjs}
+positional:
+  - {name: repo-root, required: true, variadic: false}
+flags:
+  - {name: new, type: boolean, summary: check a repository being created by this leg}
+exit:
+  "0": declaration and custody layout are clean
+  "1": repository is refused
+  "2": bad usage
+json: flag
+examples:
+  - starci gate starcistacks <repo-root>
+  - starci gate starcistacks <repo-root> --new --json
+editions: [full, lite]

@@ -1,0 +1,375 @@
+#!/usr/bin/env node
+// starci supervisor poll — chat-facing supervisor: one ledger digest per interval, forever.
+// Designed to run FOREGROUND inside a monitoring chat — the chat agent reads
+// this process's stdout between cycles and relays what changed. It is a pure
+// observer: reads the durable ledger + Orca terminal liveness, never writes,
+// never dispatches, never repairs (that is watchdog.mjs's lane).
+//
+//   starci supervisor poll --repo <ledger-owner>
+//       [--workflow <id>]...   default: every non-finished workflow
+//       [--interval-ms <ms>] [--stall-minutes <n>] [--once] [--json]
+//
+// The interval is --interval-ms, else supervisorSettings().pollIntervalMs (scripts/machine/home.mjs).
+//
+// Each cycle prints: new op reports since the last cycle, open asks with
+// their serving URLs, direction artifacts newer than the last cycle, kernel
+// terminal liveness, and the Orca tree findings
+// scripts/checks/check-orca-tree.mjs projects from the same ledger plus a
+// terminal listing (ORCA-TREE lines), and progress: STALLED / STALE-GATE /
+// GATE / STALE-WAIT / PEER-WAIT / STALE-PEER-WAIT lines from scripts/supervisor/stall.mjs (threshold
+// config.yaml supervisor.stallMinutes, or --stall-minutes), and one BLOCKING line per open job another
+// workflow waits on (scripts/kernel/waiter-priority.mjs), one DEPENDENCY line per cross-workflow finding
+// (scripts/kernel/dependency-graph.mjs: circular-wait, unowned-need, hub-blocker, duplicate-work, with the
+// scripts/supervisor/bridge.mjs action it owes), and one OWED line per open incident or
+// repeated failure only the supervisor moves (scripts/supervisor/owed.mjs):
+//   OWED <wf> <incident|pattern> [<kind>] age=<m>m <open|fixed-by <sha>?>: <summary>
+// First cycle prints
+// the current state as baseline.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { isMain } from '../lib/is-main.mjs';
+import { eachInOrder } from '../lib/in-order.mjs';
+import { probe as probeUrl } from '../api/http/probe.mjs';
+import { openLedger, ledgerFileFor } from '../../engine/db/ledger.mjs';
+import { terminalRead } from '../api/orca/terminal-read.mjs';
+import { terminalShow } from '../api/orca/terminal-show.mjs';
+import { terminalList } from '../api/orca/terminal-list.mjs';
+import { parseJsonOr } from '../lib/json.mjs';
+import { hhmmss } from '../lib/time.mjs';
+import { classifyAgentScreen } from '../lib/terminal-liveness.mjs';
+import { orcaTreeFindings, readTerminals, formatFinding, ledgerRuns } from './orca-tree.mjs';
+import { workerListAll } from '../machine/worker-list-all.mjs';
+import { stallFindings, stallMinutesOf } from './stall.mjs';
+import { blockingLines } from '../kernel/waiter-priority.mjs';
+import { dependencyGraph, findingLine } from '../kernel/dependency-graph.mjs';
+import { owedFindings } from './owed.mjs';
+import { supervisorSettings } from '../machine/home.mjs';
+import { opLabel, workflowNames } from '../lib/display-names.mjs';
+
+// The digest's first cycle has no previous cycle to diff against: it prints
+// this many trailing reports so the chat starts from a state, not a blank.
+const BASELINE_REPORTS = 8;
+
+const short = (wf) => wf.replace(/^wf-/, '').replace(/-[a-z0-9]{8}$/i, '');
+// A workflow as a person reads it: its display name with the short id after it (scripts/lib/display-names.mjs),
+// or the short id alone while it has no name of its own.
+const named = (names, id) => { const n = names.get(id); const s = short(id); return n && n !== id && n !== s ? `${n} (${s})` : s; };
+const ts = hhmmss;
+const mine = (wanted, workflowId) => !wanted.size || wanted.has(workflowId);
+
+// --- ledger projections -----------------------------------------------------
+export const workflows = (db, wanted = new Set()) =>
+  db.prepare("SELECT * FROM workflows WHERE phase != 'finished' AND archived_at IS NULL ORDER BY workflow_id").all()
+    .filter((w) => mine(wanted, w.workflow_id));
+
+// Filter in SQL, never after a LIMIT: a cycle that saw more than a page of
+// reports would otherwise drop the oldest of them and skip past their ids
+// forever.
+const reportsSince = (db, sinceId, wanted = new Set()) =>
+  db.prepare(`SELECT r.report_id,r.workflow_id,a.op_id,a.try_no AS attempt,r.outcome,r.created_at
+    FROM reports r JOIN op_attempts a ON a.attempt_id=r.attempt_id WHERE r.report_id > ? ORDER BY r.report_id`)
+    .all(sinceId)
+    .filter((r) => mine(wanted, r.workflow_id));
+
+// How long a form URL gets to answer before the digest calls it stale. The
+// probe is a courtesy to the owner, not a health check: a loopback form that
+// cannot answer in this window is not worth relaying either way.
+const PROBE_TIMEOUT_MS = 1500;
+
+// events.event_id is a random token; seq is the order. Latest means highest seq.
+const lastEvent = (db, kind, dispatchId) => db.prepare(
+  `SELECT seq, payload_json FROM events WHERE kind=?
+     AND json_extract(payload_json,'$.dispatchId')=? ORDER BY seq DESC LIMIT 1`).get(kind, dispatchId);
+
+/** The ask form at `url`: 'live' on a 2xx, else 'stale' (a redirect is not followed). The seam askLiveness and openAsks take. */
+const probeAsk = async (url, timeoutMs) => {
+  const r = await probeUrl(url, { timeoutMs, follow: 0 });
+  return r.state === 'answered' && r.status >= 200 && r.status < 300 ? 'live' : 'stale';
+};
+
+// An open ask's URL is worth relaying only when it still answers. The ledger
+// already knows when a form server gave up (scripts/kernel/ask-server.mjs
+// appends 'ask-serving-expired'), so a dead ask costs no network at all;
+// everything else is probed once per cycle. An ask that a replacement
+// retired ('ask-superseded') is not open and never reaches here.
+// An ask the kernel parked on Telegram (`ask-notified`) is served only when the
+// owner presses its "Generate URL" button: with no live form it is `on-demand`,
+// which is healthy — never relayed, never re-served.
+export const askLiveness = async (db, dispatchId, { timeoutMs = PROBE_TIMEOUT_MS, probe = probeAsk } = {}) => {
+  const notified = lastEvent(db, 'ask-notified', dispatchId);
+  const idle = (fallback) => (notified ? { url: null, liveness: 'on-demand' } : fallback);
+  const serving = lastEvent(db, 'ask-serving', dispatchId);
+  if (!serving) return idle({ url: null, liveness: 'unserved' });
+  const url = parseJsonOr(serving.payload_json)?.url ?? null;
+  const expired = lastEvent(db, 'ask-serving-expired', dispatchId);
+  if (expired && expired.seq > serving.seq) return idle({ url, liveness: 'dead' });
+  if (!url) return idle({ url: null, liveness: 'unserved' });
+  const liveness = await probe(url, timeoutMs);
+  return liveness === 'live' ? { url, liveness } : idle({ url, liveness });
+};
+
+export const openAsks = async (db, wanted = new Set(), { timeoutMs = PROBE_TIMEOUT_MS, probe = probeAsk } = {}) => {
+  const asks = db.prepare(
+    `SELECT r.workflow_id, r.dispatch_id, r.report_id, r.created_at FROM reports r
+      WHERE r.outcome='ask' AND NOT EXISTS (
+        SELECT 1 FROM events e WHERE e.workflow_id=r.workflow_id
+          AND e.kind='ask-answered'
+          AND json_extract(e.payload_json,'$.dispatchId')=r.dispatch_id)
+      -- a supersede closes an ask unless it was parked again afterwards, served
+      -- or notified (a wrongly retired question the kernel re-parks is open again)
+      AND NOT EXISTS (
+        SELECT 1 FROM events s WHERE s.workflow_id=r.workflow_id AND s.kind='ask-superseded'
+          AND json_extract(s.payload_json,'$.dispatchId')=r.dispatch_id
+          AND NOT EXISTS (SELECT 1 FROM events v WHERE v.workflow_id=r.workflow_id AND v.kind IN ('ask-serving','ask-notified')
+            AND json_extract(v.payload_json,'$.dispatchId')=r.dispatch_id AND v.seq > s.seq))
+      ORDER BY r.report_id DESC`).all();
+  const seen = new Set(); const out = [];
+  await eachInOrder(asks, async (a) => {
+    if (seen.has(a.dispatch_id) || !mine(wanted, a.workflow_id)) return;
+    seen.add(a.dispatch_id);
+    out.push({ ...a, ...(await askLiveness(db, a.dispatch_id, { timeoutMs, probe })) });
+  });
+  return out;
+};
+
+export const kernelState = (db, wf) => {
+  const sig = db.prepare("SELECT value_json FROM signals WHERE scope='kernel' AND key=?").get(wf);
+  const terminal = parseJsonOr(sig?.value_json)?.terminal;
+  if (!terminal) return { terminal: null, state: 'no-signal' };
+  try {
+    const sh = terminalShow({ terminal });
+    if (!sh?.ok || sh.connected !== true) return { terminal, state: 'dead' };
+    const rd = terminalRead({ terminal, screen: true });
+    return { terminal, state: rd?.ok ? classifyAgentScreen(rd.screen).state : 'unknown' };
+  } catch { return { terminal, state: 'unreachable' }; }
+};
+
+function workersOf(db, terminals, workers) {
+  const workerRows = workers ?? [];
+  if (workers === undefined && terminals === undefined) {
+    for (const run of ledgerRuns(db)) {
+      let listed;
+      try { listed = workerListAll({ run }); } catch (e) { listed = { ok: false, error: String(e?.message ?? e) }; }
+      if (!listed?.ok) return { ok: false, reason: `WORKER_LIST_UNAVAILABLE: worker-list --run ${run}: ${listed?.error ?? 'no listing'}` };
+      workerRows.push(...listed.workers);
+    }
+  }
+  return { ok: true, workerRows };
+}
+
+// The Orca tree against the ledger, once per cycle:
+// scripts/checks/check-orca-tree.mjs owns the codes and the projection, this
+// only supplies the listings (the terminals, and Orca's workers of the ledger's Runs). A digest that reads kernel liveness is already
+// talking to the host, so the listing costs one more read — but a ledger with
+// no kernel signal at all still makes no host call, because there is nothing
+// of ours for Orca to be holding.
+export const orcaTree = (db, { terminals = undefined, workers = undefined, repo = null } = {}) => {
+  const anyKernel = db.prepare(
+    "SELECT COUNT(*) n FROM signals s JOIN workflows w ON w.workflow_id=s.key WHERE s.scope='kernel' AND w.phase!='finished'").get().n;
+  if (terminals === undefined && !anyKernel) return { listed: false, reason: 'no kernel signal', findings: [] };
+  let listing = terminals;
+  if (listing === undefined) {
+    try { listing = terminalList({}); } catch (e) { return { listed: false, reason: String(e?.message ?? e), findings: [] }; }
+  }
+  const rows = readTerminals(listing);
+  if (!rows) return { listed: false, reason: listing?.error ?? 'terminal-list returned no listing', findings: [] };
+  // Orca's workers of this ledger's Runs, Run by Run; a listing handed in is an offline projection with the workers it names.
+  const workerState = workersOf(db, terminals, workers);
+  if (!workerState.ok) return { listed: false, reason: workerState.reason, findings: [] };
+  return { listed: true, count: rows.length, findings: orcaTreeFindings(db, rows, { repo, workers: workerState.workerRows }) };
+};
+
+// Newest direction/artifact images under .starciwork, bounded walk.
+const addArtifactEntry = (entry, dir, sinceMs, queue, found) => {
+  const p = path.join(dir, entry.name);
+  if (entry.isDirectory()) {
+    if (!entry.name.startsWith('.') && entry.name !== 'kernel-strays') { queue.push(p); }
+    return;
+  }
+  if (!/\.(png|jpe?g|webp)$/i.test(entry.name)) return;
+  try {
+    const st = fs.statSync(p);
+    if (st.mtimeMs > sinceMs) found.push({ path: p, mtime: st.mtimeMs });
+  } catch { /* skip */ }
+};
+
+const newArtifacts = (repo, sinceMs) => {
+  const root = path.join(repo, '.starciwork');
+  const found = [];
+  const queue = [root]; let head = 0, visited = 0;
+  while (head < queue.length && visited++ < 6000) {
+    const dir = queue[head++];
+    let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of ents) { addArtifactEntry(e, dir, sinceMs, queue, found); }
+  }
+  return found.toSorted((a, b) => b.mtime - a.mtime).slice(0, 12);
+};
+
+// --- health the supervisor must raise on its own -------------------------------
+// All eight watchdogs were dead and five Codex op launches had failed before the
+// owner asked why nothing moved: the supervisor saw neither because nothing it
+// polls said so. Each cycle now reports runtime-shaped open incidents and a streak of refused agent launches
+// (a dead Kernel seat is the reconciler Host controller's: there are no per-workflow watchdog processes).
+export const RUNTIME_INCIDENT = /^\[(?:source-runtime-defect|supervisor-gate|runtime-[^\]]*|environment|provider-launch-failure|op-boundary-drift|worker-prompt-stall|settled-terminal[^\]]*)\]/;
+const LAUNCH_STREAK = 3;
+const LAUNCH_WINDOW_MS = 3600000;
+
+
+/**
+ * Kernel jobs still dispatchable whose workflow is finished or archived: a seat nothing releases
+ * (a ledger kept kernel-wf-<product>-ang-stales-refactor-mu9nfaxf 'running' days after its finish).
+ * `starci kernel reconcile --orphan-kernel-jobs` settles them; the host controller boot phase (scripts/reconciler/boot.mjs --restart) runs it.
+ */
+export const orphanKernelJobs = (db) => db.prepare(`SELECT j.job_id, j.workflow_id, j.status, j.worker_id, w.phase, w.archived_at
+    FROM jobs j JOIN workflows w ON w.workflow_id=j.workflow_id
+   WHERE j.kind='kernel' AND j.status IN ('queued','leased','running','answering') AND (w.phase='finished' OR w.archived_at IS NOT NULL)
+   ORDER BY j.job_id`).all();
+
+/** Open incidents whose kind says the runtime, not the product, is broken. */
+const runtimeIncidents = (db, wanted = new Set()) => db.prepare("SELECT incident_id, workflow_id, op_id, last_progress FROM incidents WHERE status='open' ORDER BY updated_at").all()
+  .filter((i) => mine(wanted, i.workflow_id) && RUNTIME_INCIDENT.test(i.last_progress ?? ''));
+
+/** Providers whose agent launches were refused LAUNCH_STREAK+ times inside the window: [{provider, count, lastStep, lastError}]. */
+const launchStreaks = (db, wanted = new Set(), { now = Date.now() } = {}) => {
+  const rows = db.prepare("SELECT workflow_id, payload_json, created_at FROM events WHERE kind='dispatch-rejected' AND created_at > ? ORDER BY seq").all(now - LAUNCH_WINDOW_MS)
+    .filter((r) => mine(wanted, r.workflow_id));
+  const by = new Map();
+  for (const r of rows) {
+    const p = parseJsonOr(r.payload_json);
+    const key = p.provider ?? p.model ?? 'unknown';
+    const e = by.get(key) ?? { provider: key, count: 0 };
+    by.set(key, { ...e, count: e.count + 1, lastStep: p.step ?? null, lastError: String(p.error ?? p.signal ?? '').slice(0, 140) });
+  }
+  return [...by.values()].filter((e) => e.count >= LAUNCH_STREAK);
+};
+
+// --- the cycle ---------------------------------------------------------------
+function appendCycleStatus(lines, db, wfs, names, repo, wanted) {
+  for (const w of wfs) {
+    const k = kernelState(db, w.workflow_id);
+    lines.push(`${named(names, w.workflow_id)} [${w.phase}] kernel ${k.state} ${k.terminal ?? ''}`);
+  }
+  const running = new Set(wfs.filter((w) => w.phase === 'running').map((w) => w.workflow_id));
+  for (const i of runtimeIncidents(db, wanted).filter((x) => running.has(x.workflow_id))) lines.push(`  RUNTIME ${named(names, i.workflow_id)} ${i.incident_id} ${String(i.last_progress).replace(/\s+/g, ' ').slice(0, 200)}`);
+  for (const o of orphanKernelJobs(db)) lines.push(`  ORPHAN-KERNEL-JOB ${o.job_id} (${o.status}; workflow ${o.phase}${o.archived_at ? ', archived' : ''}): run starci kernel reconcile --orphan-kernel-jobs --repo ${repo}`);
+  for (const l of launchStreaks(db, wanted)) lines.push(`  LAUNCH-FAIL ${l.provider}: ${l.count} refused launches in the last hour (last ${l.lastStep}: ${l.lastError})`);
+}
+
+// `scope` is what the stall and owed projections read ({ repo, wanted, stallMinutes, verdicts }); `projections` is the pair { stall, owed } that judges it.
+function appendProgressChecks(lines, db, scope, projections) {
+  const { repo, wanted, stallMinutes, verdicts } = scope;
+  const { stall, owed } = projections;
+  let stalls = [];
+  try { stalls = stall(db, { repo, wanted, stallMinutes, verdicts }); } catch (e) { lines.push(`  stall check failed: ${String(e?.message ?? e).slice(0, 160)}`); }
+  for (const f of stalls) lines.push(`  ${f.line}`);
+  let owedItems = [];
+  try { owedItems = owed(db, { repo, wanted, stallMinutes, verdicts }); } catch (e) { lines.push(`  owed check failed: ${String(e?.message ?? e).slice(0, 160)}`); }
+  for (const i of owedItems) lines.push(`  ${i.line}`);
+  try { for (const line of blockingLines(db, { wanted })) lines.push(`  ${line}`); } catch (e) { lines.push(`  blocking check failed: ${String(e?.message ?? e).slice(0, 160)}`); }
+  try {
+    for (const f of dependencyGraph(db, { repo, light: true }).findings.filter((x) => !wanted.size || x.workflows.some((wf) => wanted.has(wf)))) lines.push(`  DEPENDENCY ${findingLine(f).slice(0, 400)}`);
+  } catch (e) { lines.push(`  dependency check failed: ${String(e?.message ?? e).slice(0, 160)}`); }
+  return { stalls, owedItems };
+}
+
+function appendTreeFindings(lines, tree, wfs, wanted, names) {
+  const outside = new Map();
+  for (const f of tree.findings) {
+    if (f.workflowId && !mine(wanted, f.workflowId)) continue;
+    if (f.code === 'TASK_OUTSIDE_RUN') { outside.set(f.workflowId, (outside.get(f.workflowId) ?? 0) + 1); continue; }
+    lines.push(`  ORCA-TREE ${formatFinding(f)}`);
+  }
+  const live = new Set(wfs.map((w) => w.workflow_id));
+  let finishedLeaks = 0;
+  for (const [wf, n] of outside) {
+    if (live.has(wf)) lines.push(`  ORCA-TREE TASK_OUTSIDE_RUN ${named(names, wf)}: ${n} open Task(s) in a superseded run`);
+    else finishedLeaks += n;
+  }
+  if (finishedLeaks) lines.push(`  ORCA-TREE ${finishedLeaks} open Task(s) left by finished workflows`);
+  if (!tree.listed && wfs.length) lines.push(`  orca tree unchecked (${tree.reason})`);
+}
+
+async function appendAskLines(lines, db, wanted, timeoutMs, names) {
+  const asks = await openAsks(db, wanted, { timeoutMs });
+  for (const a of asks) lines.push(`  ASK-OPEN ${named(names, a.workflow_id)} ${a.dispatch_id} [${a.liveness}] ${a.url ?? '(not serving)'}`);
+  return asks;
+}
+
+export const cycle = async (db, { repo, wanted = new Set(), state, timeoutMs = PROBE_TIMEOUT_MS, stall = stallFindings, stallMinutes = stallMinutesOf(),
+  owed = (ledgerDb, opts) => owedFindings(ledgerDb, opts).owed }) => {
+  const lines = [`===== poll ${ts(Date.now())} =====`];
+  const wfs = workflows(db, wanted);
+  const names = workflowNames(db);
+  appendCycleStatus(lines, db, wfs, names, repo, wanted);
+  // Progress, not liveness (scripts/supervisor/stall.mjs): a live kernel and a
+  // live watchdog idle-waiting on a gate whose reason is gone read healthy above.
+  // The gate and peer-wait verdicts of this cycle, judged once and shared by the stall and owed projections.
+  const verdicts = new Map();
+  const { stalls, owedItems } = appendProgressChecks(lines, db, { repo, wanted, stallMinutes, verdicts }, { stall, owed });
+  const tree = orcaTree(db, { repo });
+  // TASK_OUTSIDE_RUN is a leak count, not an action per job: one line per
+  // workflow; workflows that already finished are summarized, not listed.
+  appendTreeFindings(lines, tree, wfs, wanted, names);
+  const reps = reportsSince(db, state.first ? state.lastReportId - BASELINE_REPORTS : state.lastReportId, wanted);
+  for (const r of reps) lines.push(`  report ${named(names, r.workflow_id)} ${opLabel(r.op_id)} (${r.op_id} a${r.attempt}) -> ${r.outcome} @${ts(r.created_at)}`);
+  if (reps.length) state.lastReportId = Math.max(state.lastReportId, ...reps.map((r) => r.report_id));
+  const asks = await appendAskLines(lines, db, wanted, timeoutMs, names);
+  const arts = newArtifacts(repo, state.lastArtifacts);
+  for (const a of arts) lines.push(`  artifact+ ${path.relative(repo, a.path)}`);
+  if (arts.length) state.lastArtifacts = Date.now();
+  state.first = false;
+  return { text: lines.join('\n'), workflows: wfs, asks, reports: reps, tree, stalls, owed: owedItems };
+};
+
+const main = () => {
+  const argv = process.argv.slice(2);
+  const valuesOf = (name) => {
+    const out = [];
+    for (let i = 0; i < argv.length; i++) {
+      if (argv[i] === `--${name}`) { out.push(argv[++i]); }
+    }
+    return out;
+  };
+  const valueOf = (name, d = null) => valuesOf(name).pop() ?? d;
+  const has = (n) => argv.includes(`--${n}`);
+
+  const repo = path.resolve(valueOf('repo') ?? '.');
+  const intervalMs = Number(valueOf('interval-ms', null) ?? supervisorSettings().pollIntervalMs);
+  const once = has('once');
+  const asJson = has('json');
+  const wanted = new Set(valuesOf('workflow'));
+  const stallMinutes = Number(valueOf('stall-minutes', null)) || stallMinutesOf();
+
+  const ledger = openLedger({ file: ledgerFileFor(repo) });
+  const db = ledger.db;
+  const state = {
+    lastReportId: db.prepare('SELECT COALESCE(MAX(report_id),0) m FROM reports').get().m,
+    lastArtifacts: Date.now(),
+    first: true,
+  };
+  const run = async () => {
+    const out = await cycle(db, { repo, wanted, state, stallMinutes });
+    if (asJson) console.log(JSON.stringify({ at: Date.now(), workflows: out.workflows.map((w) => w.workflow_id), asks: out.asks, orcaTree: out.tree, stalls: out.stalls, owed: out.owed }, null, 0));
+    console.log(out.text);
+  };
+  return run().then(() => {
+    if (once) { ledger.close(); return; }
+    const stop = runEvery(run, intervalMs);
+    process.on('SIGINT', () => { stop(); process.exit(0); });
+  });
+};
+
+/** Run async `run` every `intervalMs` after the previous run finished, so two cycles never overlap. Returns stop(). */
+function runEvery(run, intervalMs) {
+  let timer = null;
+  let stopped = false;
+  const next = () => { if (!stopped) timer = setTimeout(() => Promise.resolve().then(run).finally(next), intervalMs); };
+  next();
+  return () => { stopped = true; clearTimeout(timer); };
+}
+
+if (isMain(import.meta.url)) {
+  try { await main(); }
+  catch (error) { console.error(JSON.stringify({ ok: false, error: String(error?.message ?? error) })); process.exitCode = 1; }
+}

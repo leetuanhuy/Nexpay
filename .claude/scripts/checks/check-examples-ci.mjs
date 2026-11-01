@@ -1,0 +1,325 @@
+#!/usr/bin/env node
+// examples-ci.mjs - the example apps of this repository in its own CI, derived, never listed by hand.
+//
+// GitHub runs only the repository-root workflows and Codecov reads one root config, so an example app's own ci.yml and
+// codecov.yml (the app-repository form `starci app sync` renders) never run here. Lite apps run the same unit project with coverage
+// and carry a Codecov flag like full ones; only the e2e step is skipped for them (no e2e world, owner ruling 2026-10-12). The root carries:
+//   .github/workflows/examples.yml  one workflow whose job matrix is THIS module's `--matrix` output (every examples/*
+//                                   folder whose hfs.json is of kind app): install, typecheck, lint, unit with coverage,
+//                                   the Codecov upload under the app's flag, the front-end build and the Sonar gate on
+//                                   push and pull_request; integration and e2e in every run.
+//   codecov.yml                     one flag per example app, and one component per service app plus platform, rendered here from the
+//                                   same coverage scope as the app's own codecov.yml, be/jest.config.js and sonar.coverage.exclusions (the
+//                                   slot manifest's \`coverage\` field, derived once by scripts/hfs/coverage-scope.mjs), each held at 100
+//                                   on the project and the patch.
+//
+//                                   It also carries the `runtime` flag (the runtime's own first-party source, uploaded by .github/workflows/ci.yml, informational
+//                                   until a measured baseline exists), and the root sonar-project.properties of the runtime is rendered here from the same list
+//                                   (scripts/hfs/runtime-coverage-scope.mjs); it is the SonarCloud project definition, the organization and key come from repository variables.
+//
+//   starci runtime check --only examples-ci              check: the workflow derives its matrix from --matrix, no other root
+//                                                  workflow runs an example on its own, codecov.yml is its render (exit 1)
+//   starci runtime check --only examples-ci -- --matrix   the matrix as JSON (["<app>"]) for $GITHUB_OUTPUT
+//   starci runtime check --only examples-ci -- --images   every image of every example as JSON ([{app, name, file}], one per be and fe app of hfs.json); lite includes authored front-end Dockerfiles
+//   starci runtime check --only examples-ci -- --write    rewrite codecov.yml and each example's own edition-matched quality files (codecov.yml, sonar-project.properties, be/jest.config.js) from the render
+//
+// The quality files of each example (codecov.yml, sonar-project.properties, be/jest.config.js) are rendered here from the SOURCE slot manifest of this
+// repository, the one the root codecov.yml flags and components already read, so the root flag, the app's jest scope, coverage paths and
+// sonar.coverage.exclusions are one scope. The build
+// of every image of every example (never a push) is the `images` job, whose matrix is the --images output.
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { parseYaml } from '../../engine/yaml.mjs';
+import { appSource, componentsYaml, renderTargets } from '../../packages/hfs/sync/index.mjs';
+import { codecovPaths, coverageComponents, sonarCoverageExclusions } from '../hfs/coverage-scope.mjs';
+import { loadSlotManifest } from '../hfs/slots.mjs';
+import { renderRuntimeSonar } from '../hfs/runtime-coverage-scope.mjs';
+import { declaredSonarKeys, repositoryName, DECLARATION } from '../../packages/hfs/sync/sonar-key.mjs';
+import { dockerfilePath } from '../hfs/rules/docker.mjs';
+import { discoverExampleApps, discoverBrowserExampleApps } from '../lib/example-refs.mjs';
+import { isMain } from '../lib/is-main.mjs';
+import { readTextFile } from '../lib/read-text.mjs';
+import { isFile } from '../lib/fs-kind.mjs';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+export const WORKFLOW = '.github/workflows/examples.yml';
+const CODECOV = 'codecov.yml';
+/** The root Sonar project of the runtime itself, rendered from scripts/hfs/runtime-coverage-scope.mjs. */
+const RUNTIME_SONAR = 'sonar-project.properties';
+/** The step that prints the matrix, and the expression every matrix job reads it through. */
+const MATRIX_COMMAND = 'starci runtime check --only examples-ci -- --matrix';
+const checkoutCommand = (command) => command.replace(/^starci\s+/, 'npm run starci --silent -- ');
+const runsCommand = (step, command) => [command, checkoutCommand(command)].some((candidate) => String(step?.run ?? '').includes(candidate));
+const MATRIX_JOB = 'apps';
+const MATRIX_EXPRESSION = `\${{ fromJSON(needs.${MATRIX_JOB}.outputs.apps) }}`;
+/** The browser job runs the apps that declare a browser journey: its matrix is the --browsers output, which the lister exposes as outputs.browsers. */
+const BROWSERS_COMMAND = 'starci runtime check --only examples-ci -- --browsers';
+const BROWSER_JOB = 'browser';
+const BROWSER_EXPRESSION = `\${{ fromJSON(needs.${MATRIX_JOB}.outputs.browsers) }}`;
+/** The matrix expression a matrix job reads: the browser apps for the browser job, every app for every other job. */
+const matrixExpressionOf = (id) => (id === BROWSER_JOB ? BROWSER_EXPRESSION : MATRIX_EXPRESSION);
+
+/** The example apps: every examples/<name>/hfs.json of kind app, sorted by name. */
+export function exampleApps(root = ROOT) {
+  return discoverExampleApps(root);
+}
+
+/** The example apps with a browser journey (hfs.json `browser: true`), sorted by name. */
+function exampleBrowserApps(root = ROOT) {
+  return discoverBrowserExampleApps(root);
+}
+
+/** Whether an example declares an app whose generated contract includes unit tests and coverage: every edition does (a lite back end keeps full's unit run, owner ruling 2026-10-12). */
+function exampleHasTests(app, root = ROOT) {
+  try { return JSON.parse(fs.readFileSync(path.join(root, 'examples', app, 'hfs.json'), 'utf8')).kind === 'app'; }
+  catch { return false; }
+}
+
+/** Example apps that own the test/coverage contract: every example app, lite included. */
+const coverageExampleApps = (root = ROOT) => exampleApps(root).filter(app => exampleHasTests(app, root));
+
+/** The coverage paths of one example app from the repository root: the measured roots of its be side under examples/<app>/. */
+function appCoverageScope(app, root = ROOT) {
+  return codecovPaths(loadSlotManifest()).map((glob) => `examples/${app}/${glob}`);
+}
+
+/** The same coverage complement as the app's Sonar configuration, prefixed for the repository's Codecov upload. */
+function appCoverageExclusions(app, root = ROOT) {
+  const hfs = JSON.parse(fs.readFileSync(path.join(root, 'examples', app, 'hfs.json'), 'utf8'));
+  const providers = (hfs.sides.be.connections ?? []).map(connection => connection.provider);
+  return sonarCoverageExclusions(loadSlotManifest(), providers).map(glob => `examples/${app}/${glob}`);
+}
+
+/** The Codecov components of one example app, [{ id, name, paths }], ids and paths from the repository root (`<app>-<service>`, `<app>-platform`). */
+function appComponents(app, root = ROOT) {
+  const appRoot = path.join(root, 'examples', app);
+  const hfs = JSON.parse(fs.readFileSync(path.join(appRoot, 'hfs.json'), 'utf8'));
+  return coverageComponents(loadSlotManifest(), { ...appSource(appRoot), apps: hfs.sides.be.apps })
+    .map((component) => ({ id: `${app}-${component.id}`, name: `${app}-${component.name}`, paths: component.paths.map((glob) => `examples/${app}/${glob}`) }));
+}
+
+/** The Sonar project key an example declares in its stack declaration, or its project name. */
+function sonarKeyOf(appRoot, project) {
+  try {
+    const keys = declaredSonarKeys(parseYaml(fs.readFileSync(path.join(appRoot, DECLARATION), 'utf8')), repositoryName(appRoot));
+    if (keys.length === 1) return keys[0];
+  } catch { /* no declaration: the project name stands in */ }
+  return project;
+}
+
+/** The quality files of an example rendered from the source slot manifest: [{ path, content, mode, hash }] (codecov.yml, sonar-project.properties, be/jest.config.js). */
+function appQualityTargets(app, root = ROOT) {
+  const appRoot = path.join(root, 'examples', app);
+  const hfs = JSON.parse(fs.readFileSync(path.join(appRoot, 'hfs.json'), 'utf8'));
+  const preset = createRequire(import.meta.url)(path.join(root, 'packages', 'jest-preset', 'index.cjs'));
+  const presets = { sonarExclusions: preset.sonarExclusions() };
+  return renderTargets(hfs, presets, { sonarKey: sonarKeyOf(appRoot, hfs.project), manifest: loadSlotManifest(), source: appSource(appRoot) }).filter((target) => APP_QUALITY_FILES.includes(target.path));
+}
+const APP_QUALITY_FILES = Object.freeze(['codecov.yml', 'sonar-project.properties', 'be/jest.config.js']);
+
+/** Every declared app image: be and full fe are required; lite fe joins when its optional Dockerfile exists. */
+function exampleImages(root = ROOT) {
+  return exampleApps(root).flatMap((app) => {
+    const appRoot = path.join(root, 'examples', app);
+    const declaration = JSON.parse(fs.readFileSync(path.join(appRoot, 'hfs.json'), 'utf8'));
+    const sides = declaration.sides ?? {};
+    return ['be', 'fe'].flatMap((side) => (sides[side]?.apps ?? [])
+      .map((entry) => ({ app, name: entry.name, file: dockerfilePath(side, entry.name) }))
+      .filter((image) => side === 'be' || declaration.edition !== 'lite' || isFile(path.join(appRoot, image.file), { followLinks: false })));
+  });
+}
+const IMAGES_COMMAND = 'starci runtime check --only examples-ci -- --images';
+const IMAGES_JOB = 'images';
+
+/** The root codecov.yml: one flag per example app over its measured roots and one component per service app plus platform, project and patch at 100 per flag and component. */
+function renderCodecov(root = ROOT) {
+  const flags = coverageExampleApps(root).map((app) => [`    - name: ${app}`, '      paths:', ...appCoverageScope(app, root).map((glob) => `        - ${JSON.stringify(glob)}`)].join('\n'));
+  const components = coverageExampleApps(root).flatMap((app) => appComponents(app, root));
+  const exampleFlags = coverageExampleApps(root).map((app) => `          - ${app}`).join('\n');
+  const exclusions = coverageExampleApps(root).flatMap((app) => appCoverageExclusions(app, root)).map(glob => `  - ${JSON.stringify(glob)}`).join('\n');
+  return `# Generated by scripts/checks/check-examples-ci.mjs --write. Do not edit: npm run check fails on any difference.
+# One flag per example app (both editions run the unit project with coverage), uploaded by .github/workflows/examples.yml. The paths are the app's coverage
+# scope (the logic of be/src/modules/**: the slot manifest's \`coverage\` field, derived once by scripts/hfs/coverage-scope.mjs, the same scope the
+# app's own codecov.yml, be/jest.config.js and sonar.coverage.exclusions render); every flag is held at 100 on the project and on the patch,
+# and so is every component (one per service app of each example, plus its platform). The runtime has no flag: it has no specs of its own
+# (owner ruling no-runtime-specs, 2026-10-17), so nothing of it is measured.
+codecov:
+  require_ci_to_pass: true
+coverage:
+  status:
+    project:
+      default:
+        target: 100%
+        threshold: 0%
+        flags:
+${exampleFlags}
+    patch:
+      default:
+        target: 100%
+        threshold: 0%
+        flags:
+${exampleFlags}
+flag_management:
+  default_rules:
+    carryforward: false
+    statuses:
+      - type: project
+        target: 100%
+        threshold: 0%
+      - type: patch
+        target: 100%
+        threshold: 0%
+  individual_flags:
+${flags.join('\n')}
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: 100%
+        threshold: 0%
+      - type: patch
+        target: 100%
+        threshold: 0%
+  individual_components:
+${componentsYaml(components)}
+ignore:
+${exclusions}
+`;
+}
+
+const read = readTextFile;
+
+/** The workflow findings: the derived matrix contract, the dispatch-only stack layers, and no hard-coded example path. */
+const matrixJobFindings = (matrixJobs, add) => {
+  for (const [id, job] of matrixJobs) {
+    const expression = matrixExpressionOf(id);
+    if (String(job.strategy.matrix.app ?? '') !== expression || Object.keys(job.strategy.matrix).length !== 1)
+      add('EXAMPLES_CI_MATRIX_NOT_DERIVED', `${WORKFLOW}#jobs.${id}`, `the matrix must be exactly app: ${expression} (never a hand-written list)`);
+    if (![job.needs].flat().includes(MATRIX_JOB)) add('EXAMPLES_CI_MATRIX_NOT_DERIVED', `${WORKFLOW}#jobs.${id}`, `needs must include ${MATRIX_JOB}`);
+  }
+};
+
+const stackLayerFindings = (jobs, add) => {
+  for (const [id, job] of Object.entries(jobs)) {
+    for (const step of job?.steps ?? []) {
+      if (/\btest:(integration|e2e|contract)\b/.test(String(step.run ?? '')) && /\bworkflow_dispatch\b/.test(String(step.if ?? '')))
+        add('EXAMPLES_CI_STACK_LAYER_AUTOMATIC', `${WORKFLOW}#jobs.${id}`, `the step "${step.name ?? step.run}" starts the docker stack and must run in every run, not only on workflow_dispatch`);
+    }
+    if (/\bworkflow_dispatch\b/.test(String(job?.if ?? ''))) add('EXAMPLES_CI_STACK_LAYER_AUTOMATIC', `${WORKFLOW}#jobs.${id}`, `the job ${id} is gated on workflow_dispatch: a layer that only a person starts is never proven`);
+  }
+};
+
+const hardcodedAppFindings = (apps, text, add) => {
+  for (const app of apps) if (new RegExp(String.raw`examples/${app}\b`).test(text)) add('EXAMPLES_CI_HARDCODED', WORKFLOW, `the workflow names examples/${app}: every app is reached through the matrix only`);
+};
+
+/** The lister job's start-up: the generated runtime copies exist before the CLI runs, and no listing command sits inside an echo (its failure would be swallowed into an empty matrix). */
+const SYNC_COMMAND = 'release sync-runtime';
+const SWALLOWING_ECHO = /echo\s+"[^"\n]*\$\(/;
+const listerFindings = (lister, add) => {
+  const steps = lister?.steps ?? [];
+  const firstListing = steps.findIndex((step) => [MATRIX_COMMAND, IMAGES_COMMAND, BROWSERS_COMMAND].some((command) => runsCommand(step, command)));
+  const syncAt = steps.findIndex((step) => String(step?.run ?? '').includes(SYNC_COMMAND));
+  if (firstListing >= 0 && (syncAt < 0 || syncAt > firstListing))
+    add('EXAMPLES_CI_LISTER_UNSAFE', `${WORKFLOW}#jobs.${MATRIX_JOB}`, `job ${MATRIX_JOB} must run \`starci ${SYNC_COMMAND}\` before the listing steps: packages/hfs/runtime is generated and untracked, so a fresh checkout cannot start the CLI without it`);
+  if (steps.some((step) => SWALLOWING_ECHO.test(String(step?.run ?? ''))))
+    add('EXAMPLES_CI_LISTER_UNSAFE', `${WORKFLOW}#jobs.${MATRIX_JOB}`, 'a listing step must assign the command output to a variable first (x=$(...)), not echo "$(...)": a failing command inside echo is swallowed and the matrix comes out empty');
+};
+
+const workflowFindings = (doc, text, apps, add) => {
+  const jobs = doc.jobs ?? {};
+  const lister = jobs[MATRIX_JOB];
+  listerFindings(lister, add);
+  if (!lister || !(lister.steps ?? []).some((step) => runsCommand(step, MATRIX_COMMAND)) || !String(lister.outputs?.apps ?? '').includes('steps.'))
+    add('EXAMPLES_CI_MATRIX_NOT_DERIVED', WORKFLOW, `job ${MATRIX_JOB} must run \`${MATRIX_COMMAND}\` and expose its output as outputs.apps`);
+  const listsBrowsers = (lister?.steps ?? []).some((step) => runsCommand(step, BROWSERS_COMMAND)) && String(lister?.outputs?.browsers ?? '').includes('steps.');
+  if (jobs[BROWSER_JOB] && !listsBrowsers)
+    add('EXAMPLES_CI_MATRIX_NOT_DERIVED', WORKFLOW, `job ${MATRIX_JOB} must run \`${BROWSERS_COMMAND}\` and expose its output as outputs.browsers, the matrix of job ${BROWSER_JOB}`);
+  const matrixJobs = Object.entries(jobs).filter(([id, job]) => id !== IMAGES_JOB && job?.strategy?.matrix);
+  if (!matrixJobs.length) add('EXAMPLES_CI_MATRIX_NOT_DERIVED', WORKFLOW, 'no job runs the example apps as a matrix');
+  matrixJobFindings(matrixJobs, add);
+  // Integration, e2e and contract (the docker-stack layers) run in every run, never only on workflow_dispatch.
+  stackLayerFindings(jobs, add);
+  if (!Object.hasOwn(doc.on ?? {}, 'workflow_dispatch')) add('EXAMPLES_CI_NO_MANUAL_TRIGGER', WORKFLOW, 'the workflow needs a workflow_dispatch trigger to run the same proof on demand');
+  hardcodedAppFindings(apps, text, add);
+};
+
+/** The stray-workflow findings: no other root workflow runs an example app by itself (the folded per-example workflows are gone, and stay gone). */
+const strayWorkflowFindings = (root, apps, add) => {
+  const workflows = path.join(root, '.github', 'workflows');
+  let files = [];
+  try { files = fs.readdirSync(workflows).filter((name) => /\.ya?ml$/.test(name)); } catch { /* no workflows */ }
+  for (const name of files) {
+    const rel = `.github/workflows/${name}`;
+    if (rel === WORKFLOW) continue;
+    const body = read(root, rel) ?? '';
+    for (const app of apps) if (new RegExp(String.raw`examples/${app}\b`).test(body)) add('EXAMPLES_CI_STRAY_WORKFLOW', rel, `runs examples/${app} outside ${WORKFLOW}; fold it into the examples matrix`);
+  }
+};
+
+/** The images-job findings: its matrix is the --images output, it builds and never pushes. */
+const imagesJobFindings = (doc, add) => {
+  const images = doc.jobs?.[IMAGES_JOB];
+  const steps = images?.steps ?? [];
+  if (!images || !steps.some((step) => runsCommand(step, IMAGES_COMMAND)) && !(doc.jobs?.[MATRIX_JOB]?.steps ?? []).some((step) => runsCommand(step, IMAGES_COMMAND)))
+    add('EXAMPLES_CI_IMAGES_NOT_DERIVED', WORKFLOW, `a job ${IMAGES_JOB} must build every image of every example from the output of \`${IMAGES_COMMAND}\` (never a hand-written list)`);
+  else if (!String(images.strategy?.matrix?.include ?? '').includes('fromJSON(needs.') || steps.some((step) => String(step.with?.push) === 'true' || /docker push|--push/.test(String(step.run ?? ''))))
+    add('EXAMPLES_CI_IMAGES_NOT_DERIVED', `${WORKFLOW}#jobs.${IMAGES_JOB}`, 'the images matrix must be include: fromJSON of the derived output, and the job never pushes an image');
+};
+
+/** The drift findings: the examples' own quality files are the render from the source preset; the runtime's Sonar project and codecov.yml are the render of the one coverage list. */
+const driftFindings = (root, apps, add) => {
+  for (const app of apps) for (const target of appQualityTargets(app, root)) {
+    const file = `examples/${app}/${target.path}`;
+    const have = read(root, file);
+    if (have === null || have.replaceAll('\r\n', '\n') !== target.content) add('EXAMPLES_CI_APP_QUALITY_DRIFT', file, `${file} differs from its render from the source jest preset: run starci runtime check --only examples-ci -- --write`);
+  }
+  const runtimeSonar = read(root, RUNTIME_SONAR);
+  if (runtimeSonar === null || runtimeSonar.replaceAll('\r\n', '\n') !== renderRuntimeSonar()) add('EXAMPLES_CI_APP_QUALITY_DRIFT', RUNTIME_SONAR, `${RUNTIME_SONAR} differs from its render from scripts/hfs/runtime-coverage-scope.mjs: run starci runtime check --only examples-ci -- --write`);
+  const codecov = read(root, CODECOV);
+  if (codecov === null) add('EXAMPLES_CI_CODECOV_MISSING', CODECOV, 'the root codecov.yml is missing: run starci runtime check --only examples-ci -- --write');
+  else if (codecov.replaceAll('\r\n', '\n') !== renderCodecov(root)) add('EXAMPLES_CI_CODECOV_DRIFT', CODECOV, 'codecov.yml differs from its render (a flag per example app over its coverage scope): run starci runtime check --only examples-ci -- --write');
+};
+
+/** Every finding of the examples CI contract at `root`: [{code, path, message}]. */
+function checkExamplesCi(root = ROOT) {
+  const findings = [];
+  const add = (code, at, message) => findings.push({ code, path: at, message });
+  const apps = exampleApps(root);
+  // The workflow: a job `apps` prints the matrix with MATRIX_COMMAND, and every job with a matrix reads it from that output.
+  const text = read(root, WORKFLOW);
+  let doc = null;
+  if (text === null) add('EXAMPLES_CI_WORKFLOW_MISSING', WORKFLOW, 'the root workflow that runs every example app is missing');
+  else { try { doc = parseYaml(text); } catch (error) { add('EXAMPLES_CI_WORKFLOW_INVALID', WORKFLOW, error.message); } }
+  if (doc) workflowFindings(doc, text, apps, add);
+  strayWorkflowFindings(root, apps, add);
+  if (doc) imagesJobFindings(doc, add);
+  driftFindings(root, apps, add);
+  return { apps, findings };
+}
+
+function examplesCiMain(argv = [], { root = ROOT, out = (s) => process.stdout.write(s) } = {}) {
+  if (argv.includes('--matrix')) { out(`${JSON.stringify(exampleApps(root))}\n`); return 0; }
+  if (argv.includes('--browsers')) { out(`${JSON.stringify(exampleBrowserApps(root))}\n`); return 0; }
+  if (argv.includes('--images')) { out(`${JSON.stringify(exampleImages(root))}\n`); return 0; }
+  if (argv.includes('--write')) {
+    fs.writeFileSync(path.join(root, CODECOV), renderCodecov(root));
+    fs.writeFileSync(path.join(root, RUNTIME_SONAR), renderRuntimeSonar());
+    for (const app of exampleApps(root)) for (const target of appQualityTargets(app, root)) {
+      const file = path.join(root, 'examples', app, target.path);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, target.content);
+    }
+    out(`examples-ci: wrote ${CODECOV} (${coverageExampleApps(root).length} flags) and each example's edition-matched quality files
+`);
+    return 0;
+  }
+  const { apps, findings } = checkExamplesCi(root);
+  for (const finding of findings) out(`${finding.code} ${finding.path}: ${finding.message}\n`);
+  out(findings.length ? `examples-ci: ${findings.length} finding(s)\n` : `OK: ${apps.length} example app(s) (${apps.join(', ')}) run in ${WORKFLOW}; ${coverageExampleApps(root).length} app(s) have flags in ${CODECOV}\n`);
+  return findings.length ? 1 : 0;
+}
+
+if (isMain(import.meta.url)) process.exitCode = examplesCiMain(process.argv.slice(2));

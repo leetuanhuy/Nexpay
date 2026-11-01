@@ -1,0 +1,149 @@
+# owner: the agent-reviewed semantic architecture obligations not decidable by a rule; machine-decidable law lives in knowledge/hfs/rules.yaml only.
+schema: starci/knowledge-source@1
+id: architecture-rules
+title: Common architecture invariants
+purpose: "Semantic design obligations shared by all StarCi projects: TypeScript + Next.js frontend + NestJS backend.
+  Every obligation a machine can decide (tiers, composition, public surface, data boundary, configuration) is a rule of
+  knowledge/hfs/rules.yaml, the one rule catalog, and is not restated here; this file holds only what needs a reviewing
+  agent. Read docs/architecture.md before the concrete profiles. No manual fallback can pass a missing code check."
+appliesTo:
+  - backend
+  - frontend
+family: cross-cutting
+provenance:
+  reviewedAt: 2026-09-30
+  sources:
+    - knowledge/hfs/rules.yaml
+    - docs/architecture.md
+    - docs/application-stacks.md
+  limitations: Fixed Nest/Next family; the source topology is the one HFS tree, framework substitution is not possible. Automated
+    checks have explicit supported syntax/path/contract bounds. Missing applicable code-rule coverage blocks
+    conformance. Agent design review and real behavioral evidence cover semantic obligations. Runtime
+    installation performs no product source changes.
+rules:
+  - id: ARCH-OWNERSHIP
+    title: One accountable owner
+    kind: mandatory
+    requirement: Every capability, authoritative state and public contract has one accountable owner; consumers
+      reference that owner rather than copying its policy or state authority.
+    rationale: Change and repair need an unambiguous owner even when code has only one consumer.
+    verification:
+      automated: []
+      manual:
+        - Identify authoritative state, contract owner and affected consumers.
+  - id: ARCH-ABSTRACTION
+    title: Every abstraction has a responsibility
+    kind: mandatory
+    requirement: Introduce a wrapper, interface, base class, module or package only for a meaningful contract,
+      policy, lifecycle or coordination responsibility. Historical examples and file counts do not require
+      matching boilerplate.
+    rationale: Empty layers obscure rather than establish ownership.
+    verification:
+      automated: []
+      manual:
+        - Explain the boundary each abstraction adds and remove pointless forwarding in authorized scope.
+  - id: ARCH-STATE
+    title: State has authority and lifecycle
+    kind: mandatory
+    requirement: Stateful components identify their authoritative source, update owner, identity scope, expiry and
+      recovery policy. Cache/read models define synchronization and observable consistency rather than
+      becoming competing truth.
+    rationale: Correctness includes transitions and recovery, not only static shape.
+    verification:
+      automated: []
+      manual:
+        - Exercise relevant state changes, identity changes, lag and restart recovery.
+  - id: ARCH-IDENTITY
+    title: Preserve scope identity and lifetime
+    kind: mandatory
+    requirement: Tenant, workspace and request scopes retain distinct identity where their contract requires it. A
+      cached value or long-lived instance cannot collapse incompatible scopes or lifetimes; connection and module
+      identity are judged by the HFS rules of the catalog, not here.
+    rationale: Correct names and imports alone do not guarantee the correct runtime instance.
+    verification:
+      automated: []
+      manual:
+        - Inspect tokens/configuration and verify applicable boot and scope isolation.
+  - id: ARCH-AUTHORITY
+    title: Identity is not permission
+    kind: mandatory
+    requirement: Authenticate identity and enforce action permission and resource scope at their owning
+      boundaries. Alternative transports/jobs must not bypass resource policy; a caller-supplied scope
+      identifier is not authorization.
+    rationale: Authority must survive changes of entry point.
+    verification:
+      automated: []
+      manual:
+        - Exercise denied actions and cross-scope attempts through applicable entry points.
+  - id: ARCH-EFFECT
+    title: Effects have failure and recovery contracts
+    kind: mandatory
+    requirement: Each mutation or external effect declares atomicity, identity, timeout, failure and
+      retry/recovery behavior. Unknown remote outcomes remain unknown until reconciled; a local
+      acknowledgement or local fence record cannot prove remote enforcement.
+    rationale: A crash or lost acknowledgement can separate the effect from its recorded result.
+    verification:
+      automated: []
+      manual:
+        - Test relevant transaction boundaries and crashes around actual effects and acknowledgements.
+  - id: ARCH-CONCURRENCY
+    title: Enforce invariants at the write authority
+    kind: mandatory
+    requirement: Competing actors cannot violate a required invariant. Use an appropriate atomic
+      constraint/transition/lock or equivalent at the authority and define conflict handling.
+      Read-before-write alone is not concurrent idempotency.
+    rationale: Serial unit tests do not exercise competing writers.
+    verification:
+      automated: []
+      manual:
+        - Run competing attempts and stale-worker cases when the scope permits concurrent actors.
+  - id: ARCH-OPERABILITY
+    title: Runnable components expose their lifecycle
+    kind: mandatory
+    requirement: Runnable components define startup/shutdown, applicable health/dependency policy and useful
+      redacted failure evidence. Liveness, readiness and functional verification must not be conflated.
+    rationale: A live process may still be unable to serve its declared work.
+    verification:
+      automated: []
+      manual:
+        - Verify actual startup, drain/recovery and required/degraded dependency behavior.
+  - id: ARCH-EVIDENCE
+    title: Evidence matches the claim
+    kind: mandatory
+    requirement: Acceptance uses current input-bound evidence with explicit coverage and limits. Static passes,
+      process liveness and narrow mocks cannot prove unrelated behavior. No suppressions, fabricated metadata
+      or stale-hash refresh may manufacture conformance. Every mechanically decidable code rule needs its
+      executable checker and complete applicable file/rule coverage. Missing checks cannot be waived by agent
+      review; semantic design and edge cases remain agent-reviewed with appropriate behavioral evidence.
+    rationale: A green check is meaningful only for what it actually measured.
+    verification:
+      automated:
+        - scripts/cli/gate-run.mjs
+      manual:
+        - Match each claimed invariant to the real command, source revision and exercised boundary.
+  - id: ARCH-WORK
+    title: Canonical design and execution state are separate
+    kind: mandatory
+    requirement: Keep one canonical project Work owner with distinct SRS, SDS and implementation/verification
+      responsibilities. Execution state stays in its declared local area. Create meaningful scope nodes;
+      preserve history and invalidate only affected proof without relabeling it current.
+    rationale: Source observation, product intent and execution progress are different facts.
+    verification:
+      automated:
+        - scripts/work/validate/check-example-work.mjs
+      manual:
+        - Review canonical ownership, actual scope and impact closure; use the canonical Work validator.
+  - id: ARCH-DEPLOYMENT
+    title: Deployment binds components and authority
+    kind: mandatory
+    requirement: Application deployment declarations bind source/image, config/custody, placement, dependencies,
+      health and verification. Host/container/remote API profiles are explicit. API consumption does not grant
+      rollout or infrastructure administration; static declarations do not prove live behavior.
+    rationale: Deployment metadata and operational authority must remain aligned with the component owner.
+    verification:
+      automated:
+        - starci-stacks-check
+      manual:
+        - Bind the starci/application-stacks-check@1 report to the selected manifest, environment and rendered
+          deployment model. Separately verify live health, authentication and recovery under authority;
+          deployment declarations are outside the FE/BE source-code lint profile.

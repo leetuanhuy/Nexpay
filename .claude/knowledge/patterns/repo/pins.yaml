@@ -1,0 +1,88 @@
+schema: starci/knowledge-source@1
+id: repo.pins
+title: App version pins
+purpose: |
+  Given a dependency version, who decides it? `knowledge/hfs/canon-pins.yaml` decides for every `@starci/*` package and every
+  core framework tool. An app has one version of each dependency, pinned exactly, in its one root `package.json`.
+appliesTo:
+  - backend
+  - frontend
+family: repo
+# The slot ids this topic teaches (knowledge/hfs/slots.yaml); scripts/gates/read-digest.mjs inverts these
+# into the READ-step slot -> pattern-topic map (knowledge/op-gate.yaml kinds), each slot's topics in index.yaml order.
+slots: [repo.packages, app.package-manifest, app.lockfile]
+provenance:
+  reviewedAt: 2026-09-29
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/canon-pins.yaml
+    - https://docs.npmjs.com/cli/v10/configuring-npm/package-json#overrides
+  limitations: |
+    A pin proves which versions are installed. It does not prove that the upgrade is safe for the product; the affected
+    checks and visual evidence do.
+rules:
+  - id: REPO-PINS-1
+    title: Exact versions from canon-pins
+    kind: mandatory
+    hfsRules: [R15]
+    requirement: |
+      `@starci/*`, TypeScript, Nest, Next, React, Prettier, ESLint, stylelint, Jest (back end) are at the exact
+      version in `canon-pins.yaml` for the app's major. Dependencies are pinned exactly (no range) in the root `package.json`
+      (and in each workspace package's `package.json`). Raising a version is a change to `canon-pins.yaml` in `.claude` first;
+      each app then moves to the new pins in its own upgrade lane.
+    rationale: |
+      An app green under one version while the agent grades under another wastes every cycle.
+    cases:
+      - id: case-1
+        when: A framework upgrade
+        write: Change canon-pins.yaml, land it in .claude, then raise the pins in each app's root package.json, npm install, and check the front end visually.
+    verification:
+      automated:
+        - HFS_CANON_PIN_DRIFT
+      manual: []
+    relatedExamples: []
+  - id: REPO-PINS-2
+    title: One version of each dependency
+    kind: mandatory
+    hfsRules: [R14, R111]
+    requirement: |
+      Each dependency has one version across the root and workspace `package.json` files. The root `overrides` fix react, next
+      and grammar. A nested copy (`fe/packages/<pkg>/node_modules/@starci/grammar`, a nested entry in `package-lock.json`) is
+      forbidden. A dependency a workspace package also declares is declared at the same version as at the root.
+    rationale: |
+      Two versions of one design system or framework in one bundle behave as two products.
+    cases:
+      - id: case-1
+        when: Two apps disagree on HeroUI
+        write: Align both to the one version and add it to overrides.
+    verification:
+      automated:
+        - HFS_DEP_VERSION_SKEW
+        - HFS_PACKAGE_MANAGER_MIXED
+        - HFS_PEER_INTEGRATION_MISSING
+      manual: []
+    relatedExamples: []
+  - id: REPO-PINS-3
+    title: Every @starci package comes from the npm registry at its exact pinned version
+    kind: mandatory
+    hfsRules: [R15, R13]
+    requirement: |
+      Every `@starci/*` package (grammar, eslint-canon-be, eslint-canon-fe, stylelint-canon, tsconfig, prettier-config,
+      jest-preset, hfs) is a published npm package: a product repository declares the exact pinned
+      version from `knowledge/hfs/canon-pins.yaml` (`"0.8.0"`, never a range, never `file:`) in the root and every workspace
+      package.json and installs it from the npm registry. There is no other way to obtain a @starci package.
+    rationale: |
+      CI, the agents and a fresh clone obtain the same package builds from the same place, and the lockfile records a registry
+      integrity hash instead of a path on one machine.
+    cases:
+      - id: case-1
+        when: CI installs the canon
+        write: The workflow runs `starci npm ci`; nothing checks out the runtime repository.
+    verification:
+      automated:
+        - HFS_CANON_PIN_DRIFT
+        - HFS_CI_MISSING_CANON
+        - HFS_HOOKS_PATH_REDIRECTED
+        - HFS_HOOKS_NOT_INSTALLED
+      manual: []
+    relatedExamples: []

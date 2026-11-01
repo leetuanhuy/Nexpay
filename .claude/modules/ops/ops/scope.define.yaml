@@ -1,0 +1,241 @@
+schema: starci/op@1
+id: scope.define
+goal:
+  en: Turn one request into a bounded scope on the owning feature's record - the nodes, dependencies
+    and exclusions the selected workflow may touch - by read-only analysis that performs no effect it
+    scopes.
+nodeKinds: [operations]
+completionProfile: operations
+sideEffects: []
+graphPolicy:
+  mode: selected-scope-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+  workGraph: draw
+reads:
+  - id: request
+    path: current user request, supplied files/references and existing task authorization
+    purpose:
+      en: Identify the intended result, concrete inputs, permitted effects and observable completion
+        criteria from the request.
+  - id: intake
+    path: selected request.analyze intake record + modules/goal/archetypes.yaml selection when present
+    purpose:
+      en: Read the workflow selection and scope statement the intake produced when one exists. An absent
+        intake record is not a gap - the request itself is the input; a present one is preserved,
+        not restated.
+  - id: records
+    path: .starciwork/**/index.yaml + .starciwork/_resources/**/resource.yaml
+    purpose:
+      en: Read existing decided records and resource declarations so the bounded scope neither duplicates
+        nor contradicts work the tree already owns.
+  - id: repo
+    path: <app>/<bound-paths> when source is relevant
+    purpose:
+      en: Discover the actual selected repository/root/HEAD and dirty changes, then read applicable
+        instructions, owning source, callers, scripts and relevant tests so proposed nodes name real
+        inspected paths. If there is no source task, record not applicable.
+  - id: profile
+    path: modules/models/registry.yaml + actual host tools/model
+    purpose:
+      en: Resolve the working runtime profile against actual available tools. Do not switch providers,
+        invent tools or dispatch agents solely from a profile.
+  - id: standard
+    path: docs/architecture.md + docs/code-pattern-enforcement.md + knowledge/op-gate.yaml + knowledge/patterns/repo/starciwork.yaml + knowledge/patterns/repo/folder.yaml + knowledge/hfs/slots.yaml
+    purpose:
+      en: shared
+      vi: "Chuẩn mà quyết định và bản ghi của op dẫn ra: knowledge/op-gate.yaml (proofs.read-knowledge), các tệp knowledge liệt kê ở bước ĐỌC và bản đồ slot hfs của mọi bản ghi op viết (starci app explain ở gốc app). Các tệp được đọc tại chỗ và ghi kèm sha256 vào bản tóm tắt ĐỌC; không chép lại vào bản ghi."
+writes:
+  - id: node
+    path: N/index.yaml
+    fields: [state, blocker, completion.inputDigest, completion.evidence]
+    content:
+      en: Write only state/blocker/completion on this operation's own node; the bounded scope belongs to
+        the scope record and actual observations to the evidence result, never to semantic node
+        prose.
+  - id: scope
+    path: .starciwork/features/<feature>/index.yaml
+    fields: [schema, id, title, description, extensions.work3.scope]
+    content:
+      en: The scope record is the owning feature's own record (work/feature@1, no state) carrying the
+        bounded scope as typed data under extensions.work3.scope - request (workflow, goal identity
+        and revision, outcome, effect ceiling), nodes[] with stable proposed ids, deps[] as real
+        declared node ids, exclusions[] each with its reason, and openQuestions[]. Every named node
+        traces to the request or to an inspected path; a scope item that cannot be grounded is an
+        open question in the record, not an invented entry. Existing decided records are referenced
+        by id, never restated. The field names are exactly those of
+        modules/schemas/work-feature.schema.yaml $defs.scope (request.workflow, goalIdentity,
+        goalRevision, source, outcome, effectCeiling, completionCriteria; node id, kind, path,
+        purpose, grounding[], dependsOn[]; dep from, to, reason; exclusion subject, path, reason); the
+        schema closes every object, so an invented key makes the record invalid.
+  - id: work-graph
+    path: evidence/work-graph.json
+    schema: starci/work-graph@1
+    fields: [domains, nodes, edges]
+    content:
+      en: Work graph v0 - one domain per feature the scope touches, a foundation slice per domain for its
+        shared tables, registries and layout, one slice per user journey or FR end to end with its FRs and
+        a size estimate, and a contract edge for every need across domains. Recorded as the workflow's v0
+        by scripts/work/work-graph.mjs propose.
+  - id: catalog
+    path: .starciwork/index.yaml
+    fields: [features]
+    content:
+      en: The work/catalog@1 entry of a feature the request introduces.
+  - id: evidence
+    path: evidence/**
+    fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, extensions]
+    artifacts: [manifest.yaml, scope.json, result.md]
+    content:
+      en: Record the request digest, the inspected records and source paths, each proposed node with its
+        grounding, the dependency rationale and every exclusion with its reason. Open questions stay
+        open; an honest not-run validator result is recorded, never hidden.
+  - id: read-digest
+    path: STARCI_JOB_SCRATCH/read-digest.json
+    schema: starci/read-digest@1
+    content:
+      en: "The READ digest (read-digest.mjs --knowledge): every knowledge file the decision cites and the hfs slot of every record written, each with its sha256."
+      vi: "Bản tóm tắt ĐỌC (read-digest.mjs --knowledge): mọi tệp knowledge mà quyết định dẫn ra và slot hfs của mọi bản ghi đã viết, kèm sha256 của từng tệp."
+steps:
+  - reads: [standard, request]
+    writes: [read-digest]
+    action:
+      en: "READ the standard before deciding (knowledge/op-gate.yaml proofs.read-knowledge): run starci gate read --root <app> --touch <every record this op will write> --knowledge knowledge/patterns/repo/starciwork.yaml knowledge/patterns/repo/folder.yaml knowledge/hfs/slots.yaml --out $STARCI_JOB_SCRATCH/read-digest.json, and read what it records - the knowledge files in place and the hfs slot map of each record (slot, tier, rules). Every node the scope names lands where the standard puts it: the record family of knowledge/patterns/repo/starciwork.yaml and, for each owned path, the app-relative hfs slot (be/..., fe/..., .starciwork/..., .starcistacks/... at the app root) - a path no slot admits is a reported gap. A record the op comes to write later is added with --touch and read the same way; REPORT with read-digest.json attached."
+      vi: "ĐỌC chuẩn trước khi quyết định (knowledge/op-gate.yaml proofs.read-knowledge): chạy starci gate read --root <app> --touch <mọi bản ghi op sẽ viết> --knowledge knowledge/patterns/repo/starciwork.yaml knowledge/patterns/repo/folder.yaml knowledge/hfs/slots.yaml --out $STARCI_JOB_SCRATCH/read-digest.json, rồi đọc những gì nó ghi - các tệp knowledge tại chỗ và bản đồ slot hfs của từng bản ghi (slot, tầng, luật). Mọi nút phạm vi nêu ra nằm đúng chỗ chuẩn đặt: họ bản ghi của knowledge/patterns/repo/starciwork.yaml và, với mỗi đường dẫn sở hữu, slot hfs tương đối theo app (be/..., fe/..., .starciwork/..., .starcistacks/... ở gốc app) - đường dẫn không slot nào nhận là khoảng trống được báo. Bản ghi phát sinh về sau được thêm bằng --touch và đọc theo cùng cách; BÁO CÁO kèm read-digest.json."
+  - reads:
+      - request
+      - intake
+      - profile
+    writes: [evidence]
+    action:
+      en: Distinguish the whole requested outcome from the bounded scope being defined. Preserve the
+        request verbatim and the intake selection when one exists; identify desired outcome, known
+        inputs, effect ceiling, criteria and unknowns. Resolve the execution profile and actual tool
+        availability before selecting instruments; this does not switch the model/runtime or spawn
+        workers. Ask only material missing choices while continuing independent inspection; vague
+        scope is not permission for arbitrary scope, deployment or data mutation.
+  - reads:
+      - request
+      - records
+      - repo
+    writes: [evidence]
+    action:
+      en: "Research just enough actual context to bound the scope correctly: existing decided records that
+        already cover part of the request, real source ownership and caller shape, and the
+        exclusions the request states or implies. Identify what the tree already owns before
+        proposing a node that duplicates it. An overlap belongs to the existing node, which the
+        scope record names as an exclusion or a dependency, never a rewrite. A path that was not
+        opened is never written into the scope."
+  - reads:
+      - request
+      - records
+      - repo
+    writes: [scope, catalog, evidence]
+    action:
+      en: Write the one scope record with the bounded scope as typed data - the proposed nodes, the
+        declared dependencies between them and onto existing records, and the explicit exclusions -
+        on the feature that owns the request; a scope spanning several features is written there
+        once and names the other features' records by id. An existing feature record keeps its
+        schema, id, title and description; a feature the request introduces is created with those
+        four fields plus its catalog entry. Scope the smallest set that completes the request; a
+        material ambiguity about what is wanted is an open question or a blocker, never a guessed
+        node.
+  - reads:
+      - request
+      - records
+      - repo
+    writes: [work-graph, evidence]
+    action:
+      en: "Draw the work graph v0 from the scope record and existing architecture records, coarse - domains
+        and journeys only: every node declares ownedPaths, reads and rollbackTo, no two slices own the same
+        path, and each slice carries a size estimate within `starci kernel estimate` bounds. Record it as v0."
+  - reads:
+      - request
+      - records
+    writes: [node, scope, evidence]
+    action:
+      en: Run the record-class validator `starci runtime validate` over the authored scope record and confirm
+        every cited id exists or is explicitly proposed, every dep is a real declared node id, and
+        no exclusion is dropped. Report done once with the scope record id; defining the scope
+        performs no effect the scope names.
+proofs:
+  - id: bounded
+    requirement:
+      en: The scope record names exactly the nodes, dependencies and exclusions the request requires and
+        nothing more; every node is grounded in the request, a decided record or an inspected path,
+        and every exclusion has a recorded reason.
+  - id: typed
+    requirement:
+      en: The output is the scope record itself - nodes, deps and exclusions as typed fields a planning
+        operation can consume without re-reading the request; free text is the evidence, not the
+        deliverable.
+  - id: work-graph-v0
+    requirement:
+      en: scripts/work/work-graph.mjs show names the workflow's v0, recorded by this job, and validate passes on it.
+  - id: no-effects
+    requirement:
+      en: The analysis performed no source, runtime, publication, deployment or data effect; the only
+        writes are the scope record, a new feature's catalog entry, this node's kernel fields, the
+        evidence bundle and the work graph v0.
+  - id: binding
+    requirement:
+      en: Run the record-class validator `starci runtime validate` and, on every record directory it writes, `starci runtime validate --strict`; every cited ID/path exists or is explicitly
+        proposed, required assertions are covered, input bindings are current, and an honest
+        not-run/fail cannot earn done.
+  - id: checkpointed
+    requirement:
+      en: Every Work record file this operation wrote under its owned paths is committed by the runtime
+        as its workflow's checkpoint when the operation settles green (scripts/kernel/workflow-checkpoint.mjs
+        checkpointOp). The operation never commits and changes nothing outside its owned paths; settle
+        refuses workflow-foreign-commit or workflow-foreign-change otherwise.
+  - id: read-knowledge
+    requirement:
+      en: "starci kernel settle re-reads the attached read-digest.json (runtime check op-proof, proof read-knowledge): a done whose digest is missing (op-read-digest-missing), names no knowledge file or leaves a written record without its hfs slot (op-read-digest-no-knowledge) is refused."
+      vi: "starci kernel settle tự đọc lại read-digest.json đính kèm (check op-proof, proof read-knowledge): done thiếu bản tóm tắt (op-read-digest-missing), không nêu tệp knowledge nào hoặc có bản ghi đã viết thiếu slot hfs (op-read-digest-no-knowledge) đều bị từ chối."
+    check: scripts/kernel/gate-settle.mjs
+  - id: independent-critic
+    requirement:
+      en: "A Critic of another provider than this op, picked from the Critic tier, judged exactly the scope.define records written here and the records they cite against the rubric of modules/kernel/critic-rubrics.yaml, and its verdict passes the declared minimum. The runtime runs that Critic itself, once per version of the records, when this op reports done (scripts/kernel/settle/critic-run.mjs; the op runs no Critic and a verdict it attaches is ignored) and starci kernel settle judges the verdict of that run against the sha256 of the records now (scripts/kernel/critic-settle.mjs): a run not yet recorded (op-critic-verdict-missing, the runtime owes it), a verdict of other bytes (CRITIC_VERDICT_STALE) or a failing one (op-critic-verdict-failed, error-work: the next attempt is fed the critique) is refused."
+    check: scripts/kernel/critic-settle.mjs
+judge:
+  - by: machine
+    measures: [declared-checks, work-hygiene, op-proof:read-knowledge]
+    proofs: [binding, read-knowledge]
+    why: "the settler re-runs the record validator over the records written, the Work files are checked for hygiene and the READ of the standard is re-read from the digest"
+  - by: critic
+    rubric: "modules/kernel/critic-rubrics.yaml#kinds[id=scope.define]"
+    runs: runtime
+    proofs: [independent-critic]
+    why: "the runtime runs an independent Critic of another provider over the scope record once per version of it, and settle judges its verdict"
+blockers:
+  - code: INTENT_UNRESOLVED
+    condition:
+      en: An essential outcome, boundary or permitted effect cannot be resolved from the request, the
+        intake record and safe inspection; report blocked with blocker kind authority naming the
+        exact open choice rather than guessing a scope.
+  - code: SCOPE_CONFLICT
+    condition:
+      en: The request overlaps an existing decided node whose ownership cannot be preserved by a
+        dependency or an exclusion; report the conflicting node ids as a shared-change instead of
+        authoring a duplicate.
+  - code: AUTHORITY_REQUIRED
+    condition:
+      en: Bounding the scope requires a scope or authority change the request does not grant; report
+        blocked with blocker kind authority - an owner decision, never a silently widened scope.
+  - code: DECLARED_DEPENDENCY_UNMET
+    condition:
+      en: A declared prerequisite is not effectively done, or a required declared input/scope is missing.
+        Report node/resource IDs and propose a separately selected graph update when needed; never
+        run predecessors or weaken dependsOn/refs/required to proceed.
+placeholders:
+  feature: The feature that owns the request, whose record carries the scope
+  app: shared
+  bound-paths: shared
+layoutPolicy:
+  checks: [starci-validate]
+route:
+  nodeKinds: [operations]
+  phase: [scope, pre-implementation]
+  intent: [scope, define, bound]
+  prerequisites: [request analyzed]

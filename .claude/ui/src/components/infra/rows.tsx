@@ -1,0 +1,56 @@
+import type { Concept } from '../concept';
+import type { Tone } from '../status';
+
+/** The business concept id (frame) under which the shared infrastructure detail rows are filed; it is stamped on data-concept so the rendered DOM traces back to its spec. */
+export const concept: Concept = 'frame';
+
+import { useState, type ReactNode } from 'react';
+import { Check, Copy } from 'lucide-react';
+import { Chip } from '@heroui/react';
+import { Button } from '../ui/button';
+import { t } from '../../i18n/t';
+
+/** Compact number: 12 345 -> 12,3k. */
+export const compactNumber = (value: number | null | undefined): string => {
+  if (value == null) return '—';
+  const abs = Math.abs(value);
+  if (abs >= 1e9) return `${(value / 1e9).toFixed(1)}B`;
+  if (abs >= 1e6) return `${(value / 1e6).toFixed(1)}M`;
+  if (abs >= 1e4) return `${(value / 1e3).toFixed(1)}k`;
+  return new Intl.NumberFormat('vi-VN').format(value);
+};
+/** A dollar amount with cents below 100 and whole dollars above, or a dash when nothing was recorded. */
+export const usd = (value: number | null | undefined): string => (value == null ? '—' : `$${value.toFixed(value >= 100 ? 0 : 2)}`);
+
+/** One label/value row; stacks label above value on narrow screens. */
+export const InfoRow = ({ label, children }: Readonly<{ label: string; children: ReactNode }>) => {
+  return <div className="flex flex-col gap-1 border-b border-border py-2 text-[13px] last:border-b-0 sm:flex-row sm:items-start sm:gap-4">
+    <dt className="shrink-0 text-muted-foreground sm:w-36">{label}</dt>
+    <dd className="m-0 min-w-0 flex-1 break-words [overflow-wrap:anywhere]">{children}</dd>
+  </div>;
+};
+
+/** A small soft chip for a fact about an item, tinted by its tone and dashed when the item was skipped. */
+export const InfoChip = ({ children, tone }: Readonly<{ children: ReactNode; tone?: Tone }>) => {
+  return <Chip size="sm" variant="soft" data-tone={tone} className={`text-xs ${tone ? 'bg-[var(--tone-bg)] text-[var(--tone)]' : 'text-muted-foreground'} ${tone === 'skipped' ? 'border border-dashed border-[var(--tone-line)]' : ''}`}><Chip.Label>{children}</Chip.Label></Chip>;
+};
+
+/** Mono id with a copy button (copies `copy ?? value`). */
+export const CopyId = ({ value, copy, title }: Readonly<{ value: string | null | undefined; copy?: string; title?: string }>) => {
+  const [copied, setCopied] = useState(false);
+  if (!value) return <span className="text-muted-foreground">—</span>;
+  const full = copy ?? value;
+  return <span className="inline-flex max-w-full flex-wrap items-center gap-1.5">
+    <code className="rounded bg-default px-2 py-1 font-mono text-xs [overflow-wrap:anywhere]" title={title ?? full}>{value}</code>
+    <Button variant="outline" size="xs" type="button" title={t('Copy the full value')}
+      onClick={() => { void navigator.clipboard?.writeText(full).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1400); }, () => undefined); }}>
+      {copied ? <Check className="size-3" aria-hidden="true" /> : <Copy className="size-3" aria-hidden="true" />}{copied ? t('Copied') : t('Copy')}
+    </Button>
+  </span>;
+};
+
+/** A git sha shortened to ten characters, with the full sha as its copy value and tooltip. */
+export const ShaId = ({ sha }: Readonly<{ sha: string | null | undefined }>) => {
+  if (!sha) return <CopyId value={null} />;
+  return <CopyId value={sha.slice(0, 10)} copy={sha} title={sha} />;
+};

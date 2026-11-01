@@ -1,0 +1,203 @@
+schema: starci/op@1
+id: provision.ask
+goal:
+  en: "Ask the owner for the one thing only they can give - a credential, an account on an outside
+    system, a dataset, a legal authority, a decision between real alternatives (candidate picks,
+    accept/reject of a reviewable artifact), or the go-ahead for an irreversible effect - exactly
+    named, in this operation's own workflow, and wait for it. Credential input belongs to the
+    kernel's Orca GUI after official-documentation preparation; no model agent asks for a value.
+    This operation verifies only that the provision is present. An ask is information or a decision
+    flowing FROM the owner, never task delegation: a step performed inside a running browser or
+    application (an OAuth consent click-through, a captcha, a 2FA prompt, a payment confirmation on
+    a live page) is a human-gated UAT checkpoint and belongs to `uat.assisted.{prepare,verify}` with
+    an evidence receipt, not to a provision ask."
+params:
+  subject:
+    type: string
+    required: true
+    setBy: kernel
+    doc:
+      en: The one-sentence provision or decision this ask requests from the owner, as the asking operation
+        raised it.
+  minOptions:
+    type: integer
+    default: 2
+    min: 2
+    setBy: kernel
+    doc:
+      en: How many real alternatives a non-credential ask presents for the owner to pick between.
+nodeKinds: [business]
+completionProfile: business
+sideEffects: []
+graphPolicy:
+  mode: selected-scope-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+reads:
+  - id: question
+    path: params.subject in the packet, and the operation that asked it
+    purpose:
+      en: Read what is asked for exactly as it was raised - which operation, what it blocks, which kind of
+        provision (credential, account, dataset, authority, irreversible) - before anything is
+        printed.
+  - id: environment
+    path: <app>/<bound-paths> + .starciwork/_resources/identities/<slug>/resource.yaml
+    purpose:
+      en: For a credential, read where the code reads the value - the exact variable name - and which
+        identity:<slug> alias in the selected backend Stack environment
+        (.starcistacks/<env>/secrets/<slug>.enc, app-relative) will hold it. The resource metadata names the custody and variable.
+  - id: stacks
+    path: <app>/.starcistacks/application-stacks.yaml services (the source host's for a shared server)
+    purpose:
+      en: Before any credential, host, account or CI secret/variable is named, read the stack declaration's
+        services block with starci-starcistacks-check <app>. What it declares ownerAction none with
+        custody present is the runtime's, not a provision - the asking operation uses the declared custody
+        and starci kernel report refuses the ask (ask-declared-in-stack).
+writes:
+  - id: report
+    path: evidence/manifest.yaml
+    fields: [summary]
+    content:
+      en: The report of the attempt itself - the fact that the provision is present, and nothing else;
+        never a value, never a record in the tree.
+steps:
+  - reads:
+      - question
+      - environment
+    writes: []
+    action:
+      en: "Name the provision exactly: a credential names the variable the code reads, the outside system
+        it belongs to and the selected Stack environment custody where identity:<slug> resolves
+        (.starcistacks/<env>/secrets/<slug>.enc); an account, a dataset or an
+        authority names what and for which system. Never invent, stub, default or skip it. Never the
+        value itself. A quality-service credential is never a provision: a SonarQube token or host,
+        a Sonar project, and the GitHub secret or variable that would carry them into CI are
+        resolved, created or minted by scripts/gates/sonar-local.mjs from the stack declaration and
+        the source stack custody (owner ruling 2026-09-24) - such an
+        ask is refused with RUNTIME_OWNED_CREDENTIAL."
+  - reads:
+      - question
+    writes: []
+    action:
+      en: "For a credential, return the exact declared requirement to the kernel; do not open an input
+        terminal, ask the owner to compose a command, or wait for a \"set\" reply. The workflow owns
+        the researched form in Orca and resumes its satisfied requesters automatically. For anything
+        else, the ask must name a deliverable the requester can verify afterwards (the OAuth app's
+        client id, the DNS record, the granted account) or present at least `params.minOptions` real
+        alternatives for the owner to pick between. A bare single-option \"reply provided\"
+        confirmation is degenerate: either the deliverable is named and re-verified, or the ask is
+        the wrong lane — interactive actions inside a running product are uat.assisted checkpoints,
+        and informational answers carry the answer itself, not a confirmation flag. Everything the
+        owner reads — question.text, option and pick labels — is written in the packet's
+        owner_language in plain words: what changes for the product and what each choice costs; internal
+        ids, digests and lineage terms go in question.refs, never in the text. When the ask presents
+        alternatives the owner must judge, declare the decision once as question.picks
+        ({id, label, choices}); question.options, when present, mirrors those choices in the same order
+        and is not a second question. When one option is recommended, set question.recommended
+        to its 0-based index in question.options and question.recommendedReason to one plain
+        sentence saying why, and name the ask kind in question.kind (information, credential,
+        account, access, consent, authority, business-decision, irreversible-confirmation); never
+        mark the recommendation only in the option text. With config.yaml
+        asks.autoAcceptRecommended on, the runtime answers such an ask with the recommended option
+        instead of serving it (answeredBy auto-recommended) unless its class is excluded, so
+        recommend only what the product can carry until the owner reverses it. Each choice carries the image that shows its outcome as
+        `image` (the accepted draw, the current implementation render, the proposed direction), every
+        path also listed in question.assets; a choice whose outcome has no artifact yet says so in its
+        label. The owner compares the artifacts themselves, never a text description or a bare hash;
+        a free-text \"type your picks in the note\" instruction is not an answer schema. The ask is
+        delivered by filing this operation's report with outcome ask and that question (starci kernel report),
+        then ending the turn: the kernel serves it through serve-ask, which records the answer with
+        a receipt, and re-enqueues this operation with the answer bound. Never ask through an Orca
+        orchestration message, a terminal prompt or a chat, and never wait in-turn for a reply -
+        nothing answers those channels and nothing records what they say."
+  - reads:
+      - question
+      - environment
+    writes: [report]
+    action:
+      en: "For a credential the kernel verifies encrypted-custody presence through the canonical verifier
+        and settles the waiting ask itself; this operation runs no credential probe and reports no
+        credential success. Stored presence does not establish provider validity. For anything else,
+        the attempt that runs with an answer receipt bound verifies PRESENCE alone and reports done
+        with \"provided: <what the owner provided, in a few words>\". An unanswered ask is the
+        kernel's awaitingOwner wait (verdict-contract.yaml retryAccounting.ownerWait), never a
+        blocked report from this operation; nothing else waits for it."
+  - reads:
+      - question
+      - environment
+    writes: [report]
+    action:
+      en: "Autopilot (owner ruling 2026-09-28 autopilot-run-to-finish, \"limit provision asks\"; modules/kernel/
+        driver-loop.yaml autopilot): mid-flow this op is not planned - starci kernel enqueue refuses it and a credential, real-
+        money or shared-system need is recorded deferred-to-handover while the build proceeds on sandbox, test stubs
+        and placeholders. The one run under autopilot is the end-of-flow credential checklist (params.subject
+        handover-credentials): file outcome ask with the question `starci kernel autopilot --workflow <id> --checklist --json`
+        prints (.question), verbatim - one form for every deferred credential; never split it, never add a value, never
+        invent one. A deferred ask this op filed earlier and that autopilot deferred is not asked again: the checklist
+        carries it. Credential values are entered by the owner only, in the served form."
+proofs:
+  - id: named-exactly
+    requirement:
+      en: The provision is named exactly - the variable, the system, the custody - and nothing was
+        invented, stubbed, defaulted or skipped in its place.
+  - id: asked-in-the-workflow
+    requirement:
+      en: The workflow provided a researched credential form in Orca, or asked for the non-credential
+        provision in this operation's terminal before any report.
+  - id: no-secret
+    requirement:
+      en: No value of any credential or secret appears in the report, the terminal or anywhere else; a
+        credential is put into the selected backend Stack environment's encrypted identity custody by the workflow's input service
+        and this operation verifies only that it is present.
+  - id: stack-declaration-read
+    requirement:
+      en: The repository's stack declaration services block was read (starci-starcistacks-check) before the
+        provision was named, and the ask requests nothing that block declares ownerAction none with its
+        custody present. A service the declaration omits is named as a declaration gap for the follow-up,
+        not asked of the owner when the stack already holds it.
+    check: scripts/gates/starcistacks.mjs
+  - id: checkpointed
+    requirement:
+      en: Every Work record file this operation wrote under its owned paths is committed by the runtime
+        as its workflow's checkpoint when the operation settles green (scripts/kernel/workflow-checkpoint.mjs
+        checkpointOp). The operation never commits and changes nothing outside its owned paths; settle
+        refuses workflow-foreign-commit or workflow-foreign-change otherwise.
+judge:
+  - by: machine
+    measures: [declared-checks, contract-script]
+    proofs: [stack-declaration-read]
+    why: "the stack-declaration check is a runtime script the settler re-runs, and the settler re-runs the validators of the records written"
+  - by: owner
+    why: "the owner supplies the credential, account, dataset or go-ahead the op names; the op only verifies it is present"
+blockers:
+  - code: QUESTION_UNCLEAR
+    condition:
+      en: The question names no provision and no system; the operation that asked it is sent back to state
+        it.
+  - code: RUNTIME_OWNED_CREDENTIAL
+    condition:
+      en: The ask names a SonarQube token, host or project, or a GitHub secret/variable for Sonar CI. The runtime owns these - the asking operation is sent back to run
+        scripts/gates/sonar-local.mjs (status, ensure-project --with-token, scan), and a custody or
+        server gap it reports is repaired in the source stack, never asked of the owner. Wiring the
+        CI secret is an optional follow-up, not an owner provision.
+  - code: NOT_A_PROVISION
+    condition:
+      en: The request is a delegated action, not information or a decision from the owner — e.g. an
+        interactive step inside a running product (OAuth consent, captcha, 2FA, live payment
+        confirmation). Those are human-gated UAT checkpoints routed to
+        uat.assisted.{prepare,verify}; the asking operation is sent back to re-plan through that
+        lane.
+placeholders:
+  app: shared
+  bound-paths: shared
+  env: shared
+  slug: Stable identity custody slug
+layoutPolicy:
+  checks: [starci-validate, starci-starcistacks-check]
+route:
+  nodeKinds: [business]
+  phase: [decide, cross-cutting]
+  intent: [provision, ask, owner-input, credential]
+  prerequisites: [an owner-only input is needed]
+  riskHints: [waits-on-owner]

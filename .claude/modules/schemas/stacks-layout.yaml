@@ -1,0 +1,193 @@
+schema: starci/stacks-layout@1
+format: YAML 1.2
+purpose: >-
+  The on-disk contract for .starcistacks, in the same family as the Filesystem Hierarchy Standard and the OCI
+  Image Layout Specification: what directories exist, what they are named, which files are required and which
+  are refused. application-stacks.schema.yaml governs the CONTENT of the model document; this file governs
+  the TREE that holds it. Confusing the two is why three incompatible .starcistacks trees exist today.
+  application-stacks.schema.yaml is this file's machine form for that content half: every field it requires
+  is one this file's shape/runbook/secrets sections name, and it is the one place to read the exact,
+  checkable field list a real application-stacks.yaml must satisfy.
+root: <bound-source-repository>/.starcistacks
+declaration: .starcistacks/application-stacks.yaml
+identity: the environment name is the directory name; there is no id indirection here, unlike the Work tree
+terms:
+  root: the .starcistacks directory of one repository. One per repository, never nested, never per service.
+  declaration: the single application-stacks.yaml that names components, environments and the k8s posture.
+  environment: one directory under the root whose name the declaration's environments block admits.
+  rendered: a file a tool produced from the declaration; it is derived, never the source of truth.
+  custody: bytes the environment needs that are not the declaration - compose files, env files, seeds, secrets.
+
+shape:
+  declaration: .starcistacks/application-stacks.yaml
+  environment: .starcistacks/<environment>/
+  composeFiles: .starcistacks/<environment>/<path named by the declaration's composeFiles>
+  runbook: .starcistacks/<environment>/README.md
+  secrets: .starcistacks/<environment>/secrets/<name> and .starcistacks/<environment>/secrets/<name>.enc
+  runtimeConfig: .starcistacks/<environment>/runtime/config/**
+  runtimeEnv: .starcistacks/<environment>/runtime/env/**
+  runtimeFiles: .starcistacks/<environment>/runtime/files/**
+  seeds: .starcistacks/<environment>/seeds/**
+  infra: .starcistacks/<environment>/infra/**
+  compose: .starcistacks/<environment>/infra/compose/*.yaml (one fragment per backing service, composed by include)
+  swarm: .starcistacks/<environment>/infra/swarm/stack.yaml (value-free Docker Swarm stack; optional fragments under infra/swarm/**)
+  metadata: .starcistacks/<environment>/infra/metadata.json (the resolved port projection, value-free, tracked, read by the front end)
+  keyRoster: .starcistacks/<environment>/runtime/env/KEYS.md and .starcistacks/<environment>/infra/KEYS.md (names and custody paths, never values)
+  services: the declaration's `services` block (application-stacks.schema.yaml $defs.service) - sonar and every other delivery/quality service, with custody references into runtime/files
+
+custody:
+  summary: >-
+    What the managed pre-commit hook's staged-secret judgement (`starci app hygiene`, R06) and each repository's
+    .gitignore enforce, stated once so a declaration, a check and a guard read the same rules.
+  plaintextMember: .starcistacks/<environment>/runtime/{files,env,config}/<name> - present only on a machine that decrypted it; always ignored
+  encryptedTwin: <plaintextMember>.enc - SOPS (age) envelope, the tracked record
+  trackedPlaintextAllowed:
+    - .starcistacks/application-stacks.yaml
+    - .starcistacks/deployment.json and other rendered, value-free deployment declarations the guard names
+    - .starcistacks/**/KEYS.md
+    - .starcistacks/**/.gitkeep
+    - .starcistacks/<environment>/infra/compose/**, infra/k8s/**, infra/terraform/** and infra/swarm/** source
+    - .starcistacks/<environment>/infra/metadata.json the value-free resolved port projection the front end reads
+    - .starcistacks/<environment>/environment.json the rendered value-free environment record
+    - .starcistacks/<environment>/seeds/** idempotent seed sources
+  gitignore: >-
+    Deny everything with `.starcistacks/**` (never the directory form `.starcistacks/`, which blocks
+    every re-include), re-include directories with `!.starcistacks/**/`, then `!.starcistacks/**/KEYS.md`,
+    `!.starcistacks/**/.gitkeep`, `!.starcistacks/application-stacks.yaml`, `!.starcistacks/*/README.md`
+    (the environment runbook, shape.runbook), `!.starcistacks/*/infra/compose/**`, `!.starcistacks/*/infra/swarm/**`
+    and `!.starcistacks/*/infra/terraform/**`; then deny the VALUE files inside infra AGAIN, after those
+    re-includes (git applies the last matching rule, so a re-include written after `.env.*` tracked
+    every plaintext env under compose - e.g. .starcistacks/dev/infra/compose/.env.generated),
+    deny the credential files terraform decodes into infra/terraform/files/ and packs into a tarball
+    (the terraform re-include alone once exposed 14 decoded vps credentials),
+    and re-include `!.starcistacks/**/*.enc` LAST so every encrypted twin survives every deny. The exact
+    ordered list is gitignoreRules; starci-starcistacks-check refuses a repository whose rules leave a value
+    file under infra unignored (STACKS_GITIGNORE_VALUE_OPEN) or that tracks one (STACKS_PLAINTEXT_TRACKED).
+    A declaration the ignore rules hide is a declaration no other machine reads (STACKS_DECLARATION_IGNORED),
+    and a runbook they hide is the same defect at the environment level (STACKS_RUNBOOK_IGNORED).
+  gitignoreRules:
+    - .starcistacks/**
+    - '!.starcistacks/**/'
+    - '!.starcistacks/**/KEYS.md'
+    - '!.starcistacks/**/.gitkeep'
+    - '!.starcistacks/application-stacks.yaml'
+    - '!.starcistacks/*/README.md'
+    - '!.starcistacks/*/environment.json'
+    - '!.starcistacks/*/seeds/**'
+    - '!.starcistacks/*/infra/metadata.json'
+    - '!.starcistacks/*/infra/compose/**'
+    - '!.starcistacks/*/infra/k8s/**'
+    - '!.starcistacks/*/infra/terraform/**'
+    - '!.starcistacks/*/infra/swarm/**'
+    - .starcistacks/*/infra/**/.env
+    - .starcistacks/*/infra/**/.env.*
+    - .starcistacks/*/infra/**/*.env
+    - .starcistacks/*/infra/**/*.key
+    - .starcistacks/*/infra/**/*.pem
+    - .starcistacks/*/infra/**/*.tfvars
+    - .starcistacks/*/infra/terraform/.terraform/
+    - .starcistacks/*/infra/terraform/*.tfstate
+    - .starcistacks/*/infra/terraform/*.tfstate.*
+    - .starcistacks/*/infra/terraform/files/
+    - .starcistacks/*/infra/terraform/*.tar.gz
+    - '!.starcistacks/**/*.enc'
+
+roles:
+  repository:
+    required:
+      - path: .starcistacks/application-stacks.yaml
+        type: file
+        reason: >-
+          Without the declaration the tree declares nothing: every check degrades to guessing which
+          directory is an environment. A .starcistacks with environments and no declaration is refused.
+    requiredEach:
+      - path: .starcistacks/<environment>/
+        type: directory
+        source: declaration.environments
+        reason: >-
+          Every environment the declaration admits owns exactly one directory named after it. The
+          declaration currently requires dev and vps, so both directories exist or the tree is
+          incomplete - a declared environment with no directory is the same defect as a declared
+          integration with no node.
+    refused:
+      - path: .starcistacks/<name>/
+        when: name is not an environment the declaration admits
+        code: STACKS_UNDECLARED_ENVIRONMENT
+        reason: >-
+          A directory that looks like an environment and is named by nothing is the shape that made
+          staging, vps-staging and k8s appear beside dev and vps with no contract. Either the
+          declaration admits it or it is not an environment.
+      - path: .starcistacks/tmp/
+        code: STACKS_SCRATCH_IN_CANONICAL
+        reason: Scratch belongs in the OS temp directory. A .starcistacks/tmp is read by the next run as real.
+      - path: .starcistacks/<environment>/<undeclared compose file>
+        code: STACKS_UNDECLARED_COMPOSE
+        reason: >-
+          The declaration composeFiles list is the complete list for that environment. An extra compose
+          file beside the declared ones is drift: something will apply it and nothing describes it.
+      - path: .starcistacks/**/*.key
+        alsoRefused: ['*.pem', '*.p12', '*.pfx', 'id_rsa', '*.env with a real value']
+        code: STACKS_PLAINTEXT_SECRET
+        reason: >-
+          A secret is stored as the pair <name> and <name>.enc under the environment secrets/ directory,
+          where the plaintext member is gitignored and the .enc member is tracked. No other shape.
+  kubernetes:
+    required:
+      - path: .starcistacks/k8s/
+        type: directory
+        when: declaration.k8s.status == supported
+        reason: >-
+          While k8s.status is deferred the directory is refused, not optional: a deferred posture with
+          manifests on disk is a claim the declaration contradicts. Change the declaration first.
+
+editions:
+  lite: >-
+    The app.starcistacks lite overlay in knowledge/hfs/slots.yaml is the tree authority (owner ruling 2026-10-13).
+    The declaration is required; production api and sidecars use docker-swarm with the tracked, value-free stack at
+    shape.swarm. Supabase supplies the managed backing services. The checker refuses components whose images duplicate
+    postgres, redis, kafka, keycloak, minio, rabbitmq, mysql or mongo, and the overlay refuses compose, k8s and terraform
+    infrastructure, runtime custody and seeds. The shared custody.gitignoreRules keep swarm sources tracked while
+    denying plaintext values inside them.
+
+rules:
+  - One repository owns one .starcistacks. A service, a frontend or a submodule does not open a second one;
+    the environment directory is the unit of variation, not the repository.
+  - The declaration is authored; environment.json, deployment.json and any rendered *-deployment.json are
+    rendered. A rendered file is regenerated, never edited, and never consulted as the source of truth.
+    A rendered file with no declaration to regenerate it from is an orphan and is reported.
+  - Environment names are the declaration's words, not the operator's habit. vps-staging is either an
+    admitted environment or two words for one thing; the tree does not settle that argument, the
+    declaration does.
+  - Secrets travel as <name> plus <name>.enc. The .enc member is the tracked record; the plaintext
+    member is present only on a machine that decrypted it and is refused by the repository's ignore rules.
+    A tracked plaintext secret is a leak already, not a risk.
+  - "Seeds are data, not fixtures - seeds/** is what a fresh environment needs to be usable, and it is
+    idempotent. A seed that assumes an empty database belongs in a test, not here."
+  - "README.md in an environment is its runbook and part of the contract, not decoration - prepare,
+    doctor, up, status, logs, down and verification are the commands the declaration promises, and the
+    runbook is where a human reads them."
+  - The layout never encodes ownership or provenance. Which host runs an environment, which registry
+    serves its images and which branch deploys it belong in the declaration, because a directory name
+    cannot be reviewed.
+  - "Delivery and quality services (Sonar, a container registry, analytics, error tracking) are
+    declared in the declaration's `services` block, never inferred from CI YAML or a properties file:
+    provider, mode local|hosted|disabled, host (local and public URL), the stack that runs a local one
+    (repository, root, environment, compose), project keys per repository, credentials as custody
+    references with the env variable the tool reads, how GitHub CI gets them (ci.wiring required,
+    optional-follow-up or not-used), and ownerAction none unless the owner alone can give something.
+    An op reads this block before it asks for any credential and never asks the owner for what it
+    declares ownerAction none with custody present (scripts/gates/starcistacks.mjs)."
+
+example:
+  .starcistacks/:
+    - application-stacks.yaml
+    - dev/README.md
+    - dev/compose.yaml
+    - dev/runtime/env/app.env.enc
+    - dev/runtime/config/seed.yaml.enc
+    - dev/secrets/identity-demo.enc
+    - dev/seeds/catalog.sql
+    - vps/README.md
+    - vps/stack.yaml
+    - vps/secrets/uat.enc
+    - production/infra/swarm/stack.yaml

@@ -1,0 +1,79 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {parseYaml} from '../../engine/yaml.mjs';
+import {walk} from '../work/validate/check-example-work.mjs';
+import {runDerive} from '../example/example-derive.mjs';
+import {runCritique} from '../example/example-critique.mjs';
+import {isProductPath} from '../lib/starciwork-boundary.mjs';
+import { exampleWorkRoots } from '../lib/example-refs.mjs';
+import { isMain } from '../lib/is-main.mjs';
+import { isLiteWorkRoot } from '../lib/work-edition.mjs';
+
+/**
+ * A separate gate rather than a line inside scripts/work/validate/check-example-work.mjs: another lane owns that file's
+ * concept rules right now, and this gate's own two checks (derived index freshness, and the "no authored
+ * field shaped like a derived one" rule) do not need anything check-example-work.mjs's `checkWorkTree`
+ * already computes. Keeping this in its own file keeps both diffs small and independent to merge.
+ *
+ * Three checks, per declared example app's own `.starciwork` tree:
+ *  1. `_derived/index.yaml` exists and matches what scripts/example/example-derive.mjs computes right now (a stale
+ *     or missing derived index is refused - it would be exactly the "authored by hand, drifts silently"
+ *     failure mode the derivation exists to prevent).
+ *  2. No real record (every `.yaml` file outside `_derived/`) authors a top-level field named `usedBy`,
+ *     `effectiveState` or `frontier` - those are this tool's output vocabulary; a record that writes one by
+ *     hand is indistinguishable from one the tool actually computed, which is the confusion the whole
+ *     exercise exists to rule out. `provenBy` and `derived` belong to the same class: provenance is
+ *     derived from done records' `proves` edges (check-work-deep.mjs's PROVENBY_AUTHORED refuses it too)
+ *     and `derived:` is the "do not author" marker the compact format leaves only as a comment pointer -
+ *     a record carrying either as a field is claiming computed output by hand.
+ *  3. `_derived/critique.yaml` and `_derived/critique.md` exist and match what scripts/example/example-critique.mjs
+ *     computes right now - the same freshness contract as #1, extended to the critique built on top of it.
+ */
+const FORBIDDEN_TOP_LEVEL_FIELDS = ['usedBy', 'effectiveState', 'frontier', 'provenBy', 'derived'];
+
+/** Refuse any real record that authors a top-level field shaped like a derived one. */
+const authoredFieldProblems = (workRoot, problems) => {
+  for (const file of walk(workRoot).filter(f => f.endsWith('.yaml'))) {
+    const rel = path.relative(workRoot, file).replaceAll('\\', '/');
+    if (rel === '_derived' || rel.startsWith('_derived/')) continue;
+    let data;
+    try { data = parseYaml(fs.readFileSync(file, 'utf8')); } catch { continue; }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) continue;
+    for (const field of FORBIDDEN_TOP_LEVEL_FIELDS) {
+      if (Object.hasOwn(data, field)) problems.push(`${rel}: authors a top-level "${field}" field, which is derived-only vocabulary (scripts/example/example-derive.mjs); remove it and let the derivation compute it`);
+    }
+  }
+};
+
+function checkExampleDerived(workRoot, problems) {
+  if (isLiteWorkRoot(workRoot)) return {checked: false, skipped: true};
+  for (const rel of ['_derived/index.yaml', '_derived/frontier.md', '_derived/critique.yaml', '_derived/critique.md']) {
+    if (!isProductPath(rel)) problems.push(`${rel}: generated Work output is outside the product boundary`);
+  }
+  const result = runDerive(workRoot, {write: false});
+  if (!result.ok) problems.push(`${workRoot}/_derived/index.yaml is missing or stale; run \`starci work example-derive --work ${workRoot} --write\` to refresh it`);
+
+  const critiqueResult = runCritique(workRoot, {write: false});
+  if (!critiqueResult.ok) problems.push(`${workRoot}/_derived/critique.yaml or critique.md is missing or stale; run \`starci work example-critique --work ${workRoot} --write\` to refresh them`);
+
+  authoredFieldProblems(workRoot, problems);
+  return {checked: true};
+}
+
+/** Check every declared example app's own Work tree; malformed own roots refuse. */
+function checkExampleDerivedTrees(root, problems) {
+  const roots = exampleWorkRoots(root);
+  for (const workRoot of roots) checkExampleDerived(workRoot, problems);
+  return roots;
+}
+
+if (isMain(import.meta.url)) {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+  const problems = [];
+  const roots = checkExampleDerivedTrees(root, problems);
+  for (const problem of problems) console.log(`REFUSED ${problem}`);
+  const verdict = problems.length ? `${problems.length} refused` : 'every derived index is fresh and no record authors derived vocabulary';
+  console.log(`${roots.length} work tree(s) checked: ${verdict}`);
+  process.exitCode = problems.length ? 1 : 0;
+}

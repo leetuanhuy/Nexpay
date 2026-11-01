@@ -1,0 +1,37 @@
+import { ProgressBar, type ProgressBarProps } from "@heroui/react"
+import { cn } from "@/lib/utils"
+import type { Tone } from "../status"
+
+type ProgressProps = Omit<ProgressBarProps, "value" | "maxValue" | "children" | "className"> & {
+  value?: number | null
+  max?: number
+  tone?: Tone
+  className?: string
+}
+
+const progressColor = (tone: Tone | undefined): "success" | "danger" | "warning" | "default" | "accent" => {
+  if (tone === "success") return "success"
+  if (tone === "failed") return "danger"
+  if (tone === "warning") return "warning"
+  if (tone === "skipped") return "default"
+  return "accent"
+};
+
+const Progress = ({ className, value = null, tone, max = 100, ...props }: ProgressProps) => {
+  const hasMaximum = Number.isFinite(max) && max > 0
+  const maximum = hasMaximum ? max : 100
+  const bounded = hasMaximum && typeof value === "number" && Number.isFinite(value)
+    ? Math.min(Math.max(value, 0), maximum) : null
+  return <ProgressBar
+    {...props}
+    {...(bounded === null ? {} : { value: bounded })}
+    maxValue={maximum}
+    isIndeterminate={bounded == null}
+    color={progressColor(tone)}
+    size="sm"
+    data-tone={tone}
+    className={cn("min-w-0 gap-0", tone && "[--progress-bar-fill:var(--tone)]", className)}
+  ><ProgressBar.Track className="h-full min-h-1.5">{bounded != null ? <ProgressBar.Fill /> : null}</ProgressBar.Track></ProgressBar>
+};
+
+export { Progress }

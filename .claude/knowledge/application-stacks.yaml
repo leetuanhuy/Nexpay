@@ -1,0 +1,224 @@
+schema: starci/knowledge-source@1
+id: application-stacks
+title: Complete application stacks for development and Ubuntu VPS
+purpose: |
+  Author a reproducible deployment of the whole selected application, with encrypted
+  credentials and verified lifecycle. Accepted architecture decides its components.
+  This knowledge does not authorize app changes, remote API calls, workload rollout or cluster administration.
+appliesTo: [backend, frontend, runtime]
+family: cross-cutting
+provenance:
+  readAt: '2026-09-15'
+  sources:
+    - https://docs.docker.com/compose/how-tos/use-secrets/
+    - https://docs.docker.com/compose/how-tos/startup-order/
+    - https://docs.docker.com/reference/compose-file/include/
+    - https://docs.docker.com/engine/install/ubuntu/
+    - https://docs.docker.com/engine/swarm/stack-deploy/
+    - https://docs.docker.com/engine/swarm/secrets/
+    - https://getsops.io/docs/
+  limitations: |
+    Repository audits motivate the rules, not certification. The bundled synthetic stack
+    covers a small app, not all apps or Ubuntu hosts. Recheck official versions and image
+    behavior when authoring. Static checks cannot prove that an inventory is truthful.
+guidance:
+  - id: STACK-SCOPE
+    requirement: |
+      .starcistacks is the application-owned deployment package for the whole app. Inventory actual
+      frontend, APIs, workers, scheduled/init/migration jobs, stateful services, ingress and
+      external dependencies from accepted architecture. Include only applicable components.
+      Give every component an environment-specific managed service, explicit external binding
+      or justified exclusion. Bind multi-repo build contexts/revisions without adjacent-clone assumptions.
+      When development supports both application containers and native host application processes,
+      declare each as a complete, mutually exclusive profile over the same component inventory.
+      A profile choice never changes which frontend, API, worker, bootstrap or dependency components
+      belong to the selected application.
+  - id: STACK-OWNERSHIP
+    requirement: |
+      Ownership, network location and failure domain are distinct. Outside Kubernetes does
+      not mean outside the application's managed stack. A different container/project/key
+      does not establish independent recovery. External storage names its owner, endpoint
+      reference, access scope and tolerated failures. Resolve host/container/remote addresses
+      separately; never reuse app storage credentials as independent backup by inference.
+  - id: STACK-DEV
+    requirement: |
+      Full development defaults to Docker Compose and cold-starts the whole selected app on a clean supported
+      machine with Docker Linux containers and declared bootstrap tools, without host app runtimes, forgotten files,
+      manual realms or unnamed volumes. Lite development runs local Supabase in Docker Linux containers
+      managed by the Supabase CLI; start the Docker engine before the local Supabase stack.
+      Application processes follow their declared development profile. Provide one prepare/up path, health-gated idempotent
+      init/migration jobs, application readiness and a dependency-backed smoke journey.
+      Generate declared local service secrets once, encrypt and reuse them. Provider-issued
+      credentials are researched owner inputs only for enabled features requiring them.
+      A separately declared native-app profile may run application packages through exact package
+      scripts while the same declared container-managed dependencies remain managed. Bind each package to a
+      repository role, immutable revision, package root, private generated env file, host ports and
+      readiness. Bind container applications to the same source revision plus exact context,
+      Dockerfile and package inputs, and require loopback published-port readiness or an enabled
+      Compose healthcheck. The selected native env file must already exist as a regular non-link file;
+      its contents stay unread. Ports stay within 1..65535; HTTP(S) readiness uses an absolute path
+      and TCP readiness an empty path. Native connections use loopback and published dependency ports;
+      container connections use service DNS and container ports. Profiles must be mutually exclusive,
+      use one exact exclusive group for the closed inventory, may reuse the same intended host ports
+      only across profiles, and must not print env contents. Every named volume on a selected stateful
+      service has one custody/backup declaration and no other selected service mounts it.
+  - id: STACK-SECRETS
+    requirement: |
+      Keep encrypted artifacts and public recipient metadata versioned. Every project's envelopes are
+      encrypted to the one shared master age recipient; shared host identity custody follows
+      docs/host-secrets.md. Store that identity outside Git/images/ciphertext bundle; specify
+      owner, secure import, backup,
+      recovery and rotation. Existing ciphertext with a missing key must fail, never trigger
+      replacement generation. Use reviewed SOPS/age or a declared custody adapter. Generate
+      locally owned secrets with a cryptographic RNG and the consumer's format; separate dev
+      from production values and preserve them on retries. File encryption does not rotate
+      an already configured database account or restore an old archive without its original key.
+  - id: STACK-REMOTE-API
+    requirement: |
+      Declare a remote application API only where a selected caller actually consumes it; do not
+      infer the boundary from every external component. Keep the target owner, failure domain and
+      endpoint configuration reference separate from each caller's timeout and authentication.
+      Bind the target to its existing owner contract, a separate deployment record and a named
+      readiness verifier through bounded regular repository files. Treat those refs as opaque identity
+      pointers unless an independent checker understands their format. Each caller is a selected host
+      or Docker application process and uses exactly one declared-custody secret or a documented public
+      API rationale. Docker receives the named secret grant; native env binding remains later runtime
+      evidence because static checks do not read private env contents. Never start a local duplicate or
+      infer Kubernetes rollout/cluster authority from caller-side API conformance. See
+      docs/remote-application-api.md.
+  - id: STACK-RUNTIME-CONFIG-HEALTH
+    requirement: |
+      Bind each runnable component's source/package identity to its actual config schema, startup
+      adapter, placement and verification entry points. Validate typed config before listeners,
+      migrations, workers or outbound effects; reject missing, malformed and conflicting critical
+      fields without echoing values. Keep startup, liveness, readiness and functional verification
+      distinct. Readiness follows required dependency and compatibility policy; liveness remains
+      process-local enough to avoid provider-outage restart churn. Classify dependencies as required,
+      degraded or optional by behavior. Host, Docker and remote-API placements change endpoint and
+      custody bindings, not application responsibility. Bind static provenance first, then collect
+      live health, migration, remote-contract and caller-journey evidence separately. Project folder
+      examples guide inquiry and are not a forced universal layout. See
+      docs/application-stacks.md.
+  - id: STACK-MATERIALIZE
+    requirement: |
+      Compose secrets bind-mount runtime files; they are not encrypted storage or protection
+      from host/Docker administrators. Decrypt into private staging, validate every required
+      nonempty regular file, deny symlink/path escapes and expose the complete set with proper
+      permissions. Clean failed staging; retain source files while container recreation needs
+      them. Mount only to named consumers and verify each image's actual _FILE support.
+      Values never enter argv, image layers, Compose environment, printed config, logs, model
+      context or evidence. Rotation coordinates server/client activation and verification.
+      VPS Swarm instead uses immutable versioned engine secrets, created through private stdin
+      and granted to exact services. Retained plaintext Compose mount files are not the Swarm
+      custody model. Preserve encrypted source and recovery identities; stage new secret names,
+      update and verify consumers, then drop old names only when no consumer needs them.
+  - id: STACK-VPS
+    requirement: |
+      VPS defaults to Docker Swarm on declared supported Ubuntu/CPU versions with sufficient
+      memory/disk, reachable build/image sources, trusted SSH and persistent storage. Bootstrap
+      supported Docker Engine and explicitly selected Swarm membership idempotently; never
+      initialize or join an unrelated daemon by inference. Separate host provisioning from app
+      deploy: no specific cloud, Terraform or Kubernetes dependency. Refuse unsupported hosts
+      instead of claiming every Ubuntu machine works. Publish only intended ingress; Docker
+      port publishing is not protected merely by an assumed UFW rule. Declare DNS/TLS prerequisites.
+      Render Swarm-compatible stack definitions with prebuilt immutable images; Compose build,
+      depends_on and a successful stack-deploy command are not Swarm rollout/readiness proof.
+      Bind manager/key custody, node placement and local-volume failure boundaries explicitly.
+  - id: STACK-LIFECYCLE
+    requirement: |
+      Produce app-owned prepare/up/status/logs/down/doctor entrypoints and VPS update/rollback/
+      backup/restore entrypoints or explicit safe refusal paths. Bind exact app/environment/
+      project/release and serialize deploys. Stage immutable images/config, execute approved
+      migrations, await app readiness, run the selected journey, then record the active release.
+      Distinguish restart, image rollback and data rollback; preserve old release/config and
+      volume ownership. Never reverse irreversible migrations or erase unrelated data to recover.
+      Bind the chosen dev profile and source/config/image identities before effects. Refuse source
+      drift, missing build inputs, same-profile port collisions or an already-running conflicting
+      profile. App mode switches retain the exact named dependency volumes and encrypted custody.
+  - id: STACK-RECOVERY
+    requirement: |
+      Cover all stateful owners, consistent capture, independent artifact/key custody, restore
+      ordering, corruption/wrong-key refusal and current post-restore authority. Test restore
+      in isolation before claiming recovery. Same-host storage may survive containers but
+      cannot be claimed to survive host/disk loss. Ask only unresolved owner policy; prepare
+      technical keys and setup within existing authority.
+  - id: STACK-EVIDENCE
+    requirement: |
+      Read docs/application-stacks.md and the synthetic kit
+      examples/full-app/.starcistacks. Author .starcistacks/application-stacks.yaml against
+      modules/schemas/application-stacks.schema.yaml. Declare dev docker-compose and VPS docker-swarm.
+      Render the actual deployment model with docker compose config or docker stack config and run the
+      `starci-stacks-check` machine — `checkApplicationStacks({repoRoot, environment, deploymentModelFile})`
+      in `scripts/gates/stacks-gate.mjs` — per environment. This is static conformance only. Separately prove empty
+      cold-start, missing/wrong-key refusal, preserved secrets/data after recreation, failed
+      init/readiness and scoped cleanup. VPS adds actual Ubuntu bootstrap, relevant DNS/TLS,
+      update and image/data recovery. Record revisions, tools, platform, executed and unrun cases.
+  - id: STACK-SERVICES
+    requirement: |
+      Declare every delivery, quality and platform service the code or CI uses in the declaration's
+      services block - sonar, container-registry, analytics, error-tracking - with provider,
+      mode local|hosted|disabled, host, the stack that runs a local one, project keys per repository,
+      credentials as custody references with the variable the tool reads, CI wiring and ownerAction.
+      Read it before naming or asking for any credential; never ask the owner for a service declared
+      ownerAction none with custody present. Run scripts/gates/starcistacks.mjs (--new for a
+      repository this leg creates). See docs/application-stacks.md Services.
+  - id: STACK-RECONCILE
+    requirement: |
+      Reconcile existing deployment A and application contracts B with requirement C as current
+      A', B', C'. Retain useful fragments/custody, correct stale docs and affected consumers,
+      and reverify. Preserve VPS Swarm as the default; do not silently replace its deployment
+      semantics with Compose, reset old data for a passing test or inherit stale acceptance. .starcistacks does
+      not own SRS/SDS or workflow state. Runtime maintenance does not grant app deployment.
+  - id: STACK-SWARM-HARDENING
+    requirement: |
+      R266 judges the tracked rendered Swarm model in lite and full. Each environment secret
+      declares runtimeName and a positive version; the immutable runtimeName ends in -v<version>
+      and matches an external engine secret in the model. Grant secrets only to named consumers;
+      use the consumer's file adapter and never put a secret literal in service environment.
+      Only the declared ingress publishes ports. Every declared ingress host has an actual route,
+      a dns entry with host, owner and receipt, and tls ownership with a receipt. Stateful services
+      carry explicit placement constraints. Runnable services carry healthchecks and explicit
+      update, rollback and restart policies. A lite api app composing be.feature.realtime.* pins
+      deploy.replicas to 1; scaling or omitting the replica pin is refused. The replica restriction
+      does not apply to full. Owner-run DNS, provider setup and swarm initialization stay declared
+      prerequisites; static checks do not execute them.
+  - id: STACK-INGRESS-DECLARATION
+    requirement: |
+      R275 accepts one declared ingress, without selecting a preferred product. The environment's
+      ingress block names its component and hosts. The selected component has role ingress and a
+      digest-pinned Traefik or Caddy image in the rendered model. A missing declaration, an unknown
+      component or unsupported ingress image is refused. R266 refuses a second ingress even when
+      it publishes no ports; only the selected ingress may expose application traffic.
+  - id: STACK-RELEASE-BACKUP-DECLARATION
+    requirement: |
+      R267 requires a release block for each Swarm environment: imagesLock names the immutable
+      image inventory, pointer identifies the active release, previous preserves the prior release,
+      and healthAssertions names the nonempty verification list. Move the active pointer only
+      after those checks succeed. Every stateful component and declared managed backing dependency
+      has an environment backup entry with
+      component, target, retention and owner, plus restoreProof referencing a tracked restore
+      evidence file. A backup declaration without its restore evidence is refused. A missing,
+      unreadable or invalid tracked rendered model is STACKS_MODEL_UNAVAILABLE, never a skipped
+      check. renderedModel may name the tracked model relative to .starcistacks/<environment>
+      explicitly, such as infra/swarm/rendered.yaml; otherwise the checker selects the
+      environment's rendered stack from its declared composeFiles.
+  - id: STACK-SCHEDULE-DECLARATION
+    requirement: |
+      R268 requires every selected scheduled component or replicated-job to have a matching entry
+      in the top-level jobs map. The entry declares schedule and a back-end CLI command; component
+      binds it to a component when the job id differs. The command invokes a named action through
+      node be/dist/apps/cli/<entry>.js or the container form node dist/apps/cli/<entry>.js;
+      .mjs and .cjs entries are also accepted. A rendered replicated-job uses that same command.
+      Inline JavaScript and shell chaining are refused. A component schedule or a rendered
+      replicated-job without that declaration is refused. Scheduling remains app-owned; a
+      declaration never authorizes host
+      crontab, inline deployment business logic or remote execution.
+  - id: STACK-LITE-BACKING-DECLARATION
+    requirement: |
+      R276 keeps lite database backing on managed Supabase. PostgreSQL, Redis and MongoDB images
+      are refused in the lite deployment. A sidecar that needs storage declares database.provider
+      sqlite and database.volume, lists that named volume in components.<id>.volumes, and mounts
+      it in the rendered service. Declare the persistent volume in the rendered model as well.
+      A sidecar requiring PostgreSQL, Redis or MongoDB is refused instead of adding another backing
+      service. Mark stateful components explicitly so placement and backup checks cover them.
+      Full retains its declared backing topology; the lite restriction does not apply to it.

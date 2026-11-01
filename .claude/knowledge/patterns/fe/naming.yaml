@@ -1,0 +1,303 @@
+schema: starci/knowledge-source@1
+id: fe.naming
+title: Naming
+purpose: |
+  Given a folder, export, type, constant or function in the frontend, what is it called? Names carry the slot and the role.
+appliesTo:
+  - frontend
+family: fe
+provenance:
+  reviewedAt: 2026-09-29
+  sources:
+    - knowledge/hfs/slots.yaml
+    - knowledge/hfs/README.md
+    - knowledge/patterns/fe/folder.yaml
+  limitations: |
+    A name does not prove responsibility. A file named use*.ts that holds a transport call instead of a hook is a finding of
+    FE_HOOKS_ARE_HOOKS even when the name matches.
+rules:
+  - id: FE-NAMING-1
+    title: Unit folder and applicable exports
+    kind: mandatory
+    hfsRules: [R01, R56, R91]
+    requirement: |
+      UI feature units live below features/pages, features/layouts or features/overlays. Reusable visual units live below
+      components/blocks, components/composites, components/branches or components/leaves. The folder name is the public unit
+      export. A split unit exports X from index.tsx and XBase from component.tsx; only X leaves the folder. Lower reusable
+      tiers without a world owner export X alone and acquire no twin for symmetry. Route files use a local `const Page` (or
+      `Layout`, `Loading`, `NotFound`, `ErrorBoundary`) and `export default`; every other export is a named `export const`.
+    rationale: |
+      Matching folder and export names makes ownership discoverable; Base marks the pure half, which only its own index.tsx
+      may import.
+    cases:
+      - id: case-1
+        when: "Feature page entry, features/pages/CartPage/index.tsx"
+        write: "export const CartPage = (props: CartPageProps) => ..."
+      - id: case-2
+        when: "Page render half, features/pages/OperatePage/component.tsx"
+        write: "export const OperatePageBase = (props: OperatePageBaseProps) => ..."
+      - id: case-3
+        when: "Block render half, components/blocks/HandoffBlock/component.tsx"
+        write: "export const HandoffBlockBase = (props: HandoffBlockBaseProps) => ...; index.tsx exports HandoffBlock only"
+      - id: case-4
+        when: "Leaf, components/leaves/ButtonStateSample/index.tsx"
+        write: "export const ButtonStateSample = ... with no Base and no twin"
+      - id: case-5
+        when: "Route file, app/[locale]/operate/[handoffId]/page.tsx"
+        write: "const Page = async (props: PageProps) => ... then export default Page"
+      - id: case-6
+        kind: exception
+        when: "One client visual unit owns only focus, disclosure, measurement, drag or motion"
+        write: "Export X from the unit entry; do not invent XBase."
+    verification:
+      automated:
+        - HFS_SLOT_UNDECLARED
+        - HFS_SLOT_AMBIGUOUS
+        - HFS_SLOT_NOT_ENABLED
+        - HFS_FORBIDDEN_PRESENT
+        - HFS_TRACKED_MUST_BE_IGNORED
+        - HFS_ROOT_ENTRY_FORBIDDEN
+        - HFS_ROOT_MARKDOWN_FORBIDDEN
+        - HFS_ROOT_SRC_FORBIDDEN_FE
+        - HFS_SRC_LAYOUT_INVALID
+        - HFS_MODULE_TIER_INVALID
+        - HFS_WORK_IN_FE
+        - HFS_STACKS_IN_SIDE
+        - FE_HOOKS_ARE_HOOKS
+        - FE_CUSTOM_HOOK_LOCATION
+        - FE_BLOCK_PRODUCT_HOOK_DEFINITION
+        - FE_COMPONENT_DEEP_HOOK_IMPORT
+        - FE_SOURCE_FORM
+        - FE_SOURCE_LAYOUT_INVALID
+      manual:
+        - Confirm split units use X and XBase and unsplit units do not add an empty forwarding twin.
+    relatedExamples:
+      - connected-block
+
+  - id: FE-NAMING-2
+    title: Contracts and their parts
+    kind: mandatory
+    hfsRules: [R56, R92]
+    requirement: |
+      Public contract names follow their owning feature, module or visual unit. XProps is the connected X's input; XBaseProps
+      is XBase's `{ state, props, on }`; XState is the union of drawn shapes; XData, XActions and XLabels are its parts;
+      `xDefaultState` is the skeleton's shape. One public entry does not export two different shapes under the same XProps
+      name; local implementation input stays local.
+    rationale: |
+      A predictable vocabulary lets a reader find the part they need without opening the file.
+    cases:
+      - id: case-1
+        when: "The props type"
+        write: "export type SalesBlockProps = { ... }"
+      - id: case-2
+        when: "Resolved facts and copy"
+        write: "export type SalesBlockData = { ... }, export type SalesBlockLabels = { ... }"
+      - id: case-3
+        when: "Handlers"
+        write: "export type SalesBlockActions = { ... }"
+      - id: case-4
+        when: "Shape inventory"
+        write: >
+          export type HandoffBlockState = "prepared" | "sent" | "returned"; export const handoffBlockDefaultState:
+          HandoffBlockState = "prepared". No member names a data status (pending, loading, failed, empty, forbidden, closed).
+      - id: case-5
+        when: "Connected input and pure input"
+        write: "SalesBlockProps in index.tsx; SalesBlockBaseProps = { state, props, on } in component.tsx"
+    verification:
+      automated:
+        - FE_HOOKS_ARE_HOOKS
+        - FE_CUSTOM_HOOK_LOCATION
+        - FE_BLOCK_PRODUCT_HOOK_DEFINITION
+        - FE_COMPONENT_DEEP_HOOK_IMPORT
+        - FE_COMPONENT_API
+        - FE_COMPONENT_WORLD_OWNERSHIP
+        - FE_WORLD_OWNER_RENDER_BOUNDARY
+        - FE_CONNECTED_BLOCK_RENDER_PAIR
+        - FE_PURE_REACHES_DATA
+        - FE_PURE_WORLD_HOOK
+        - FE_PURE_WORLD_IMPORT
+      manual: []
+    relatedExamples:
+      - connected-block
+
+  - id: FE-NAMING-3
+    title: Class-name exports
+    kind: mandatory
+    hfsRules: [R61, R92]
+    requirement: |
+      One role uses `...ClassName`; a map of roles uses `...ClassNames`; call-time variants use `get...ClassName`. Class
+      strings hold Grammar scale classes only (see css.yaml).
+    rationale: |
+      A named export per role keeps class strings in one place and out of the component body.
+    cases:
+      - id: case-1
+        when: "One string for one role"
+        write: "export const authenticationPageClassName = cn(formPageClassName)"
+      - id: case-2
+        when: "A map of roles for one unit"
+        write: "export const salesBlockClassNames = { root: cn(...), header: cn(...) } as const"
+      - id: case-3
+        when: "A variant resolved at call time"
+        write: 'export const getBubbleClassName = (role: "user" | "assistant") => ...'
+    verification:
+      automated:
+        - FE_STYLE_TOKEN_ONLY
+        - FE_STYLE_SOURCE_UNRESOLVED
+        - FE_COMPONENT_API
+        - FE_COMPONENT_WORLD_OWNERSHIP
+        - FE_WORLD_OWNER_RENDER_BOUNDARY
+        - FE_CONNECTED_BLOCK_RENDER_PAIR
+        - FE_PURE_REACHES_DATA
+        - FE_PURE_WORLD_HOOK
+        - FE_PURE_WORLD_IMPORT
+      manual: []
+    relatedExamples: []
+
+  - id: FE-NAMING-4
+    title: Hooks, operations and cache keys
+    kind: mandatory
+    hfsRules: [R56, R50, R21]
+    requirement: |
+      Every authored hook lives under hooks/ (hooks/swr, hooks/rhf, hooks/zustand/<store>, hooks/socketio, hooks/effects,
+      hooks/reuseables or hooks/<domain>), starts with use, and names the lifecycle it owns; one hook per file, the file named
+      after the hook. Data hooks are `hooks/swr/api/graphql/queries/useQuery<X>Swr.ts` and
+      `hooks/swr/api/graphql/mutations/useMutate<X>Swr.ts` (REST: `useGet<X>Swr`, `usePost<X>Swr`, `usePut<X>Swr`,
+      `usePatch<X>Swr`, `useDelete<X>Swr`); key constants are `QUERY_<X>_SWR_KEY` and `MUTATE_<X>_SWR_KEY`. Forms are
+      `hooks/rhf/use<X>Form.ts`. The one shared helper file of a domain is `<domain>.shared.ts`. Operations are
+      `modules/api/graphql/queries/query-<x>.ts` exporting `query<X>` and `modules/api/graphql/mutations/mutation-<x>.ts`
+      exporting `mutate<X>`; generated names remain generator-owned.
+    rationale: |
+      Names reveal whether a file is a hook, a reader or a shared helper, and make a duplicated helper visible.
+    cases:
+      - id: case-1
+        when: "Read hook"
+        write: "hooks/swr/api/graphql/queries/useQuerySalesSummarySwr.ts"
+      - id: case-2
+        when: "Write hook"
+        write: "hooks/swr/api/graphql/mutations/useMutateSendHandoffSwr.ts"
+      - id: case-3
+        when: "Key constant"
+        write: 'export const QUERY_SALES_SUMMARY_SWR_KEY = "QUERY_SALES_SUMMARY_SWR"'
+      - id: case-4
+        when: "Shared helper of a domain"
+        write: "hooks/sales/sales.shared.ts exporting salesAccessToken once"
+      - id: case-5
+        when: "An operation"
+        write: "modules/api/graphql/queries/query-sales-summary.ts exporting querySalesSummary"
+      - id: case-6
+        when: "Non-data hooks"
+        write: "useAuthentication under hooks/authentication; useSessionToken under hooks/session"
+    verification:
+      automated:
+        - FE_HOOKS_ARE_HOOKS
+        - FE_CUSTOM_HOOK_LOCATION
+        - FE_BLOCK_PRODUCT_HOOK_DEFINITION
+        - FE_COMPONENT_DEEP_HOOK_IMPORT
+        - FE_TRANSPORT_OWNER
+        - FE_EFFECT_FETCH
+        - FE_SWR_KEY_IDENTITY
+        - FE_SWR_MUTATION_RESOURCE_IDENTITY
+        - HFS_DUPLICATE_CODE
+        - HFS_DUPLICATE_SYMBOL
+        - FE_CROSS_APP_DUPLICATE
+      manual: []
+    relatedExamples:
+      - connected-block
+
+  - id: FE-NAMING-5
+    title: Constants and module-level values
+    kind: mandatory
+    hfsRules: [R49]
+    requirement: |
+      Frozen module values use UPPER_SNAKE. Exported state inventories use `UNIT_STATES` arrays. Component vocabulary is
+      not an enum; GraphQL and provider enums stay inside the transport adapter and are mapped before presentation. A name
+      the framework mandates in a framework-pinned file keeps the framework spelling (folder.yaml FE-FOLDER-1
+      frameworkPinnedRootExports).
+    rationale: |
+      A closed vocabulary of literals is checkable and keeps wire types out of presentation.
+    cases:
+      - id: case-1
+        when: "Frozen module value"
+        write: 'const HISTORY_STATES = new Set<ChatState>(["open", "closed"]) or const PENDING_TURN_IDS = ["pending-1"] as const'
+      - id: case-2
+        when: "Exported inventory"
+        write: "export const SALES_BLOCK_STATES: ReadonlyArray<SalesBlockState> = [...]"
+      - id: case-3
+        kind: exception
+        when: "A name the framework mandates"
+        write: "export const config = { matcher } in src/proxy.ts keeps its framework spelling"
+    verification:
+      automated:
+        - FE_ENV_OWNER
+      manual: []
+    relatedExamples: []
+
+  - id: FE-NAMING-6
+    title: Handlers, booleans, helpers
+    kind: mandatory
+    hfsRules: [R56, R91]
+    requirement: |
+      Pure-half action handlers are bare verbs inside `on`. Boolean props use is or has prefixes. Local helpers are camelCase;
+      local sub-renders are PascalCase with their own props type.
+    rationale: |
+      The pure half describes what can happen, not how the owner names its callbacks.
+    cases:
+      - id: case-1
+        when: "Action handler"
+        write: "on: { signedIn: () => void } and on.send, never onX on the pure half (lint handler-on-prefix)"
+      - id: case-2
+        when: "Boolean prop"
+        write: "isLoading, isEnrolled, isPartial, hasError"
+      - id: case-3
+        when: "Local pure helper"
+        write: "stateNeedsRetry, turnMarkdown, routeState"
+      - id: case-4
+        when: "Local sub-render"
+        write: "const Turn = (props: TurnProps) => ..."
+    verification:
+      automated:
+        - FE_HOOKS_ARE_HOOKS
+        - FE_CUSTOM_HOOK_LOCATION
+        - FE_BLOCK_PRODUCT_HOOK_DEFINITION
+        - FE_COMPONENT_DEEP_HOOK_IMPORT
+        - FE_SOURCE_FORM
+        - FE_SOURCE_LAYOUT_INVALID
+      manual: []
+    relatedExamples: []
+
+  - id: FE-NAMING-7
+    title: File names outside component folders
+    kind: mandatory
+    hfsRules: [R01, R56]
+    requirement: |
+      Hook files are camelCase equal to the export (`useSessionToken.ts`). Module files are kebab-case (`read-sales-summary.ts`,
+      `create-client.ts`). There are no spec files under `fe/` (FE_NO_TESTS).
+    rationale: |
+      The file name states what the slot check and a reader expect to find in it.
+    cases:
+      - id: case-1
+        when: "Hook file"
+        write: "useQuerySalesSummarySwr.ts, useSessionToken.ts"
+      - id: case-2
+        when: "Module file"
+        write: "read-sales-summary.ts, sales-summary.mapper.ts, create-client.ts"
+    verification:
+      automated:
+        - HFS_SLOT_UNDECLARED
+        - HFS_SLOT_AMBIGUOUS
+        - HFS_SLOT_NOT_ENABLED
+        - HFS_FORBIDDEN_PRESENT
+        - HFS_TRACKED_MUST_BE_IGNORED
+        - HFS_ROOT_ENTRY_FORBIDDEN
+        - HFS_ROOT_MARKDOWN_FORBIDDEN
+        - HFS_ROOT_SRC_FORBIDDEN_FE
+        - HFS_SRC_LAYOUT_INVALID
+        - HFS_MODULE_TIER_INVALID
+        - HFS_WORK_IN_FE
+        - HFS_STACKS_IN_SIDE
+        - FE_HOOKS_ARE_HOOKS
+        - FE_CUSTOM_HOOK_LOCATION
+        - FE_BLOCK_PRODUCT_HOOK_DEFINITION
+        - FE_COMPONENT_DEEP_HOOK_IMPORT
+      manual: []
+    relatedExamples: []

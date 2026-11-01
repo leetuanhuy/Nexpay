@@ -1,0 +1,73 @@
+import { mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
+
+/** Programs whose PATH entries enforce the shared command policy before reaching the host tool. */
+const TOOL_WRAPPERS = Object.freeze(['git', 'npm', 'npx', 'node', 'docker', 'supabase', 'gh', 'schtasks']);
+
+const wrapperName = (program, platform) => platform === 'win32' ? `${program}.cmd` : program;
+const wrapperText = ({ program, platform, node, cli }) => platform === 'win32'
+  ? `@echo off\r\n"${node}" "${cli}" guard raw ${program} -- %*\r\n`
+  : `#!/bin/sh\nexec "${node}" "${cli}" guard raw ${program} -- "$@"\n`;
+// The extensionless launcher bash runs (scripts/lib/guard-command.mjs spells the hook command that names it); on Windows
+// its paths use forward slashes, which bash and node both accept.
+const launcherText = ({ platform, node, cli }) => {
+  const spelled = (file) => platform === 'win32' ? file.replaceAll('\\', '/') : file;
+  return `#!/bin/sh\nexec "${spelled(node)}" "${spelled(cli)}" "$@"\n`;
+};
+
+/** Write the per-user runtime record, StarCi launcher and guarded PATH tool wrappers for that runtime. */
+export function writeRuntimeShim({ root, home = os.homedir(), cli: launcher = null } = {}, deps = {}) {
+  const mkdir = deps.mkdir ?? ((directory) => mkdirSync(directory, { recursive: true }));
+  const write = deps.write ?? writeFileSync;
+  const chmod = deps.chmod ?? chmodSync;
+  const platform = deps.platform ?? process.platform;
+  const node = deps.node ?? process.execPath;
+  const runtimeRoot = path.resolve(root);
+  const starciHome = path.join(home, '.starci');
+  const shimDir = path.join(starciHome, 'bin');
+  const runtimeJson = path.join(starciHome, 'runtime.json');
+  const cli = launcher == null ? path.join(runtimeRoot, 'packages', 'cli', 'bin', 'starci.mjs') : path.resolve(launcher);
+
+  mkdir(shimDir);
+  write(runtimeJson, `${JSON.stringify({ root: runtimeRoot }, null, 2)}\n`);
+  if (platform === 'win32') {
+    const shim = path.join(shimDir, 'starci.cmd');
+    write(shim, `@echo off\r\n"${node}" "${cli}" %*\r\n`);
+    const posixShim = path.join(shimDir, 'starci');
+    write(posixShim, launcherText({ platform, node, cli }));
+    for (const program of TOOL_WRAPPERS) {
+      write(path.join(shimDir, wrapperName(program, platform)), wrapperText({ program, platform, node, cli }));
+    }
+    return { root: runtimeRoot, runtimeJson, shim, posixShim };
+  }
+
+  const shim = path.join(shimDir, 'starci');
+  write(shim, launcherText({ platform, node, cli }));
+  chmod(shim, 0o755);
+  for (const program of TOOL_WRAPPERS) {
+    const wrapper = path.join(shimDir, wrapperName(program, platform));
+    write(wrapper, wrapperText({ program, platform, node, cli }));
+    chmod(wrapper, 0o755);
+  }
+  return { root: runtimeRoot, runtimeJson, shim };
+}
+
+
+/**
+ * The environment a runtime process runs in: the same as the caller's, without the guarded wrapper directory on PATH.
+ * An agent's own `git` or `npm` meets the wrappers; the runtime verbs that agent started act with the real tools, so a
+ * verb can do what its role allows. Nothing the agent can set changes this: the launcher always strips it.
+ */
+export function runtimeEnv(env = process.env, { home = os.homedir(), platform = process.platform } = {}) {
+  const key = Object.keys(env).find((name) => name.toLowerCase() === 'path');
+  if (!key) return env;
+  const same = (entry) => {
+    const left = path.resolve(String(entry).replace(/^"(.*)"$/, '$1'));
+    const right = path.resolve(home, '.starci', 'bin');
+    return platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+  };
+  const separator = platform === 'win32' ? ';' : ':';
+  return { ...env, [key]: String(env[key]).split(separator).filter((entry) => entry && !same(entry)).join(separator) };
+}

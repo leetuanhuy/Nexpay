@@ -1,0 +1,17 @@
+group: runtime
+verb: version
+owner: runtime
+summary: print the runtime package version
+impl:
+  script: scripts/install/install.mjs
+  args:
+    - version
+flags: []
+exit:
+  "0": version printed
+  "2": bad usage
+json: none
+examples:
+  - starci runtime version
+editions:
+  - full

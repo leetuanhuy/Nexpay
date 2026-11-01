@@ -1,0 +1,907 @@
+schema: starci/op@1
+id: interface.draw
+goal:
+  en: Establish the interface direction before frontend implementation by token-render. Draw EVERY screen
+    of the scope - every declared shape (one per `XBase#state`) at desktop AND mobile - WITH THE REAL GRAMMAR COMPONENTS - a React `<XBase>.draw.tsx` composing only
+    @starci/grammar with fixture props, type-checked and rendered in the product's own CSS by Playwright
+    (owner ruling 2026-09-27) - from accepted business/SDS, brand, resolved UI knowledge and
+    Grammar geometry; retain each brief, render source and self-check, classify every visible region
+    as a reusable raster asset or code-native DOM/CSS/SVG realization, and map every
+    screen/shape/component explicitly. The op STARTS FROM TODO (owner ruling 2026-09-29 - a draw must work from a
+    product with no shell) - when the shell record or a layout above a screen is absent, todo or unsettled, this
+    same op first scans the layout tree, draws or captures the missing shell and ancestor layouts (and the brand
+    lockup), settles them in its own writes, and only then draws the screens on top - one coherent chain that
+    follows the brand direction. Code is never built before this drawing is settled (dispatch design gate).
+params:
+  candidatesPerScreen:
+    type: integer
+    default: 1
+    min: 1
+    max: 3
+    setBy: owner
+    doc:
+      en: >-
+        How many alternative directions to draw for one screen. Owner ruling 2026-09-27 - ONE version per
+        shape, drawn carefully - the draw loop and its critic still run, but only the loop's single best round
+        reaches the owner; above the default only when the owner sets it. Every drawing files its draw-review
+        ask and only the owner accepts it (on Telegram - an album of the drawn parts, a reply 'ok' or an equivalent approval word accepts,
+        anything else is feedback and a redraw).
+  gateRounds:
+    type: integer
+    default: 5
+    min: 1
+    max: 10
+    setBy: owner
+    doc:
+      en: "Rounds of FIX then starci app lint over the files the op produced before it stops: a lint still red after the last round is reported blocked with the exact findings of that round (knowledge/op-gate.yaml proofs.produced-lint)."
+      vi: "Số vòng SỬA rồi chạy lại starci app lint trên các tệp op đã tạo trước khi dừng: hết vòng cuối mà lint vẫn đỏ thì báo blocked kèm đúng các lỗi của vòng đó (knowledge/op-gate.yaml proofs.produced-lint)."
+nodeKinds: [ui]
+completionProfile: ui
+grammarContext: required
+grammarInputs: component-source
+sideEffects: ['rendered shape parts with their exact brief, render source, rationale.json and annotated redline render, artwork-slot briefs for interface.asset, and the direction images composited from the parts into the real layout captures, under the owning UI node assets']
+graphPolicy:
+  mode: read-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+  workGraph: revise
+reads:
+  - id: target
+    path: .starciwork/features/<feature>/ui/<name>/index.yaml
+    purpose:
+      en: "The selected ui record: its feature's scope, proof demands, refs/dependencies, its `ui.shapes`
+        (one per `XBase#state`) and `ui.dataStatus`, existing directions and freshness. For an explicitly
+        new target the record is absent, and the nearest existing ancestor/workspace carries the
+        surrounding scope."
+  - id: business
+    path: .starciwork/features/<feature>/{fr,nfr,br,decision,data,journey}/**/index.yaml
+    purpose:
+      en: The accepted requirements, decisions, actors, journeys, states, content and acceptance IDs in
+        scope.
+  - id: architecture
+    path: .starciwork/features/<feature>/{sds,contract,integration}/**/index.yaml
+    purpose:
+      en: The accepted design flows, component boundaries, data/API contracts, security and failure
+        behavior relevant to the interface.
+  - id: brand
+    path: .starciwork/brand/index.yaml with its declared brand/assets/** masters
+    directionArchetype: true
+    purpose:
+      en: "The current brand record and its actual masters: tokens, typography, logo/mascot placement,
+        imagery rules, rights, rev and forbidden treatments; and its brand.direction (brand.decide's direction
+        mode): the archetype block of the record's ui.archetype (scripts/work/ui-archetype.mjs derives it when
+        absent) and the rubric (brand.direction.rubric.checks) the draw loop's critic judges beauty and hierarchy
+        by. Dispatch refuses prerequisite-unmet (direction-unaccepted) until the owner accepted that archetype
+        (scripts/work/brand/brand.mjs checkDirection evidence.ready; runtimes.yaml
+        allocation.drawLoop.directionPrerequisite switches it)."
+  - id: shell
+    path: .starciwork/shell/index.yaml
+    layoutFoundation: true
+    purpose:
+      en: "May be absent or todo when the op starts (step 1 creates and settles it). The product's layout tree (work/layout-tree@1) with the captures it cites (blobs, engine/db/blob.mjs): one node per
+        app/ segment of each app the frontend declares (`apps[]`: a monorepo may hold several, apps/app and apps/landing; a node id is a
+        route within its app) - route groups, parallel slots @x, intercepting routes (.)x, loading/error/not-found
+        files - each layout with its chrome (visible or passthrough), rev, navigation with labels per
+        locale out of the i18n catalogs, and real captures per breakpoint and theme with the page slot
+        rectangle measured (desktop and mobile in the light theme are required; dark is optional); the
+        breakpoints and themes; productLocale; the demo personas by role; the brand lockups; its origin
+        (repository scanned from app/, or planned)."
+  - id: knowledge
+    path: knowledge/index.yaml with the applicable UI composition, presentation, proof and family topics
+    purpose:
+      en: "The applicable UI rules and references for hierarchy, density, states, accessibility,
+        responsive behavior and visual review. When a Grammar family is resolved for the consuming
+        app, composition law comes from two tiers: the installed package's shipped `concepts.yaml` —
+        its authored normative vocabulary, selection map, composition rule ids and anti-patterns,
+        resolved via `node_modules/<pkg>/concepts.yaml`, then a project-vendored
+        `.starciwork/_resources/grammar-concepts.yaml`, then a source checkout — and the family's
+        cataloged reusableStyle (idioms) and productComposition (playbook) under
+        knowledge/grammars/<family>/ as observed-evidence supplement."
+  - id: grammar
+    path: consuming manifest/lockfile with the resolved Grammar exports, type declarations, source, DNA and CSS
+    purpose:
+      en: "The Grammar the drawing COMPILES AGAINST (owner ruling 2026-09-27: draw with the real components): the package the consuming app installs - identity,
+        version, its real public exports and prop types (node_modules/@starci/grammar/dist/**/*.d.ts), the
+        runtime's grammar source (packages/grammar/src) - with knowledge/grammars/<family>/DNA.yaml (the
+        component list, anatomy and closed values), the HeroUI styles (@heroui/styles) the components render
+        with, and the brand CSS. The dispatch attaches these as packet context.grammar (grammarInputs
+        component-source: grammar-source and heroui-styles roles; no capture, no reference render). Which
+        grammar the draw renders with is decided by `starci work draw-grammar --product <app dir>
+        --file <XBase>.draw.tsx`: the product's install when the draw type-checks against it, else the
+        runtime-built claude-dist (an alias scoped to the draw bundle, provenance grammarSource
+        claude-dist@<v>, upgradeOwed recorded for interface.implement)."
+  - id: repo
+    path: <app>/<bound-paths>
+    purpose:
+      en: The existing source's manifests, active family/root and selected current UI context. Greenfield
+        work records source not-yet-created honestly.
+  - id: profile
+    path: modules/models/registry.yaml with modules/models/runtimes.yaml, the selected runtime and the
+      actual host tools
+    purpose:
+      en: "Whether this host runs the Playwright capture of `scripts/work/draw-render.mjs` (node, and Playwright with its browser
+        and esbuild: the product's install when it has one, else the runtime's own) and which tool was actually invoked. Owner ruling 2026-09-27
+        (draw-devin-brand-claude): interface.draw walks the draw order - Devin first, Codex the fallback - and a
+        raster region is an artworkSlot interface.asset generates through `starci work imagegen` (the steps keep the drawer
+        off raster art)."
+  - id: generatedDirection
+    path: N/assets/**/<asset>
+    purpose:
+      en: The part, brief, render source and prompt bytes created earlier in this same operation,
+        reopened for visual review, coverage binding and final hash verification.
+  - id: workflow
+    path: the selected workflow request with modules/kernel/verdict-contract.yaml and this op's
+      authority.json
+    purpose:
+      en: The exact request, outputs and authority when this operation belongs to a named workflow.
+writes:
+  - id: shellNode
+    path: .starciwork/shell/index.yaml
+    schema: work/layout-tree@1
+    content:
+      en: "The one layout tree, when this op is the workflow that owns the shell foundation (starci kernel dispatch claims foundation
+        `shell` for the first draw that finds parents to draw; scripts/kernel/shell-foundation.mjs): `node
+        scripts/work/layout-tree.mjs scan --work .starciwork --write` rewrites
+        it from the frontend's app/, and this op decides each layout's chrome, captures every visible repository layout
+        (`layout-tree.mjs capture`), plans each visible layout the frontend does not have yet (`layout-tree.mjs plan --node
+        <id> --files layout,page --design <ui-id>`), writes the personas and, once a layout is captured or its drawing is
+        accepted, the brand lockup (`layout-tree.mjs lockup`). The fields, the ui.<feature>.<layout>-layout naming and the
+        one-writer-per-run rule are brand.decide's shellNode contract, unchanged. A workflow that does not own the shell
+        never writes it: its draw waits (foundation-wait) until the owner lands it."
+  - id: shellAssets
+    path: blob store (+ <STARCI_JOB_SCRATCH>/captures/layouts) - never .starciwork/shell/assets
+    fields: [capture bytes cited by name + sha256 in shell/index.yaml]
+    content:
+      en: Layout captures and the lockup crop are agent data (docs/ledger-db.md) exactly as brand.decide writes them
+        (`layout-tree.mjs capture|lockup --write` puts the bytes in the blob store and the tree cites name + sha256).
+  - id: node
+    path: .starciwork/features/<feature>/ui/<name>/index.yaml
+    schema: work/ui-screen@1
+    fields:
+      - schema
+      - id
+      - title
+      - state
+      - brand
+      - shell
+      - app
+      - route
+      - routeParent
+      - surface
+      - direction
+      - routed
+      - host
+      - persona
+      - refs
+      - "ui:
+        {status,archetype,intent,surfaces,states,coverage,flow,accessibility,responsive,assets,artworkSlots,o\
+        bservations,gaps}"
+      - assets:[{path}]
+      - blockedBy
+    content:
+      en: "The selected direction in the approved ui record. `ui.coverage` holds scale,
+        representativeScreens and a map of screen/shape/viewport to actual Grammar components,
+        derivation and optional directionAsset. `ui.flow` holds the durable interaction-flow map
+        derived from accepted journeys/SDS: every transition with its trigger and landing shape, and
+        the explicitly named edge cases — refresh mid-flow, external redirect return, double-submit,
+        tab close, failure/retry and dead-end paths. Its shape is the work/ui-screen@1 `ui.flow` block: route or routes,
+        optional scope and states, `transitions` of {from, trigger, to} with optional id, guard,
+        rule and effect, and `edgeCases` as sentences or {name, handling}; the map lives in the
+        record itself, never only in an asset file. Accessibility, responsive rules, copy, interactions and artwork slots
+        are described alongside them - every artwork the drawing needs is a ui.artworkSlots entry (id = its
+        data-asset-slot, status owed until interface.asset fills it) requested in asset-request.md beside the render
+        source, the assetSlotsOwed the settle records - and every part, brief, render source and raster prompt appears in both ui.assets
+        and the node assets list. The record states where it sits in the App Router: `route` (the layout
+        tree node id, /[locale]/(console)/agentos/[id]/accounting; a route the tree does not hold yet
+        names its nearest existing `routeParent`), `app` (the frontend app the route belongs to, a name in the tree's `apps[]` - required when the tree declares several apps and the route exists in more than one of them or in none; a tree of one app, or a route only one app holds, needs none), `surface` (layout, page, modal, drawer, or one of the
+        data-status route files loading, error and not-found; an overlay may vary per breakpoint, {desktop: drawer, mobile: modal}), `direction`
+        for a drawer (left, right, top or bottom, per breakpoint allowed - a bottom sheet is a drawer from
+        the bottom), and for a modal or drawer `routed` (true - an intercepting @modal/(.)x route plus the
+        full page x/page.tsx; false - component state with no URL) and `host` (the ui record or route it
+        opens over). A popover, dropdown, toast or tooltip is a state in ui.flow, never a record. The
+        top-level `shell` binds the tree as {ref: shell, rev, layouts: [{node, rev}] for every visible
+        layout above the route, activeNav: <nav key>}, or {chromeless: true, because}."
+  - id: designSource
+    path: N/assets/**/<asset>
+    fields:
+      - ui.assets:[{path,role,provenance,generation?,composite?,breakpoint,theme}]
+      - assets:[{path}]
+    content:
+      en: "Under the owning UI node's assets/directions/: each drawn SHAPE is the XBase content only - the
+        block or page body region the XBase renders, never the page with its layout chrome (sidebar, header,
+        tabs belong to the Layout and are never redrawn; owner ruling 2026-09-27) - captured by
+        scripts/work/draw-render.mjs --state <state> as <XBase>#<state>--<breakpoint>--<theme>.png (an older
+        <shape>--<presentation>--<breakpoint>--<theme>.content.png part stays readable) with its exact sibling
+        brief (.prompt.txt), render source - the drawing itself, <XBase>#<state>--<breakpoint>--<theme>.draw.tsx
+        (role render-source: a React XBase importing only @starci/grammar, owner ruling 2026-09-27) with its
+        fixture .fixture.json (role render-fixture: {state, props, on}, one per state, optionally per viewport)
+        and the rendered DOM snapshot .dom.html - its ui-proof score (.score.json) and draw-render capture
+        record (source.grammar: grammarSource and any upgradeOwed), role direction-content,
+        `generation.tool: draw-render` and promptPath, and its decision evidence: <part>.rationale.json and the annotated
+        <part>.redline.png (role direction-redline); an older hand-written .html render source stays
+        readable and is never written for a new drawing; an overlay draws its panel alone; a surface-layout
+        record draws the layout's own chrome. A raster region the part needs is an artworkSlots entry with its exact
+        brief for interface.asset and a neutral placeholder in the part; the drawer never paints it. A full-page composite is never bound as a drawing
+        (DRAW_SCOPE_FULL_PAGE); scripts/work/compose-direction.mjs may still place a part into the layout
+        chain as unbound evidence for interface.implement and interface.audit. Every drawn shape has its part
+        at desktop AND mobile in the light theme; dark is optional. The part is what the owner reviews -
+        shapes only, one per XBase#state of ui.shapes, never a retired data-status image. Reference inputs
+        stay under their existing owner and are cited rather than copied."
+  - id: evidence
+    path: evidence/**
+    fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+    artifacts: [manifest.yaml, direction.png, prompt.txt, visual-review.md, symbol-review.json, realization-map.json]
+    content:
+      en: "The evidence bundle: `manifest.yaml`, the rendered `direction.png` bytes, the exact brief
+        `prompt.txt` bytes, `visual-review.md` (the cited self-check), `symbol-review.json` and
+        `realization-map.json`, with the actual render and ImageGen tool provenance and all accepted
+        input refs. `symbol-review.json`
+        records, for every prominent symbol family, its exact product concept, likely alternate
+        reading without labels, audience maturity, metaphor specificity, sibling distinction, family
+        coherence, reduced-scale legibility and why raster-asset or code-native is the truthful
+        medium. `realization-map.json` classifies each visible region as `raster-asset` or
+        `code-native` with its rationale, responsive/state behavior, asset/artwork-slot binding when
+        raster, and Grammar component plus CSS/SVG/DOM anatomy when code-native."
+  - id: draws
+    path: evidence/draws.yaml
+    fields: [draws, coverage]
+    content:
+      en: "The readable mapping of representative directions, prompt artifacts and complete remaining
+        coverage. Each draw is one shape at one breakpoint and theme - desktop and mobile, light, for
+        every drawn shape - and binds `part` {path, sha256} (the drawn part the owner reviews), `composite`
+        {path, sha256} (the part placed into the layout chain - evidence for implement and audit only),
+        its brief, screen/shape/breakpoint/viewport/theme and `provenance.tool: draw-render`. The UI
+        node owns the image, brief and source bytes; this file indexes them.
+        scripts/kernel/ask-server.mjs and scripts/connectors/telegram-media.mjs read it and show the owner
+        each draw's part, never the composite."
+  - id: work-graph
+    path: evidence/work-graph.json
+    schema: starci/work-graph@1
+    fields: [domains, nodes, edges]
+    content:
+      en: The workflow's next work-graph version - each shape this op drew attached to its slice.
+  - id: lint
+    path: STARCI_JOB_SCRATCH/lint.json
+    schema: starci/lint@1
+    content:
+      en: "The starci app lint report of the drawn files (starci app lint --changed <those files> --format json at the app root): the FE canon, stylelint and the brand grammar's checks, every finding with its engine, rule, code, path and line, and the errors of a lint that could not run."
+      vi: "Báo cáo starci app lint của các tệp đã vẽ (starci app lint --changed <các tệp đó> --format json ở gốc app): canon FE, stylelint và các kiểm tra của ngữ pháp thương hiệu, từng lỗi kèm engine, luật, mã, đường dẫn và dòng, cùng errors khi lint không chạy được."
+steps:
+  - reads:
+      - target
+      - business
+      - architecture
+      - brand
+      - shell
+      - knowledge
+      - grammar
+      - repo
+      - profile
+    writes: [shellNode, shellAssets, node]
+    action:
+      en: "SETTLE THE PARENTS FIRST (owner rulings 2026-09-29 draw-from-todo: a draw starts from todo; if the parent is not
+        drawn, draw the parent - never wait for a separate brand.decide, never invent chrome). Run `node
+        scripts/work/layout-tree.mjs scan --work .starciwork --write`
+        (with no frontend yet, `layout-tree.mjs plan` the tree from the accepted journeys and SDS) and read the tree. For
+        the record's route, list every layout above it (`starci work shell-conformance <ui-record-dir>` names each
+        unsettled one). When every one is settled, skip to the next step. Otherwise, in THIS op and before drawing any
+        screen: (a) decide each unknown chrome (visible when it draws a rail, bar or frame around its children,
+        passthrough when it renders only document, providers or a guard); (b) a layout the frontend already has is
+        captured from the real render at desktop and mobile in the light theme (dark only where the tree carries it) with
+        its slot keyed #FF00FF and measured, per brand.decide's capture procedure (`layout-tree.mjs capture ... --write`,
+        destinations for an active-nav layout); (c) a planned visible layout is drawn by its own surface-layout ui record
+        (id ui.<feature>.<layout>-layout, `surface: layout`, route the layout node, chrome from the brand direction, the
+        page slot one flat #FF00FF rectangle) through the same draw steps below, parent before child, and settled through its
+        draw-review (`draw-review.mjs status|apply`), the pages under it composited into that drawing; (d) crop the brand
+        lockup when the tree has none (`layout-tree.mjs lockup`, from a capture, or from the accepted layout composite on a
+        greenfield product; the layout drawing itself is exempt from the lockup requirement); (e) write the personas from the
+        seed or fixture data the app demos with (a persona no seed names is a question with candidates, never invented);
+        (f) bump the tree rev and keep `shell-conformance.txt`. The brand direction (brand.decide's direction mode) is what the
+        chrome follows; when the brand record has no direction yet, draw from the brand tokens and file the direction question
+        as brand.decide does. When another workflow owns the shell foundation this dispatch was deferred (foundation-wait) and
+        the job never launched, so an op that runs owns it. Only what the op cannot settle is a blocker (APP_SHELL_UNSETTLED
+        names the missing input, e.g. no brand record, no journey to plan a layout from) - an unsettled layout is work to
+        do here, not a reason to stop. THEN place the record in the layout tree before anything else. Read the tree and write `route`,
+        `surface` (per breakpoint where an overlay changes form), `direction` for a drawer, and `routed`
+        and `host` for a modal or drawer; a popover, dropdown, toast or tooltip is a flow state of its
+        page, not a surface. Layouts are drawn first: a `surface: layout` record draws a planned layout -
+        its chrome with the page slot left as one flat #FF00FF rectangle - and the pages or overlays under it
+        are composited into it once it is accepted; a layout the repository already has is captured (the
+        step above), never redrawn. The layout record's id is exactly the planned node's layout.design
+        (ui.<feature>.<layout>-layout, so it lives at features/<feature>/ui/<layout>-layout/), with
+        `surface: layout` and `route` the layout node id; this op plans and names it when the tree has none
+        (`layout-tree.mjs plan --design`). Every layout above the route is settled BY THE END OF THIS OP
+        (`starci work shell-conformance <ui-record-dir>` judges the result) and is bound by its rev in
+        shell.layouts; the layouts this op settled count. The chrome, navigation,
+        UI language and demo personas come from the tree and nowhere else. Freeze complete coverage before drawing.
+        Draw only shapes: the record's `ui.shapes`, one per `XBase#state` at the viewports it names
+        (`examples/shape-slot/README.md`, examples/index.yaml#connected-block); a record
+        without `ui.shapes` draws the states of its ui.flow less every data status. A data status -
+        loading, empty, error, forbidden, skeleton, 401/403/404, a slot retrying, pending, uncertain,
+        stale or last-known, unverified or limited, a no-<thing> state, and a loading, error or not-found
+        surface - is never drawn, nor is a variant that only adds a status banner or badge to the same
+        layout, unless its shape carries nonDerivable: the SlotView formula, the
+        default shape's skeleton or `notFound()` renders it, and the coverage map names which. A record
+        rendered by recipe (scripts/work/ui/ui-shapes.mjs recipeRenderedOf: a loading, error or not-found
+        surface, or every state it names a data status) has nothing to draw: write it done with no
+        drawing and no owner review.
+        Enumerate every screen, shape and responsive band of the scope from accepted journeys/SDS; map each
+        combination to actual inspected Grammar components. Enumerate the interaction flow with the same
+        rigor: every transition's trigger and landing shape, and every reachable edge case. Write that
+        flow map into the ui record. Draw EVERY screen the job's records name - no sampling: coverage
+        `representativeScreens` lists every screen drawn, and only a data status or a variant the rules above derive
+        stays in the coverage map undrawn. A scope too large for one op is cut by the Kernel into more draw jobs (fan-out),
+        never sampled. Every declared shape is drawn at desktop AND mobile in the light theme - a drawer's
+        direction per breakpoint as the record declares it; dark is optional and never demanded.
+        Draw `params.candidatesPerScreen` directions per screen; when that is more than one,
+        park an owner ask so the owner picks - its question.assets list each candidate's PARTS, desktop
+        and mobile, never a composite - keep every candidate as direction and retain the
+        unchosen ones as evidence. Whatever candidatesPerScreen says, a record another leg waits on - a
+        `surface: layout` record drawing a planned layout (its pages and, on a greenfield product, the brand
+        lockup wait on it), or a record another record dependsOn - owes the owner ONE review of its drawn
+        parts before it is done: `starci work draw-review status --ui <ui-record-dir>` says whether
+        it is owed. A record already drawn at its current inputs is not redrawn for it: the attempt only
+        files the review. Before drawing, classify every visible region by realization:
+        use `raster-asset` for authored imagery whose identity depends on rich texture,
+        illustration, photography or a declared mascot/media master; use `code-native` for layout,
+        spacing, responsive structure, panels, cards, controls, text, system icons, borders,
+        shadows, glows and simple geometric decoration representable by semantic DOM plus installed
+        Grammar/CSS/SVG. A rendered part of code-native UI is direction only and never
+        authorizes shipping that UI as a flattened image. A missing product decision, SDS behavior,
+        Grammar capability or flow edge is a typed blocker, never filled with visual invention."
+  - reads:
+      - business
+      - architecture
+      - brand
+      - shell
+      - knowledge
+      - grammar
+      - target
+      - profile
+    writes: [node, designSource, evidence]
+    action:
+      en: "Write one exact brief per representative shape and breakpoint from accepted business/SDS,
+        brand rules/masters and the resolved Grammar. It carries verbatim, and no number it does not
+        carry is invented - a full-width control takes the fill-variant geometry the block gives, never
+        the hug control's: the geometry block `starci work grammar-geometry --prompt --repo
+        <repo>` prints; the applicable proof cases and knowledge/ui values resolved to numbers with their
+        rule ids that `starci work ui-proof-brief --surface <ui-record-dir> --repo <repo>`
+        prints; the grammar sources the dispatch attaches (packet context.grammar); and the brand block
+        `starci work brand-palette --prompt .starciwork` prints - each chromatic token by role
+        with its hex and the rule that primary buttons, links, selected rows, focus rings, active tabs and
+        every call to action are the primary hex. It states screen purpose, component regions, shape,
+        viewport, accessibility and forbidden treatments, carries the line `Product locale: <default>`,
+        writes every UI string in that product locale (never owner_language), and shows the data of one
+        persona role the tree records. Every visible datum is concrete plausible data derived from the
+        accepted business record — numbers, currency amounts, dates, names, statuses and copy — never
+        lorem text, blurred stand-ins, skeleton or shimmer. A status line sits alone at the top of its
+        card or as a neutral grey band, never beside a field label.
+        DRAW WITH THE REAL GRAMMAR COMPONENTS (owner ruling 2026-09-27, 'settled'): the deliverable per shape is
+        `<XBase>.draw.tsx` - the drawing-law XBase (examples/shape-slot: it takes {state, props, on}, props are
+        atoms, local helper components allowed, exported as <XBase>) composing ONLY @starci/grammar[/<family>]
+        exports with their real props and closed variants (Alert, Meter segments, Badge, Button variant,
+        SurfaceCard, IconTile, SectionHeader, Text, Heading, DescriptionList, TagGroup, PageContainer ...), icons
+        only as the source of Icon/IconTile/IconButton (@heroicons/react/24/outline or /16/solid, @starci/heroicons for a glyph heroicons lacks), artwork only as a relative raster
+        import into Image/MediaFrame - plus one fixture JSON per state ({state, props, on}; a
+        <XBase>.<state>.<width>.fixture.json when a viewport needs other data). HTML is layout only (div,
+        section, article, header, footer, main, aside, nav, ul, ol, li) with layout classes on the grammar
+        spacing scale (gap/p/m steps 0 1 2 3 4 6 8 = GAP/PADDING-0..6; grid/flex/order/span); a free spacing
+        value is named with its rule id in rationale.json (a spacing|layout decision), anything that paints is
+        a grammar component. Hand-written HTML/CSS and storybook or reference screenshots are not
+        drawing inputs. Gate it first: `starci work draw-source <XBase>.draw.tsx --fixture <json>
+        --product <app dir>` - TypeScript is the first gate (DRAW_TYPECHECK_FAILED: a prop or variant the
+        grammar does not publish), then the AST gate (DRAW_OFF_GRAMMAR_COMPONENT, DRAW_RAW_STYLED_HTML,
+        DRAW_IMPORT_OFF_GRAMMAR, DRAW_LAYOUT_VALUE_UNJUSTIFIED, DRAW_BASE_SIGNATURE).
+        Render the part from the brief at @2x with `starci work draw-render`: the real `XBase`
+        with fixtures in the product's CSS (--component <XBase>.draw.tsx --export <XBase> --props
+        <fixture.json> --css <product global css> --product <app dir> --out <dir> --viewports <w>x<h>
+        [--full-page]); every bare import resolves from the product (read only; a drawing never edits the product
+        or its package.json), the grammar is the one
+        draw-grammar.mjs resolves, and the rendered DOM is judged for ownership (a painting element must
+        belong to a grammar component). An older record's hand-written html part (--html <file> --out <dir>
+        --viewports <w>x<h>) is re-measured, never drawn anew. A red capture is fixed and re-rendered, and
+        its .json record is kept beside the part. The viewport is the page slot rectangle
+        the innermost visible layout's capture records for that breakpoint; for a modal or drawer the
+        panel; for a layout its own chrome with its slot a flat #FF00FF rectangle. The part draws no
+        sidebar, top bar, logo or navigation, because the real one surrounds it. ImageGen never draws chrome
+        or UI: the imagegen call (`starci work imagegen --prompt <file> --out <the part's assets directory>`, receipt tool
+        image_gen.imagegen) paints only raster regions (mascots, illustrations), each from its exact retained prompt
+        file, embedded in the render as an image. A part painted in a colour the
+        brand does not declare is refused (PALETTE_OFF_BRAND, naming the colour, its area share and the
+        nearest brand token; PRIMARY_ABSENT when it stands in for the primary) and is re-rendered from the
+        tokens, never recoloured by hand. Render each shape once per required breakpoint - desktop and
+        mobile, light theme - at that breakpoint's slot size (or panel shape), never one image stretched to
+        both.
+        EVIDENCE FOR EVERY DECISION (owner ruling 2026-09-27 draw-rationale-evidence; the owner critiques from evidence,
+        never taste; scripts/work/draw/draw-rationale.mjs): beside the source write <source stem>.rationale.json, an
+        array of {id, selector, kind: element|layout|spacing|type|radius|colour|art, decision, value, because,
+        rules[], alternativesRejected[{option, why}], source}, and give every visible element and region of the
+        source data-why=\"<id>\" naming its decisions - in a <XBase>.draw.tsx a grammar component takes no data-why
+        (its props are closed), so each decision binds by its CSS selector onto the rendered DOM (draw-render stamps it
+        before measuring, redlining and snapshotting; data-why stays allowed on a layout element). Cover every region and their order (a layout decision whose
+        id or decision names the order and whose value states the region count), the grid at each viewport (its
+        column count), EVERY distinct gap, padding, inset, radius, font-size, font-weight and line-height the render
+        uses - draw-render measures them with getComputedStyle at every viewport and each must appear in the value of
+        a decision of its kind (spacing or layout, radius, type) - every DNA component and closed variant, every
+        colour it paints (hex or a --token) and every art slot. rules[] cites resolvable ids only: a knowledge id
+        (GAP-5, PADDING-9 case-1), a DNA name or closed value (dna:Button.variant=secondary), a brand.direction
+        principle or rubric id (direction:P2, rubric:H3) or an owner ruling (owner:<id> of
+        modules/kernel/owner-rulings.yaml, a contract change id, a feedback note id or an answer receipt); because
+        names the FR, the content or the user job. draw-render captures the annotated redline beside each part
+        (<part>.redline.png: spacing brackets with the value and the rule id, DNA labels at component roots). A
+        missing file, an element without data-why, an uncovered value, an unresolvable rule id or an empty because
+        is DRAW_RATIONALE_MISSING, a machine metric of the loop.
+        DNA ONLY (owner ruling 2026-09-27): compose only the Grammar's DNA components
+        (knowledge/grammars/<family>/DNA.yaml renderers) with HeroUI/Grammar defaults first - in a .draw.tsx the
+        components ARE the grammar's, so the rendered DOM carries their own data-component marks (the DOM
+        snapshot copies them to data-grammar-component); an older html render source carries
+        data-grammar-component=\"<DNA name>\" (with data-grammar-part for its anatomy part and data-<prop> for a
+        closed value) or data-grammar-proposal=\"<name>\" on every visible element; a notice is DNA Alert with a
+        tone and its alert-actions, a ratio is one DNA Meter (role=meter, aria-valuenow/max). THE ALERT IS THE REAL
+        HeroUI Alert (owner ruling 2026-09-27; @heroui/styles alert.css): a white bg-surface row with shadow-surface,
+        its small indicator glyph (size-4, p-1) on the LEFT of the title in the tone's soft-foreground, the title
+        text-sm/6 medium in that same tone colour, the description muted, its action the grammar Button in
+        the variant the grammar Alert (0.5.3) gives its tone - informative/accent primary, negative/danger danger,
+        every other tone secondary - never a tone-filled background, never an
+        IconTile, never a hand-built control (DRAW_ALERT_ANATOMY). A status dot is the grammar Badge isDot
+        (grammar 0.5.3: a 6px CircleFill in the tone colour, part badge-dot) - never a hand-drawn dot span, never a halo
+        or ring (DRAW_OFF_GRAMMAR_COMPONENT). A Meter track is the HeroUI h-2 (8px) track spanning
+        the full width of its band; a segmented capability Meter (DNA Meter segments 2..12, grammar 0.5.2) is the h-1
+        (4px) track of that full width in equal segments with small gaps, never a short stub (DRAW_METER_TRACK).
+        LAYERS AND MEASURE ARE KNOWLEDGE (owner, 2026-09-28): the page Background holds a Surface (SurfaceCard), and
+        EVERY form control on a Surface - Checkbox, RadioGroup, Select, Textarea, ... as much as Input - takes
+        variant=\"secondary\" (knowledge/ui/proof/anatomy-source.yaml ANATOMY-2 case-1, case-3; DRAW_NESTED_VARIANT); a
+        drawn XBase is the content region only, so it owns its measure: a form, auth or single-task region caps -
+        SurfaceCard measure=\"form\"/\"formCompact\", else w-full max-w-md mx-auto - and never stretches its column
+        (knowledge/ui/presentation/measure.yaml MEASURE-4 case-3/case-4; MEASURE-1 is the page width, not the form's;
+        DRAW_MEASURE_UNCAPPED past W-3xl). ARTWORK IS OWED TO interface.asset
+        (owner ruling 2026-09-27): a mascot, illustration or hero image is never reused ad hoc - mark its place
+        data-asset-slot=\"<id>\" on the MediaFrame/Image/img (a placeholder src is fine - a brand master only as that
+        placeholder: the masters are the landing's art, and every product slot is owed a NEW interface.asset
+        generation, a new pose/composition in the same brand style), request it in asset-request.md
+        beside the source (one heading per slot id: purpose, placement, pixel size, format, the brand master it
+        references) and record it in ui.artworkSlots[] with status owed (DRAW_ASSET_SLOT_UNDECLARED otherwise;
+        `starci work asset-slot list <ui-record-dir>`); settle records each open slot and starci kernel status lists it
+        as assetSlotsOwed[] with an interface.asset leg in nextActions. Anything DNA lacks is a
+        grammar proposal - grammar-proposal.md or .yaml beside the source or in its loop directory, each entry with
+        its name, the gap in DNA, anatomy, tokens, the knowledge rules it claims and an isolated render
+        (scripts/work/grammar-proposal.mjs check) - never invented inline; the owner decides it through the
+        draw-review ask. THE DRAW LOOP (owner ruling 2026-09-27): render and judge every shape only through
+        `starci work draw-loop round --ui <ui-record-dir> --source <XBase>.draw.tsx --fixture
+        <fixture.json> --product <app dir> --css <product global css> --base <XBase> --state <state> --viewports
+        <desktop WxH>,<mobile WxH> --repo <repo>` (the product slot sizes; 1184 and 390 for Nivo): each round
+        runs the source gate (draw-source.mjs, with the grammar resolution recorded in round-<n>/grammar.json),
+        draw-renders the source, keeps round-<n>/{source.tsx, fixture*.json, harness/, <part>.png + .json +
+        .dom.html}, runs EVERY machine metric (the source gate, the capture, the rendered-DOM DNA gate, the taste metrics DRAW_ACCENT_BUDGET /
+        DRAW_TOO_MANY_BANDS / DRAW_TOO_MANY_BADGES, copy, badges, actions, the brand palette, the Grammar
+        geometry and the ui-proof score) and then an independent critic - a fresh Orca worker the loop starts through worker-start (a
+        worker of your Run: it waits for its worker_done up to the critic's timeoutMs, then releases it) of another provider than the
+        drawer's (the Critic tier, tiers.yaml seats.critic - modules/kernel/critic.yaml) with no drawing
+        context, only the PNGs, the HTML and the product's brand.direction rubric - scores every rubric check
+        and the beauty 1-10, recorded in <out>/round-<n>/{source.html, parts, metrics.json, critique.json}. Fix
+        the draw source against metrics.json and critique.json and run round again until the loop stops: every metric
+        passes and beauty is at least allocation.drawLoop.beautyMin, or maxRounds rounds, or stallRounds rounds
+        in a row without progress. Then `starci work draw-loop finish --out <loop dir>` selects the
+        BEST round, installs its parts beside the source - with <part>.draw.tsx and <part>.fixture.json, the
+        accepted draw source interface.implement starts from - and prints the ui.assets entries (generation.loop,
+        grammarSource, grammarUpgradeOwed) to record verbatim. The loop lives in STARCI_JOB_SCRATCH/draw-loop (agent data,
+        never in .starciwork): finish puts it in the blob store as one bundle that generation.loop {sha256, round} cites,
+        and starci kernel report attaches the draw-loop folder by itself, so every round and critique is an artifact of the attempt; outcome blocked means report `blocked` naming its remaining failures and the best
+        round, never pass. Never hand-edit a part after finish, never self-score beauty, never skip the
+        critic (a round drawn with --no-critic is critiqued by finish; DRAW_CRITIC_MISSING means no critic
+        answered - report it, never a score). SELF-CHECK BEFORE EVERY REPORT, whatever its outcome: `node
+        scripts/work/draw-gates.mjs --ui <ui-record-dir> --repo <repo> --files <every file report.files names>
+        --checks-out <evidence dir>/draw-gates.checks.json` runs exactly the gates starci kernel settle and starci kernel record-checks judge
+        this pass by - draw-acceptance, the draw-metrics re-measure of every live part, validate --strict,
+        shell-conformance and the draw-loop outcome - and prints them as report.checks entries whose red ones name
+        the implicated files (`failing`); put those entries in report.checks verbatim and name the checks file in
+        report.files. Fix every red gate on your own files and run it again; a red gate whose failing files are
+        Work records outside your owned paths that nothing touched is recorded foreign by starci kernel record-checks (not this
+        attempt's failure) - report it, never widen your scope to fix it. The owner gate (DRAW_NOT_OWNER_ACCEPTED)
+        is never a red gate: with every machine gate green, file the draw-review ask. Save the capture as assets/directions/<shape>--<presentation>--<breakpoint>--<theme>.content.png
+        beside its exact brief (.prompt.txt) and render source (.content.html), and declare that .html in
+        ui.assets and the node assets list so shell-conformance measures its geometry - this part is
+        what the owner reviews - then composite it: `starci work compose-direction --ui <ui-record-dir>
+        --content <png> --breakpoint <bp> --theme <theme> --state <shape> --tool draw-render
+        [--presentation page|overlay]` places it into the real layout capture - for a layout with
+        destinations, the render with the destination the record's route makes active (a bound
+        shell.layouts[].destination overrides it, shell.activeNav decides when no route matches; `node
+        scripts/work/layout-tree.mjs destinations --work .starciwork --route <route>` shows the pick) - (or, for an overlay, over
+        the host's page composite at the same breakpoint and theme, dimmed, the panel centred for a
+        modal or anchored to the drawer's direction edge) and prints the two asset entries to record
+        verbatim. A routed overlay is composed in both presentations - over its dimmed host and as its
+        full page inside its layout chain; a non-routed overlay only over its host. Open every composite,
+        review it, and record the actual tool provenance (for an image, the model and toolOutputBasename of the
+        imagegen receipt generation-receipts.yaml)."
+  - reads:
+      - target
+      - generatedDirection
+      - brand
+      - knowledge
+      - grammar
+    writes: [node, evidence]
+    action:
+      en: "Review each direction against business truth, brand, relevant UI rules and the inspected
+        Grammar anatomy. Self-check every part in visual-review.md: cite a rule id from the brief for
+        every inset, gap, radius and type size it uses, and mark each applicable proof case satisfied,
+        not satisfied or not observable; a value without a rule id or a case not satisfied fails the
+        part. Before accepting any prominent icon, illustration or symbolic family,
+        self-question it explicitly: what exact product concept does it encode; what would a viewer
+        infer if the label disappeared; is the metaphor generic or brand-specific; does its maturity
+        fit the audience/category; is it distinct from siblings; do camera, base, material, light,
+        scale and density form one family; does it remain legible at the smallest required viewport;
+        and could installed Grammar or repository-native SVG communicate it more truthfully than
+        raster artwork. Reject childlike clip-art, generic stock metaphor, semantic ambiguity and
+        mixed visual families unless accepted intent explicitly requires them. Reject any direction
+        that breaks a rule of the brief step — including a direction that draws titled cards inside
+        cards, per-band cards, gapped bands or floating actions where the resolved Grammar concepts
+        call for one joined surface with an external label row and hairline-separated bands, and slot
+        content that draws a sidebar, top bar, logo, navigation, tenant or UI language of its own inside
+        the real chrome — and correct the source and re-render within the bounded
+        representative set. Declare every
+        embedded illustration/mascot/decorative/media region classified `raster-asset` as an
+        artworkSlots entry for `interface.asset`. Record every `code-native` region with its
+        semantic structure, Grammar primitive or family anatomy, responsive/state behavior and
+        allowed CSS/SVG decoration; never send cards, panels, controls, typography or page
+        composition to ImageGen as production assets. Keep rationale.json true to the source finally installed. Update the coverage map so every non-drawn
+        screen/shape says which representative direction it derives from, which actual Grammar
+        components implement it and how its shape differs."
+  - reads:
+      - target
+      - generatedDirection
+      - workflow
+    writes: [node, evidence, draws]
+    action:
+      en: "Validate Work and every artifact hash, run `starci work shell-conformance` on every
+        ui record directory written, then report the representative parts, briefs,
+        actual tool provenance and complete coverage map. Everything shown to the owner - an ask's
+        question.assets and picks, the report summary's images, the drawing notice - names the drawn
+        parts (desktop and mobile), never a composite; the composites go in files and evidence for
+        interface.implement and interface.audit. When `draw-review.mjs status` says the owner review is owed, report outcome `ask`
+        with `question` exactly what `starci work draw-review question --ui <ui-record-dir> --job
+        <id> [--lang <owner_language>]` prints - one ask per record, kind draw-review, its question.assets the
+        desktop and mobile light shape parts and question.review the record and the part digests the owner is
+        shown. Rule (owner rulings 2026-09-27): every drawing is the owner's to accept, never answered
+        automatically; the owner reviews it on Telegram - the desktop and mobile images as an album with the
+        shape, the round and the notes it answers - and replies 'ok' or an equivalent approval word to accept (add 'golden' to make it
+        the archetype's reference) or anything else as feedback (a reply to a single image is a note on that image);
+        the form (Generate URL) takes a note per image and a golden box too; drawOwnerRulingOf reads from the job's
+        ledger lineage whether the owner asked for this drawing (question.ownerRequested), and either way only
+        the owner accepts it. starci kernel report refuses a `done` report
+        that leaves one unreviewed (draw-review-owed). When the packet's context.owner_answers holds the answer
+        to that ask, run `starci work draw-review apply --ui <ui-record-dir> --receipt <its
+        receipt> --write`: accept writes the record done (verificationSource authored-claim) with
+        ui.review.owner naming the receipt and the part digests accepted, which lets layout-tree.mjs settle the
+        planned layout and crop the lockup, and promotes the drawing into brand.direction.golden when its
+        archetype has no golden yet or the owner marked it golden (brand-direction.mjs promoteGolden); commit it
+        and report done. A redraw answer (scripts/work/draw-feedback.mjs, owner mission 2026-09-27 'feedback ->
+        redraw -> until golden') records every note as an owner ruling in ui.review.feedback (serve-ask already
+        recorded draw-owner-ruling and draw-redraw-owed in the ledger) and learns each product-direction note
+        into brand.direction.learned (proposed); this attempt then REDRAWS the same shapes through the draw loop:
+        its brief .prompt.txt carries `starci work draw-feedback brief --ui <ui-record-dir> --shape
+        <XBase#state>` verbatim (every open note by its id, and every learned product ruling), the critic's rubric
+        gates each note (draw-critic.mjs rubricFor), and a redraw that leaves one unaddressed - the owner's
+        rejected bytes, a brief without the note id, or a critic that does not pass it - is DRAW_FEEDBACK_UNADDRESSED
+        (draw-review.mjs question refuses to ask, starci kernel report and starci kernel settle refuse); `node
+        scripts/work/draw-feedback.mjs check --ui <dir>` says so first. Then ask again; repeat until the owner
+        accepts. A note's class (product-direction, grammar, knowledge, one-off) is read from its structure; to
+        correct it run `draw-feedback.mjs classify --ui <dir> --note <id> --class <c> --target <x> --by kernel
+        --write` (structure must confirm it). Never write a record done, ui.review.owner, ui.review.feedback or
+        brand.direction.learned/golden by hand. State the truth boundary: the rendered
+        direction is a design input, not exact component/render/API evidence. `interface.implement`
+        produces the actual Grammar implementation captures and code checks, and `uat.verify`
+        independently exercises the running product in a browser. Stop without frontend code and
+        never self-advance."
+  - reads: [target]
+    writes: [work-graph]
+    action:
+      en: When the workflow has a work graph, attach every XBase#state shape this op drew to exactly one
+        slice - the slice whose journey or FR the ui record serves - and record the revision; an unchanged
+        graph records nothing.
+  - reads:
+      - brand
+      - workflow
+    writes: [node, evidence]
+    action:
+      en: "Autopilot (owner ruling 2026-09-28 autopilot-run-to-finish; modules/kernel/driver-loop.yaml autopilot): the
+        draw-review ask is filed as before (draw-review.mjs question), but autopilot answers it, never the owner
+        mid-flow. It accepts PROVISIONALLY only when every machine gate passes - every live part drawn through the
+        draw loop and installed by it, the loop passed (every machine metric including the DNA gate), the independent
+        critic's beauty at least allocation.drawLoop.beautyMin, a rationale.json beside every render source - so draw
+        every shape through draw-loop.mjs round/finish before asking. An answer with answeredBy autopilot and
+        provisional true in context.owner_answers: apply it with `draw-review.mjs apply --ui <dir> --receipt <receipt>
+        --write` (it writes the record done with ui.review.owner provisional:true, by autopilot, and never promotes a
+        golden) and file done. An autopilot redraw answer's note lists the failing gates: that list is the brief -
+        fix every finding through the draw loop and ask again. A brand.direction archetype carrying a provisional
+        acceptance (brand.mjs evidence.provisional) is ready to draw from, like an accepted one."
+  - reads: [repo, grammar, brand]
+    writes: [lint, evidence]
+    action:
+      en: "FORCE THE FE CANON over what the draw produced: starci app lint --changed <every .draw.tsx, render source, stylesheet, asset and record file the draw wrote> --format json > $STARCI_JOB_SCRATCH/lint.json at the app root - the FE canon, stylelint and the brand grammar's checks. FIX the drawn files and run it again, at most params.gateRounds rounds; a finding in a file the draw did not write is reported for its owner, never edited here. Still red after the last round: report blocked with the exact findings. Never report done while the lint has a finding or could not run. REPORT with lint.json attached."
+      vi: "ÉP CHẠY CANON FE trên những gì bản vẽ tạo ra: starci app lint --changed <mọi tệp .draw.tsx, nguồn render, stylesheet, tài sản và bản ghi mà bản vẽ đã viết> --format json > $STARCI_JOB_SCRATCH/lint.json ở gốc app - canon FE, stylelint và các kiểm tra của ngữ pháp thương hiệu. SỬA các tệp đã vẽ rồi chạy lại, tối đa params.gateRounds vòng; lỗi trong tệp bản vẽ không viết được báo cho chủ sở hữu, không sửa ở đây. Hết vòng cuối mà vẫn đỏ: báo blocked kèm đúng các lỗi. Không bao giờ báo done khi lint còn lỗi hoặc không chạy được. BÁO CÁO kèm lint.json."
+proofs:
+  - id: render-provenance
+    requirement:
+      en: Every representative part has its exact retained brief, carrying the grammar-geometry,
+        ui-proof-brief and brand-palette blocks, and its render source, and records an actual draw-render
+        capture; every raster region is an artworkSlots entry with its exact brief, generated by interface.asset
+        (never painted by the drawer). A claimed or guessed model name is not proof. The pass is judged over EVERY asset it binds -
+        written, adopted, inherited or already there - and every live drawing of each ui record they belong
+        to (scripts/work/draw/draw-acceptance.mjs, run by starci kernel settle) - an image with no draw-render receipt or
+        with image-gen provenance (DRAW_ASSET_NOT_TOKEN_RENDERED), a drawn data status (DATA_STATUS_DRAWN),
+        a whole-screen drawing or record rather than ui.shapes per XBase#state (DRAW_NOT_SHAPES), or a pass
+        that only adopts or reuses prior evidence (DRAW_NOT_REDRAWN) is refused draw-not-accepted. A prior
+        drawing is adopted only when it meets this contract itself; an image-gen drawing a redraw replaces
+        is marked retired (reason image-gen) and kept, never deleted.
+  - id: rationale
+    requirement:
+      en: "Every live part ships its decision evidence (owner ruling 2026-09-27; scripts/work/draw/draw-rationale.mjs, run by
+        the draw loop as a machine metric, by draw-quality.mjs at settle and in the settle re-run): <part>.rationale.json
+        with valid decisions, data-why on every visible element and region naming them, the region order and each
+        viewport's grid stated, every distinct gap/padding/inset/radius/font-size/weight/line-height the re-measured
+        render uses covered by a decision of its kind, every DNA component and variant, colour and art slot decided,
+        every rules[] id resolvable, every because naming the FR/content/user job, and <part>.redline.png beside it -
+        else DRAW_RATIONALE_MISSING. The draw-review ask shows the redline images and names the rationale."
+    check: scripts/work/draw/draw-rationale.mjs
+  - id: draw-gates
+    requirement:
+      en: "The pass ran every gate it is judged by before it reported (scripts/work/draw-gates.mjs): report.checks carries
+        its draw-acceptance, draw-metrics, validate-strict, shell-conformance and draw-loop entries verbatim, each red
+        one with the files it implicates (`failing`), and report.files names the draw-gates.checks.json it wrote. A
+        red entry on the pass's own files means the outcome is blocked, never pass."
+    check: scripts/work/draw-gates.mjs
+  - id: self-check
+    requirement:
+      en: visual-review.md cites a rule id for every inset, gap, radius and type size of every part and
+        marks every applicable proof case satisfied, not satisfied or not observable.
+  - id: coverage
+    requirement:
+      en: The representative set stays within its ceiling and the explicit coverage/component/shape map
+        accounts for every remaining required screen, shape and responsive band using actual
+        inspected Grammar anatomy, and names the formula that renders each data status. The `ui.flow` map accounts for every accepted transition and
+        reachable edge case; an unaccounted flow edge is reported as a typed blocker, not silently
+        resolved.
+  - id: content-truth
+    requirement:
+      en: Every drawn shape renders concrete values from the business record; a part showing a skeleton,
+        shimmer, grey placeholder block or other data status fails, and `starci runtime validate` refuses a shape or
+        drawing of a data status as DATA_STATUS_DRAWN (scripts/work/ui/ui-shapes.mjs).
+  - id: truth-boundary
+    requirement:
+      en: The result is labelled proposed visual direction, never a working-product screenshot or exact
+        component, render or API proof. Later implementation captures and browser UAT remain
+        required and distinct.
+  - id: realization-map
+    requirement:
+      en: Every visible direction region has exactly one justified realization mode. Rich authored imagery
+        binds to a retained raster asset/artwork slot; layout, content, controls, system icons and
+        representable visual effects bind to semantic DOM plus installed Grammar/CSS/SVG. Flattened
+        UI screenshots cannot satisfy code-native regions, and a CSS approximation cannot silently
+        replace a required brand/media asset.
+  - id: symbolic-integrity
+    requirement:
+      en: Every prominent symbol has an explicit concept-to-form argument, alternate-reading check,
+        audience-maturity check, non-generic rationale, sibling distinction, coherent family
+        grammar, reduced-scale legibility proof and justified raster-asset or code-native
+        realization. A readable but childish, cliched or semantically interchangeable symbol does
+        not pass merely because its label explains it.
+  - id: shell-conformance
+    requirement:
+      en: "`starci work shell-conformance <ui-record-dir>` exits 0 for every ui record directory
+        written: its route is a node of the layout tree (or declared new under an existing routeParent);
+        surface, direction, routed and host agree per breakpoint; every layout above the route is settled
+        by the END of the op (the ones this op drew or captured count; nothing is refused at the start)
+        and bound at its current rev; every direction is a composite whose recorded layout capture (or
+        host composite) is exactly the current one for its breakpoint and theme and whose pixels re-derive
+        from its recorded inputs; a routed overlay has both presentations; every drawn state has composites
+        at desktop and mobile in the light theme (DRAW_MATRIX_INCOMPLETE; dark is optional); every part's
+        declared .html render source keeps the product grammar's geometry (GEOMETRY_OFF_GRAMMAR,
+        scripts/work/ui/grammar-geometry.mjs); and every
+        content prompt states `Product locale: <default>`. Its output is retained in evidence."
+    check: scripts/work/ui/shell-conformance.mjs
+  - id: brand-palette
+    requirement:
+      en: "Every drawn part and composite the record declares is painted in the brand record's colours:
+        `starci work shell-conformance <ui-record-dir>` reads their pixels
+        (scripts/work/brand/brand-palette.mjs) and refuses PALETTE_OFF_BRAND for any colour the brand does not
+        declare - a default blue primary, a purple icon - naming the colour, its share of the coloured area
+        and of the image, and the nearest brand token; PRIMARY_ABSENT when the brand primary appears nowhere
+        while such a colour does. Tints and shades of a token, navy/grey ink and the declared status colours
+        (a green success dot, an amber warning) pass. The prompt carried the brand-palette --prompt block."
+    check: scripts/work/ui/shell-conformance.mjs
+  - id: owner-sees-parts
+    requirement:
+      en: "What the owner reviews for a drawing is the drawn part of each shape only - the page slot content,
+        the overlay panel alone (not dimmed over its host), the layout's own drawing - at desktop and mobile;
+        a retired data-status image is never shown. Every
+        owner-facing list (ask question.assets and picks, draws.yaml `part`) names parts; a composite is
+        evidence and the implement/audit reference. scripts/work/direction-part.mjs is the selection
+        serve-ask and telegram-media apply, so an older record naming a composite still shows its part."
+  - id: owner-review
+    requirement:
+      en: "Every drawing is done only on the owner's accept answer to its one draw-review ask, whatever
+        candidatesPerScreen says (owner ruling 2026-09-27, contract change draw-content-owner-gate): a draw
+        never turns green on checks alone. `scripts/work/draw-review.mjs question --job <id>` is the ask
+        (desktop and mobile light shape parts, their digests in question.review, which the answer receipt
+        keeps), and `draw-review.mjs apply` writes the record done with ui.review.owner {dispatchId, receipt,
+        receiptSha256, answeredBy, at, parts}. A draw-review ask is never answered automatically, and a
+        delegate never accepts. A part redrawn after the acceptance leaves the drawing unaccepted until it is
+        reviewed again (direction-part.mjs drawingAcceptance). starci kernel report refuses draw-review-owed and api
+        settle refuses DRAW_NOT_OWNER_ACCEPTED."
+    check: scripts/work/draw-review.mjs
+  - id: draw-quality
+    requirement:
+      en: "Correct tokens are not a pass (scripts/work/draw/draw-quality.mjs, run by starci kernel settle through
+        draw-acceptance.mjs). Two drawn states of one XBase that differ only in a status band are one shape
+        and a data status (SHAPE_DUPLICATE); a state a person leaves by a command renders a control for each
+        command of the surface's FR (DRAW_ACTION_MISSING); the visible copy carries no internal ids or
+        jargon - no source labels, no installation-1 or kebab ids, no uuids (DRAW_COPY_INTERNAL); every
+        badge binds a tone token and a success word binds the success tone (DRAW_BADGE_UNTONED); every part
+        has a current ui-proof score with no failed case, each failure being critique addressed before the
+        pass (DRAW_SCORE_BELOW)."
+    check: scripts/work/draw/draw-quality.mjs
+  - id: grammar-dna
+    requirement:
+      en: "Every drawing composes only the Grammar's DNA (owner ruling 2026-09-27; scripts/work/draw/draw-dna.mjs, run
+        by draw-quality.mjs at settle): every visible element of every part's render source carries
+        data-grammar-component naming a DNA component, data-grammar-part naming an anatomy part of an enclosing
+        component, or data-grammar-proposal naming a complete grammar-proposal entry; a closed prop value stays
+        inside its DNA values (DRAW_OFF_GRAMMAR_COMPONENT). A notice is DNA Alert with a PresentationState tone -
+        a container posing as one (role alert/status, notice/callout vocabulary, a toned surface, an outcome-toned
+        IconTile beside an action) is DRAW_NOTICE_NOT_ALERT; a ratio is one DNA Meter with role=meter and its
+        value - a hand-made bar, a Progress beside an n/m ratio or a hand-segmented Meter (segments without the DNA
+        meter-segment anatomy of Meter segments) is DRAW_RATIO_NOT_METER. The Alert is the real HeroUI Alert: a declared or rendered background other
+        than --surface (a tone fill), an IconTile or a 32px+ indicator inside it, an indicator not left of the
+        title, or a hand-made action / a Button variant outside the DNA values is DRAW_ALERT_ANATOMY. A Meter track
+        other than h-2 (8px) - h-1 (4px) when segmented - narrower than its band or cut into unequal / widely gapped segments is
+        DRAW_METER_TRACK. Raster artwork with no data-asset-slot, or a slot its asset-request.md does not request,
+        is DRAW_ASSET_SLOT_UNDECLARED."
+    check: scripts/work/draw/draw-dna.mjs
+  - id: layer-measure
+    requirement:
+      en: "Layers and measure are knowledge, caught by the runtime (owner, 2026-09-28; scripts/work/draw/draw-layer.mjs,
+        a draw-loop machine metric `layer`, so re-run at settle): every form control on a bounded surface (SurfaceCard,
+        card, dialog, drawer) carries the nested variant=secondary - its data-grammar-variant, else its vendor
+        <part>--secondary class - and a form region (fields plus a primary submit) stands in a Surface, never on the
+        bare page Background (DRAW_NESTED_VARIANT; ANATOMY-2 case-1, case-3; Switch and Slider have no variant). A
+        form region rendered wider than W-3xl (48rem) at any viewport is DRAW_MEASURE_UNCAPPED (MEASURE-4
+        case-3/case-4: a drawn XBase owns its measure)."
+    check: scripts/work/draw/draw-layer.mjs
+  - id: taste
+    requirement:
+      en: "The taste a machine can measure (scripts/work/draw/draw-taste.mjs, thresholds in runtimes.yaml
+        allocation.drawLoop): the accent colour fills at most accentBudget of each part, the brand art band
+        excluded (DRAW_ACCENT_BUDGET); a card splits into at most bandsPerCardMax bands (DRAW_TOO_MANY_BANDS); an
+        entity carries at most badgesPerEntityMax badges (DRAW_TOO_MANY_BADGES)."
+    check: scripts/work/draw/draw-taste.mjs
+  - id: draw-loop
+    requirement:
+      en: "Every live part came out of the draw loop (scripts/work/draw-loop.mjs): its ui.assets entry carries
+        generation.loop {sha256, round} citing the loop bundle (blob store) whose finish installed exactly its bytes
+        (DRAW_LOOP_MISSING); every round keeps its source, parts, metrics.json and critique.json (the critic's
+        model, exact prompt and verdict) as indexed job artifacts. At settle the runtime re-renders every live
+        part and re-runs every machine metric itself (scripts/work/draw-loop-settle.mjs): a failure is
+        DRAW_METRICS_FAILED, a metric it could not run DRAW_METRICS_UNVERIFIED - starci kernel settle refuses
+        draw-metrics-failed and the draw reports blocked with the remaining failures and its best round, never
+        pass. The critic's beauty is the loop's stop condition; the owner's draw-review accept stays the final
+        acceptance."
+    check: scripts/work/draw-loop.mjs
+  - id: grammar-proposals
+    requirement:
+      en: "Every gap in DNA the drawing met is a complete grammar proposal (scripts/work/grammar-proposal.mjs:
+        name, gap, anatomy, tokens, claims, isolated render), listed in the draw-review ask
+        (question.grammarProposals) for the owner - never accepted by the worker or the runtime - and recorded at
+        settle as a grammar-proposal-filed ledger event that starci kernel status lists as grammarProposals[] until a
+        grammar lane resolves it."
+    check: scripts/work/grammar-proposal.mjs
+  - id: binding
+    requirement:
+      en: "`starci runtime validate` passes, and `starci runtime validate --strict` passes on the ui record directory
+        it writes (the record, ui.flow included, compiles against work/ui-screen@1); every cited
+        ID/path and asset byte exists, required assertions are
+        covered, input bindings are current, and an honest not-run/fail cannot earn done."
+    check: scripts/work/validate/work-validate.mjs
+  - id: checkpointed
+    requirement:
+      en: Every Work record file this operation wrote under its owned paths is committed by the runtime
+        as its workflow's checkpoint when the operation settles green (scripts/kernel/workflow-checkpoint.mjs
+        checkpointOp). The operation never commits and changes nothing outside its owned paths; settle
+        refuses workflow-foreign-commit or workflow-foreign-change otherwise.
+  - id: produced-lint
+    requirement:
+      en: "starci kernel settle re-reads the attached lint.json (runtime check op-proof, proof produced-lint): a done without it (op-lint-proof-missing), with a lint that could not run (op-lint-tool-failed) or with any finding over the produced files (op-lint-findings) is refused."
+      vi: "starci kernel settle tự đọc lại lint.json đính kèm (check op-proof, proof produced-lint): done thiếu nó (op-lint-proof-missing), có lint không chạy được (op-lint-tool-failed) hoặc có bất kỳ lỗi nào trên các tệp đã tạo (op-lint-findings) đều bị từ chối."
+    check: scripts/kernel/gate-settle.mjs
+judge:
+  - by: critic
+    rubric: "scripts/work/draw-critic.mjs"
+    runs: in-op
+    proofs: [draw-loop]
+    why: "an independent Critic of another provider judges every round of the draw loop against the brand rubric (the product's brand.direction.rubric, else the built-in default) and the beauty minimum gates the draw"
+  - by: machine
+    measures: [declared-checks, work-hygiene, op-proof:produced-lint, draw-rerun, contract-script]
+    proofs: [draw-gates, draw-quality, draw-loop, shell-conformance, produced-lint]
+    why: "the runtime re-renders every live part and re-runs the machine metrics itself (never the loop's numbers), refuses an asset that is not a token-rendered shape, and re-runs the produced-file lint and the shell-conformance check"
+  - by: owner
+    why: "a drawing is done only on the owner's accept answer to its draw-review ask"
+  - by: next-leg
+    leg: interface.audit
+    why: "interface.audit re-captures the rendered result and compares it with the accepted draws, the installed Grammar and the brand, and routes every drift back"
+blockers:
+  - code: APP_SHELL_UNSETTLED
+    condition:
+      en: After step 1 the layout tree still cannot be settled by this op because an INPUT is missing - no brand record to
+        follow, no accepted journey or SDS to plan a layout from, no seed for a persona, no way to render the frontend
+        (RENDER_TOOL_UNAVAILABLE). A tree that is merely absent, todo, stale (LAYOUT_TREE_STALE), lockup-less
+        (SHELL_LOCKUP_MISSING) or unsettled is NOT this blocker - this op scans, draws or captures and settles it. Report
+        `blocked` with blocker `brand-gap` naming the missing input and the failing check.
+        Never draw, describe or invent chrome to proceed. One exception - the drawing of a planned visible
+        layout (surface layout, route the planned node, the id its layout.design names) does not wait for
+        a lockup - on a greenfield product nothing renders one yet, and this op crops it from that
+        drawing once it is accepted (shell-conformance reports SHELL_LOCKUP_DEFERRED, info). Its binding is
+        shell {ref shell, rev, layouts []} with the layouts list present and empty (no visible layout above it, so the lockup crop's tree rev
+        bump never stales it). The prompt draws the wordmark from the brand record's logo, never an
+        invented mark.
+  - code: LAYOUT_ANCESTOR_UNSETTLED
+    condition:
+      en: A layout above the record's route is STILL not settled at the op's proof, after this op drew or captured it -
+        chrome undecided, a breakpoint or theme not captured, no measured slot, or a planned layout whose
+        surface-layout ui record is not accepted (its owner review is parked as this op's ask). Judged on the result,
+        never at the start. Report `blocked` with blocker `brand-gap` naming the layout node and what step 1 could not do.
+  - code: RENDER_TOOL_UNAVAILABLE
+    condition:
+      en: The draw-render Playwright capture cannot run on this host although the dispatch admitted it (the dispatch refuses a host without
+        Playwright, its browser and esbuild before it starts the op, so this is a browser that fails to launch). Report host-unsupported with
+        the launch error; do not substitute ImageGen, hand-painted boxes or a prose description.
+  - code: IMAGEGEN_TOOL_UNAVAILABLE
+    condition:
+      en: A raster region is required and it is not declared as an artworkSlots entry with its brief for
+        interface.asset (the drawer never paints raster art; interface.asset generates it through `starci work imagegen`). Declare
+        the slot; do not substitute another renderer for the raster region.
+  - code: DRAW_LOOP_UNPASSED
+    condition:
+      en: The draw loop stopped (max rounds, or rounds without progress) and `draw-loop.mjs finish` says outcome
+        blocked - a machine metric still fails in the best round, or the critic's beauty stays under
+        allocation.drawLoop.beautyMin. Report `blocked` naming the remaining failures and the best round (its
+        loop.json and round directory in report.files) - blocker `grammar-gap` when every remaining failure is a
+        DNA gap waiting on a grammar proposal, else `authority` (the owner rules on the best round). Never report
+        done or pass it, never loosen a threshold, never hand-edit the installed parts.
+  - code: DESIGN_INPUT_UNKNOWN
+    condition:
+      en: Required business content, SDS behavior, brand rights or a material owner direction is missing.
+  - code: GRAMMAR_ANATOMY_UNPROVEN
+    condition:
+      en: The actual consuming Grammar package/export/anatomy, its geometry block or a knowledge/ui value
+        the brief needs cannot be resolved. Name the missing source; do not invent a component or a
+        number.
+  - code: SYMBOL_INTENT_UNRESOLVED
+    condition:
+      en: A prominent symbol has ambiguous product meaning, mismatched audience maturity, generic stock
+        metaphor or an incoherent family and accepted intent cannot resolve it.
+  - code: DECLARED_DEPENDENCY_UNMET
+    condition:
+      en: A declared prerequisite or required scope is missing or not effectively done; do not weaken the
+        graph.
+placeholders:
+  feature: shared
+  app: shared
+  bound-paths: shared
+  name: Selected ui record slug
+  asset: Rendered part, brief, render source or raster prompt filename under the owning UI node
+layoutPolicy:
+  checks: [starci-validate]
+route:
+  nodeKinds: [ui]
+  phase: [direct, pre-implementation]
+  intent: [direction, draw, render, ui-design]
+  # draw-render and layout-render drive Playwright themselves (runtime verbs, no browser tool of the agent): the op declares no host tool of an
+  # agent, so every agent that can run the verbs and read a PNG is eligible. The capture needs Playwright with its browser and esbuild on the
+  # host (the product's install, else the runtime's own): host-capability-required:render makes the dispatch refuse RENDER_TOOL_UNAVAILABLE
+  # before an attempt is spent when the host has none (scripts/work/render-tools.mjs).
+  riskHints: [host-capability-required:render]
+  prerequisites:
+    - business.decide settled pass (reviewed SRS seed; Work leaves remain todo)
+    - architecture.decide settled pass (reviewed SDS seed; Work leaves remain todo)
+    - brand.decide done (the brand record and its direction, never the layouts, which this op draws)
+    - a todo or absent layout tree is admitted - this op scans it and draws or captures the missing shell and ancestor layouts first

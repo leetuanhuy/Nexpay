@@ -1,0 +1,1740 @@
+# GENERATED FILE — do not hand-edit.
+# regenerate: starci runtime gen-ops
+# check only: starci runtime gen-ops --check
+schema: starci/module-ops-registry@1
+generatedBy: scripts/route/build-ops-registry.mjs
+origin:
+  canonicalRegistry: .claude/modules/ops/registry.yaml (this generated file)
+  commonDocument: .claude/modules/ops/_common.yaml
+  perOpSources: modules/ops/ops/<id>.yaml (authored operator contract, starci/op@1 —
+    modules/schemas/op.schema.yaml)
+  note: modules/ops is the authored operator source; _common.yaml keeps the shared pre-module policy
+    prose. An op summary is this index, generated — no manifest carries one.
+stages:
+  intake: classify the request into typed intake/scope facts; zero effects
+  scope: bound the work — scope record, workspace bootstrap, launchable nodes
+  decide: settle authority — SRS, SDS, brand, owner decisions, provisions
+  direct: token-rendered UI direction + artwork slots before frontend code
+  implement: write product/test/content/knowledge source inside ceilings
+  verify: independent evidence-bound proof; never repairs
+  release: publish/deploy/migrate — terminal external effect
+  operate: runtime/service lifecycle, goal maintenance, end-of-life closeout
+coarsePhases:
+  intake: pre-implementation
+  scope: pre-implementation
+  decide: pre-implementation
+  direct: pre-implementation
+  implement: implementation
+  verify: post-implementation
+  release: post-implementation
+  operate: cross-cutting
+count: 38
+ops:
+  - id: architecture.decide
+    family: architecture
+    goal: Design the selected implementation slice with the minimum complete flow-led,
+      source-independent architecture needed to build safely, then refine it from concrete
+      implementation evidence.
+    params:
+      readingsStated:
+        default: 3
+        setBy: kernel
+    nodeKinds:
+      - architecture
+    completionProfile: architecture
+    reads:
+      - design-patterns
+      - application-stacks
+      - target
+      - business
+      - constraints
+      - specification
+      - feasibility
+      - profile
+      - standard
+    writes:
+      - node
+      - work-graph
+      - read-digest
+    route:
+      nodeKinds:
+        - architecture
+      phase:
+        - decide
+        - pre-implementation
+      intent:
+        - architecture
+        - sds
+        - design
+        - contracts
+        - decide
+      prerequisites:
+        - business.decide settled pass (reviewed SRS seed; Work leaves remain todo)
+    lifecyclePosition: decide | pre-implementation
+    kindInferred: decide
+  - id: backend.implement
+    family: backend
+    goal: Implement one selected backend outcome and prove its declared contract on actual code.
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 4
+      summary: owned source edits
+    reads:
+      - application-stacks
+      - target
+      - business
+      - architecture
+      - repo
+      - profile
+      - op-loop
+    writes:
+      - node
+      - source
+      - evidence
+      - apiDelivery
+      - read-digest
+      - gate-proof
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - implement
+        - implementation
+      intent:
+        - implement
+        - backend
+        - code
+        - api
+        - build
+      prerequisites:
+        - business.decide settled pass (reviewed requirement seed; Work leaves remain todo)
+        - architecture.decide settled pass (reviewed design seed; Work leaves remain todo)
+      riskHints:
+        - source-edits
+    lifecyclePosition: implement | implementation
+    kindInferred: implement
+  - id: backend.scaffold
+    family: backend
+    goal: Create one new backend source tree in the bound repository and prove its declared toolchain
+      contract on the actual scaffold.
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 5
+      summary: owned source edits
+    reads:
+      - target
+      - baseline
+      - architecture
+      - business
+      - repo
+      - conventions
+      - stacks
+      - profile
+      - op-loop
+    writes:
+      - node
+      - source
+      - evidence
+      - read-digest
+      - gate-proof
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - implement
+      intent:
+        - scaffold
+        - greenfield
+        - new-source
+        - backend
+        - bootstrap
+        - init
+      prerequisites:
+        - repository bound
+        - a settled SDS only when wiring SDS-owned dependencies or business layout beyond the
+          baseline health surface
+      riskHints:
+        - source-edits
+        - new-tree
+    lifecyclePosition: implement
+    kindInferred: scaffold
+  - id: brand.decide
+    family: brand
+    goal: Settle one product's visual identity in the single brand record - colour tokens traced to the
+      real source files, typography, mascot, logo, iconography, imagery rules, voice and motion -
+      and in full ed
+    params:
+      ownerRulings:
+        default: ""
+        setBy: kernel
+      referenceSources:
+        default: ""
+        setBy: kernel
+      directionArchetype:
+        default: ""
+        setBy: kernel
+    nodeKinds:
+      - brand
+    completionProfile: brand
+    sideEffects:
+      count: 2
+      summary: generated placeholder mascot/logo asset bytes under the brand record's own assets
+    reads:
+      - target
+      - owner
+      - grammar
+      - sources
+      - assets
+      - shell
+      - shellSource
+      - settledDesign
+      - knowledge
+      - direction
+      - profile
+      - standard
+    writes:
+      - node
+      - brandAssets
+      - shellNode
+      - shellAssets
+      - evidence
+      - read-digest
+    route:
+      nodeKinds:
+        - brand
+      phase:
+        - decide
+        - pre-implementation
+      intent:
+        - brand
+        - identity
+        - tokens
+        - decide
+        - shell
+        - chrome
+      prerequisites:
+        - scope defined
+      riskHints:
+        - generates-assets
+    lifecyclePosition: decide | pre-implementation
+    kindInferred: decide
+  - id: business.decide
+    family: business
+    goal: Specify the selected business slice with the minimum complete observable behavior needed to
+      implement and independently accept it, then refine that contract from authoritative feedback.
+    params:
+      readingsStated:
+        default: 3
+        setBy: kernel
+    nodeKinds:
+      - business
+      - business-overview
+    completionProfile: business
+    reads:
+      - target
+      - repo
+      - intent
+      - specification
+      - profile
+      - standard
+    writes:
+      - node
+      - work-graph
+      - read-digest
+    route:
+      nodeKinds:
+        - business
+        - business-overview
+      phase:
+        - decide
+        - pre-implementation
+      intent:
+        - business
+        - srs
+        - requirements
+        - decide
+      prerequisites:
+        - scope defined
+    lifecyclePosition: decide | pre-implementation
+    kindInferred: decide
+  - id: code.refactor
+    family: code
+    goal: Restructure one selected slice of code under a proven behavior invariant - the same regression
+      check run before and after the change - never a behavior edit disguised as a refactor.
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+      canonFamilies:
+        default: ""
+        setBy: owner
+      canonWire:
+        default: false
+        setBy: kernel
+      resumeFrom:
+        default: ""
+        setBy: kernel
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 3
+      summary: owned source edits that restructure without changing observable behavior
+    reads:
+      - target
+      - business
+      - architecture
+      - repo
+      - coverage
+      - conventions
+      - machines
+      - canon
+      - profile
+      - op-loop
+    writes:
+      - node
+      - source
+      - evidence
+      - read-digest
+      - gate-proof
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - implement
+        - implementation
+      intent:
+        - refactor
+        - cleanup
+        - maintenance
+        - canon-conformance
+      prerequisites:
+        - delivered code + existing regression coverage
+      riskHints:
+        - source-edits
+    lifecyclePosition: implement | implementation
+    kindInferred: refactor
+  - id: content.generate
+    family: content
+    goal: Create or revise one selected content unit with grounded claims and actual requested
+      media/code checks.
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 2
+      summary: selected local content/assets/code edits
+    reads:
+      - target
+      - business
+      - repo
+      - brief
+      - profile
+      - standard
+    writes:
+      - node
+      - source
+      - evidence
+      - read-digest
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - implement
+        - implementation
+      intent:
+        - content
+        - copy
+        - write
+      prerequisites:
+        - decided records/behavior exist
+    lifecyclePosition: implement | implementation
+    kindInferred: generate
+  - id: decision.prepare
+    family: decision
+    goal: Prepare one decision the runtime takes provisionally - the question, why it matters, the
+      options analysed per side, one recommendation - or answer the question from the records the
+      product already dec
+    nodeKinds:
+      - business
+    completionProfile: business
+    reads:
+      - question
+      - decided
+      - environment
+      - standard
+    writes:
+      - decision
+      - read-digest
+    route:
+      nodeKinds:
+        - business
+      phase:
+        - decide
+        - cross-cutting
+      intent:
+        - decision
+        - prepare
+        - owner-question
+      prerequisites:
+        - a decidable question raised by another op
+    lifecyclePosition: decide | cross-cutting
+    kindInferred: prepare
+  - id: docs.author
+    family: docs
+    goal: Author or update the documentation one selected scope needs, derived from the decided records
+      and the actual code - a reader's document, never a restated transcript.
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - operations
+    completionProfile: operations
+    reads:
+      - target
+      - records
+      - repo
+      - conventions
+      - profile
+      - standard
+    writes:
+      - node
+      - docs
+      - evidence
+      - read-digest
+      - doc-gate
+    route:
+      nodeKinds:
+        - operations
+      phase:
+        - implement
+        - implementation
+      intent:
+        - docs
+        - documentation
+        - write
+      prerequisites:
+        - decided records/behavior exist
+    lifecyclePosition: implement | implementation
+    kindInferred: author
+  - id: e2e.verify
+    family: e2e
+    goal: Prove one selected delivered slice through its public API on a real stack the suite starts
+      itself, with one scenario per assertion and the listed checks run verbatim.
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 4
+      summary: end-to-end scenario spec authoring inside the selected allowlist
+    reads:
+      - target
+      - business
+      - architecture
+      - repo
+      - suite
+      - stack
+      - checks
+      - effects
+      - profile
+      - workflow
+      - op-loop
+    writes:
+      - node
+      - source
+      - evidence
+      - read-digest
+      - gate-proof
+      - test-world-run
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - verify
+        - post-implementation
+      intent:
+        - e2e
+        - api
+        - verify
+        - test
+      prerequisites:
+        - implementation done
+      riskHints:
+        - served-target
+    lifecyclePosition: verify | post-implementation
+    kindInferred: verify
+  - id: goal.revise
+    family: goal
+    goal: Produce goal v(n+1) from the frozen goal v(n) and the requested change - explicit diff, rev
+      bumped by exactly one - while never silently widening authority; a scope or authority change
+      is an owner dec
+    nodeKinds:
+      - operations
+    completionProfile: operations
+    reads:
+      - goal
+      - revision
+      - derivations
+      - profile
+    writes:
+      - node
+      - goal
+      - evidence
+    route:
+      nodeKinds:
+        - operations
+      phase:
+        - decide
+        - cross-cutting
+      intent:
+        - goal
+        - revise
+        - amendment
+      prerequisites:
+        - an approved goal exists
+    lifecyclePosition: decide | cross-cutting
+    kindInferred: revise
+  - id: grammar.update
+    family: grammar
+    goal: Grow the installed design grammar by one semantic unit the product needs and no composition of
+      existing contracts renders, publish it from the grammar's own repository and record it in the
+      canon.
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 4
+      summary: exact authorized edits inside the bound grammar repository and the canon paths it owns
+    reads:
+      - target
+      - gap
+      - canon
+      - repo
+      - consumer
+      - profile
+      - op-loop
+    writes:
+      - node
+      - source
+      - evidence
+      - read-digest
+      - gate-proof
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - implement
+        - implementation
+      intent:
+        - grammar
+        - update
+        - component-library
+      prerequisites:
+        - a recorded failed composition
+      riskHints:
+        - runtime-self-edit
+    lifecyclePosition: implement | implementation
+    kindInferred: update
+  - id: handover.review
+    family: handover
+    goal: "Hand the finished workflow to the owner and ask for acceptance: assemble one handover package
+      in the owner's language - what was built and why, where it lives, exactly how to run and test
+      it, what sti"
+    nodeKinds:
+      - operations
+    completionProfile: operations
+    reads:
+      - goal
+      - deliveries
+      - coverage
+      - repo
+      - evidence
+    writes:
+      - package
+    route:
+      nodeKinds:
+        - workflow
+      phase:
+        - operate
+        - cross-cutting
+      intent:
+        - handover
+        - owner-acceptance
+      prerequisites:
+        - every other leg of the approved chain settled
+      riskHints:
+        - waits-on-owner
+    lifecyclePosition: operate | cross-cutting
+    kindInferred: review
+  - id: integration.verify
+    family: integration
+    goal: Runs only on explicit request or before release (owner ruling 2026-09-29, live verification
+      belongs with e2e/UAT and never in a default chain; a leg the goal did not ask for settles
+      deferred).
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - integration
+    completionProfile: integration
+    sideEffects:
+      count: 4
+      summary: integration and contract spec authoring inside the selected allowlist
+        (be/src/tests/integration/, be/src/tests/contract/)
+    reads:
+      - application-stacks
+      - official-docs
+      - target
+      - integration
+      - architecture
+      - repo
+      - credential
+      - effects
+      - profile
+      - workflow
+      - op-loop
+      - world
+    writes:
+      - node
+      - evidence
+      - read-digest
+      - gate-proof
+      - source
+      - test-world-integration
+      - test-world-contract
+    route:
+      nodeKinds:
+        - integration
+      phase:
+        - verify
+        - post-implementation
+      intent:
+        - integration
+        - live-provider
+        - verify
+      prerequisites:
+        - implementation done
+      riskHints:
+        - external-effects
+        - live-provider
+        - high-kind
+    lifecyclePosition: verify | post-implementation
+    kindInferred: verify
+  - id: interface.asset
+    family: interface
+    goal: Generate every artwork the approved interface candidate embeds as a real repository asset at
+      the size, format and brand references the design record declares, and bind each produced file
+      back to its s
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - ui
+    completionProfile: ui
+    sideEffects:
+      count: 1
+      summary: generated artwork files inside the owned asset paths of the bound repository
+    reads:
+      - target
+      - design
+      - brand
+      - repo
+      - profile
+    writes:
+      - source
+      - node
+      - placeholder
+      - evidence
+      - lint
+    route:
+      nodeKinds:
+        - ui
+      phase:
+        - implement
+        - implementation
+      intent:
+        - asset
+        - image
+        - artwork
+        - imagegen
+      prerequisites:
+        - interface.draw done (artworkSlots declared)
+      riskHints:
+        - generates-assets
+    lifecyclePosition: implement | implementation
+    kindInferred: asset
+  - id: interface.audit
+    family: interface
+    goal: "Audit selected real interface renders against the exact latest explicitly owner-accepted
+      interface.draw receipt and its image, prompt and content hashes, accepted product intent, the
+      actual installed "
+    params:
+      audit:
+        required: true
+        setBy: kernel
+      maxRounds:
+        default: 5
+        setBy: kernel
+    nodeKinds:
+      - operations
+    completionProfile: operations
+    sideEffects:
+      count: 2
+      summary: authorized navigation, sign-in and non-destructive state setup on the selected verified
+        runtime
+    reads:
+      - target
+      - intent
+      - accepted-draw-lineage
+      - realization-map
+      - grammar
+      - knowledge
+      - brand-assets
+      - shell
+      - repo
+      - implementation-captures
+      - producer-measurements
+      - environment
+      - identity
+      - previous
+      - workflow
+      - runner
+      - profile
+    writes:
+      - node
+      - evidence
+      - lint
+    route:
+      nodeKinds:
+        - operations
+      phase:
+        - verify
+        - post-implementation
+      intent:
+        - audit
+        - interface-audit
+        - ui-drift
+        - ux-drift
+        - render-drift
+      prerequisites:
+        - interface.implement settled pass with fresh real captures
+        - verified served build
+        - exact latest explicit owner-accepted interface.draw receipt with image/prompt/content
+          hashes
+        - accepted UI direction and installed Grammar binding
+      riskHints:
+        - host-tool-required:browser-dom
+        - read-only-product-source
+        - owner-accepted-draw-lineage
+        - exact-cell-side-by-side
+        - grammar-hard-authority
+        - bounded-round-loop
+    lifecyclePosition: verify | post-implementation
+    kindInferred: audit
+  - id: interface.draw
+    family: interface
+    goal: Establish the interface direction before frontend implementation by token-render.
+    params:
+      candidatesPerScreen:
+        default: 1
+        setBy: owner
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - ui
+    completionProfile: ui
+    sideEffects:
+      count: 1
+      summary: rendered shape parts with their exact brief, render source, rationale.json and annotated
+        redline render, artwork-slot briefs for interface.asset, and the direction images composited
+        from the parts int
+    reads:
+      - target
+      - business
+      - architecture
+      - brand
+      - shell
+      - knowledge
+      - grammar
+      - repo
+      - profile
+      - generatedDirection
+      - workflow
+    writes:
+      - shellNode
+      - shellAssets
+      - node
+      - designSource
+      - evidence
+      - draws
+      - work-graph
+      - lint
+    route:
+      nodeKinds:
+        - ui
+      phase:
+        - direct
+        - pre-implementation
+      intent:
+        - direction
+        - draw
+        - render
+        - ui-design
+      prerequisites:
+        - business.decide settled pass (reviewed SRS seed; Work leaves remain todo)
+        - architecture.decide settled pass (reviewed SDS seed; Work leaves remain todo)
+        - brand.decide done (the brand record and its direction, never the layouts, which this op
+          draws)
+        - a todo or absent layout tree is admitted - this op scans it and draws or captures the
+          missing shell and ancestor layouts first
+      riskHints:
+        - host-capability-required:render
+    lifecyclePosition: direct | pre-implementation
+    kindInferred: draw
+  - id: interface.implement
+    family: interface
+    goal: Implement one selected frontend creation, refinement or defect repair by reconciling the full
+      draws image array, business intent, architecture and current source, then verify the actual
+      rendered resul
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 4
+      summary: owned source edits
+    reads:
+      - application-stacks
+      - target
+      - business
+      - architecture
+      - repo
+      - knowledge
+      - finding
+      - draws
+      - design
+      - shell
+      - environment
+      - workflow
+      - profile
+      - assetSources
+      - op-loop
+    writes:
+      - node
+      - source
+      - runningPage
+      - runningMarkup
+      - evidence
+      - flows
+      - assetManifest
+      - realizationCheck
+      - read-digest
+      - gate-proof
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - implement
+        - implementation
+      intent:
+        - implement
+        - frontend
+        - ui
+        - code
+      prerequisites:
+        - interface.draw done
+        - architecture.decide settled pass (reviewed SDS seed; Work leaves remain todo)
+      riskHints:
+        - source-edits
+    lifecyclePosition: implement | implementation
+    kindInferred: implement
+  - id: interface.scaffold
+    family: interface
+    goal: Create one new interface source tree in the bound repository and prove it renders — build
+      green plus a captured first shell.
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 5
+      summary: owned source edits
+    reads:
+      - target
+      - baseline
+      - architecture
+      - grammar
+      - brand
+      - shell
+      - repo
+      - conventions
+      - profile
+      - op-loop
+    writes:
+      - node
+      - source
+      - evidence
+      - firstRender
+      - shellNode
+      - read-digest
+      - gate-proof
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - implement
+      intent:
+        - scaffold
+        - greenfield
+        - new-source
+        - frontend
+        - interface
+        - bootstrap
+        - init
+      prerequisites:
+        - grammar bound
+        - repository bound
+        - a settled SDS only when wiring SDS-owned dependencies or routing beyond the first shell
+      riskHints:
+        - source-edits
+        - new-tree
+    lifecyclePosition: implement
+    kindInferred: scaffold
+  - id: knowledge.repair
+    family: knowledge
+    goal: Repair one challenged canonical instruction/rule and affected references from concrete
+      applicability evidence.
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 2
+      summary: exact authorized knowledge source/reference edits
+    reads:
+      - target
+      - repo
+      - rule
+      - profile
+      - standard
+    writes:
+      - node
+      - source
+      - evidence
+      - read-digest
+      - doc-gate
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - implement
+        - cross-cutting
+      intent:
+        - knowledge
+        - repair
+        - rules
+        - maintenance
+      prerequisites:
+        - evidence challenging a rule
+      riskHints:
+        - runtime-self-edit
+    lifecyclePosition: implement | cross-cutting
+    kindInferred: repair
+  - id: package.scaffold
+    family: package
+    goal: Create one new package or library module at the declared path and prove its public contract
+      surface — the package builds and a real consumer import resolves.
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 5
+      summary: owned source edits
+    reads:
+      - target
+      - architecture
+      - repo
+      - conventions
+      - profile
+      - op-loop
+    writes:
+      - node
+      - source
+      - evidence
+      - read-digest
+      - gate-proof
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - implement
+      intent:
+        - scaffold
+        - greenfield
+        - new-source
+        - package
+        - library
+        - module
+        - bootstrap
+        - init
+      prerequisites:
+        - architecture.decide settled pass (reviewed SDS seed; Work leaves remain todo)
+        - repository bound
+      riskHints:
+        - source-edits
+        - new-tree
+    lifecyclePosition: implement
+    kindInferred: scaffold
+  - id: perf.verify
+    family: perf
+    goal: Run or observe the declared performance measurements against the running product the
+      environment provides, and leave the measured numbers as evidence - never an estimate, never a
+      repaired product.
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 2
+      summary: declared measurement/benchmark runs against the authorized running product
+    reads:
+      - target
+      - business
+      - architecture
+      - repo
+      - environment
+      - metrics
+      - effects
+      - profile
+    writes:
+      - node
+      - evidence
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - verify
+        - post-implementation
+      intent:
+        - perf
+        - performance
+        - measure
+        - verify
+      prerequisites:
+        - implementation done
+    lifecyclePosition: verify | post-implementation
+    kindInferred: verify
+  - id: provision.ask
+    family: provision
+    goal: Ask the owner for the one thing only they can give - a credential, an account on an outside
+      system, a dataset, a legal authority, a decision between real alternatives (candidate picks,
+      accept/reject o
+    params:
+      subject:
+        required: true
+        setBy: kernel
+      minOptions:
+        default: 2
+        setBy: kernel
+    nodeKinds:
+      - business
+    completionProfile: business
+    reads:
+      - question
+      - environment
+      - stacks
+    writes:
+      - report
+    route:
+      nodeKinds:
+        - business
+      phase:
+        - decide
+        - cross-cutting
+      intent:
+        - provision
+        - ask
+        - owner-input
+        - credential
+      prerequisites:
+        - an owner-only input is needed
+      riskHints:
+        - waits-on-owner
+    lifecyclePosition: decide | cross-cutting
+    kindInferred: ask
+  - id: release.deliver
+    family: release
+    goal: Deliver one explicitly selected publication, deployment or database migration and verify its
+      exact remote outcome.
+    params:
+      mode:
+        default: select
+        setBy: kernel
+    nodeKinds:
+      - operations
+    completionProfile: operations
+    sideEffects:
+      count: 1
+      summary: Only the selected operation contract permits effects; no union of mode permissions.
+    reads:
+      - application-stacks
+      - target
+      - selection
+      - profile
+      - release-proof
+    writes:
+      - node
+      - evidence
+      - release-proof
+    route:
+      nodeKinds:
+        - operations
+      phase:
+        - release
+        - post-implementation
+      intent:
+        - release
+        - publish
+        - deploy
+        - migrate
+      prerequisites:
+        - implementation + verification evidence
+      riskHints:
+        - external-effects
+        - terminal
+        - high-kind
+    lifecyclePosition: release | post-implementation
+    kindInferred: deliver
+  - id: request.analyze
+    family: request
+    goal: Analyze one request into a typed intake record - the selected workflow and the scope statement
+      it hands to scope.define - without performing effects.
+    nodeKinds:
+      - operations
+    completionProfile: operations
+    reads:
+      - request
+      - catalog
+      - repo
+      - profile
+    writes:
+      - intake
+      - evidence
+    route:
+      nodeKinds:
+        - operations
+      phase:
+        - intake
+        - pre-implementation
+      intent:
+        - analyze
+        - intake
+        - classify
+        - read-only
+    lifecyclePosition: intake | pre-implementation
+    kindInferred: analyze
+  - id: review.verify
+    family: review
+    goal: Independently verify a selected delivery, business, workflow, rendered visual or API result
+      without repairing its producer.
+    params:
+      mode:
+        default: select
+        setBy: kernel
+      lintRole:
+        default: auto
+        setBy: kernel
+    nodeKinds:
+      - operations
+    completionProfile: operations
+    sideEffects:
+      count: 1
+      summary: Only the selected operation contract permits effects; no union of mode permissions.
+    reads:
+      - application-stacks
+      - target
+      - selection
+      - profile
+      - comment-contract
+      - review-gate
+    writes:
+      - node
+      - evidence
+      - gate-proof
+      - review-defects
+    route:
+      nodeKinds:
+        - operations
+      phase:
+        - verify
+        - post-implementation
+      intent:
+        - review
+        - verify
+        - audit
+        - delivery
+      prerequisites:
+        - a delivery to inspect
+    lifecyclePosition: verify | post-implementation
+    kindInferred: verify
+  - id: runtime.operate
+    family: runtime
+    goal: Deliver the requested runtime or service state with readiness, owned effects and real
+      postcondition proof.
+    params:
+      mode:
+        default: select
+        setBy: kernel
+    nodeKinds:
+      - operations
+    completionProfile: operations
+    sideEffects:
+      count: 1
+      summary: Only the selected operation contract permits effects; no union of mode permissions.
+    reads:
+      - application-stacks
+      - target
+      - selection
+      - profile
+      - worktree-api
+    writes:
+      - node
+      - evidence
+    route:
+      nodeKinds:
+        - operations
+      phase:
+        - operate
+        - cross-cutting
+      intent:
+        - runtime
+        - serve
+        - inspect
+        - environment
+        - service
+      prerequisites:
+        - a declared stack/environment
+      riskHints:
+        - runtime-effects
+    lifecyclePosition: operate | cross-cutting
+    kindInferred: operate
+  - id: scope.define
+    family: scope
+    goal: Turn one request into a bounded scope on the owning feature's record - the nodes, dependencies
+      and exclusions the selected workflow may touch - by read-only analysis that performs no effect
+      it scopes.
+    nodeKinds:
+      - operations
+    completionProfile: operations
+    reads:
+      - request
+      - intake
+      - records
+      - repo
+      - profile
+      - standard
+    writes:
+      - node
+      - scope
+      - work-graph
+      - catalog
+      - evidence
+      - read-digest
+    route:
+      nodeKinds:
+        - operations
+      phase:
+        - scope
+        - pre-implementation
+      intent:
+        - scope
+        - define
+        - bound
+      prerequisites:
+        - request analyzed
+    lifecyclePosition: scope | pre-implementation
+    kindInferred: define
+  - id: scope.finish
+    family: scope
+    goal: Finish exactly the selected business/resource scope - end-of-life - while preserving required
+      evidence and live consumers.
+    nodeKinds:
+      - operations
+    completionProfile: operations
+    sideEffects:
+      count: 1
+      summary: explicit end-of-life metadata and separately authorized exact destructive actions only
+    reads:
+      - target
+      - repo
+      - inventory
+      - authority
+      - profile
+      - standard
+    writes:
+      - node
+      - evidence
+      - read-digest
+    route:
+      nodeKinds:
+        - operations
+      phase:
+        - operate
+        - post-implementation
+      intent:
+        - finish
+        - remove
+        - scope
+        - end-of-life
+      prerequisites:
+        - the scope exists
+      riskHints:
+        - destructive-gate
+    lifecyclePosition: operate | post-implementation
+    kindInferred: finish
+  - id: security.verify
+    family: security
+    goal: Inspect one selected slice of code and configuration for vulnerabilities read-only and leave
+      typed findings with evidence - repairing nothing it finds.
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 1
+      summary: execution of exactly the declared read-only scan/analysis commands in the declared sandbox
+    reads:
+      - target
+      - business
+      - architecture
+      - repo
+      - rules
+      - machines
+      - checks
+      - effects
+      - profile
+    writes:
+      - node
+      - evidence
+      - lint
+      - security-findings
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - verify
+        - post-implementation
+      intent:
+        - security
+        - verify
+        - scan
+      prerequisites:
+        - a delivered slice
+    lifecyclePosition: verify | post-implementation
+    kindInferred: verify
+  - id: task.execute
+    family: task
+    goal: Analyze one request into a bounded, evidence-grounded workflow selection without performing
+      effects.
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - operations
+    completionProfile: operations
+    reads:
+      - request
+      - repo
+      - targetSystem
+      - profile
+      - op-loop
+    writes:
+      - evidence
+      - read-digest
+      - gate-proof
+    route:
+      nodeKinds:
+        - operations
+      phase:
+        - intake
+        - pre-implementation
+      intent:
+        - task
+        - execute
+        - ad-hoc
+        - direct-task
+      prerequisites:
+        - no preset workflow matched
+    lifecyclePosition: intake | pre-implementation
+    kindInferred: execute
+  - id: test.author
+    family: test
+    goal: "Author the test files one bounded slice needs - inside a test-paths-only allowlist - and
+      prove they are collected by the real runner; the pass/fail judgement of the product belongs to
+      the verify ops, "
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 3
+      summary: test file authoring inside the declared test-paths-only allowlist
+    reads:
+      - target
+      - architecture
+      - repo
+      - suite
+      - conventions
+      - profile
+      - op-loop
+    writes:
+      - node
+      - source
+      - evidence
+      - read-digest
+      - gate-proof
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - implement
+        - implementation
+      intent:
+        - test
+        - author
+        - coverage
+      prerequisites:
+        - test-gap blocker or code under test
+    lifecyclePosition: implement | implementation
+    kindInferred: author
+  - id: uat.assisted.prepare
+    family: uat
+    goal: Prepare one accepted UAT flow set that contains genuine human-gated checkpoints as an
+      immutable, digest-bound assisted browser session without executing the product journey or
+      claiming acceptance.
+    nodeKinds:
+      - uat.ux
+    completionProfile: uat.ux
+    sideEffects:
+      count: 2
+      summary: write only the selected operation evidence bundle and deterministic Playwright session
+        scripts
+    reads:
+      - target
+      - acceptance
+      - build
+      - environment
+      - browser
+      - automation
+      - authority
+      - workflow
+      - profile
+    writes:
+      - request
+      - session
+      - playwright
+      - redaction
+      - cleanup
+      - evidence
+    route:
+      nodeKinds:
+        - uat.ux
+      phase:
+        - verify
+        - post-implementation
+      intent:
+        - uat-assisted
+        - prepare
+        - browser
+        - human-gated
+      prerequisites:
+        - request analyzed
+        - accepted UAT flow
+        - verified served build
+        - at least one genuine human gate
+      riskHints:
+        - browser-required
+        - human-checkpoint
+    lifecyclePosition: verify | post-implementation
+    kindInferred: prepare
+  - id: uat.assisted.verify
+    family: uat
+    goal: Independently verify one controlled human-assisted browser run from exact immutable receipts
+      by reproducing its bindings, machine postconditions, evidence integrity, redaction and cleanup
+      without trea
+    nodeKinds:
+      - uat.ux
+    completionProfile: uat.ux
+    sideEffects:
+      count: 2
+      summary: read-only build, environment, database, API and provider probes declared by the prepared
+        request
+    reads:
+      - target
+      - request
+      - session
+      - scripts
+      - policies
+      - receipt
+      - runArtifacts
+      - build
+      - environment
+      - postconditions
+      - cleanup
+      - workflow
+      - profile
+    writes:
+      - verification
+      - evidence
+    route:
+      nodeKinds:
+        - uat.ux
+      phase:
+        - verify
+        - post-implementation
+      intent:
+        - uat-assisted
+        - verify
+        - browser
+        - human-gated
+        - receipt
+      prerequisites:
+        - uat.assisted.prepare passed for the exact request/session
+        - immutable controlled-run receipt
+      riskHints:
+        - browser-required
+        - human-checkpoint
+        - evidence-sensitive
+    lifecyclePosition: verify | post-implementation
+    kindInferred: verify
+  - id: uat.verify
+    family: uat
+    goal: Execute the requested sequential UX flows with scoped account/seed setup, real
+      screenshot/video evidence and verified cleanup.
+    nodeKinds:
+      - uat.ux
+    completionProfile: uat.ux
+    sideEffects:
+      count: 5
+      summary: scoped test account reuse/creation
+    reads:
+      - target
+      - business
+      - repo
+      - environment
+      - flows
+      - accounts
+      - fixtures
+      - scripts
+      - effects
+      - workflow
+      - profile
+    writes:
+      - node
+      - source
+      - resources
+      - evidence
+    route:
+      nodeKinds:
+        - uat.ux
+      phase:
+        - verify
+        - post-implementation
+      intent:
+        - uat
+        - acceptance
+        - browser
+        - verify
+      prerequisites:
+        - implementation done
+        - interface.audit done
+        - verified served build
+      riskHints:
+        - browser-required
+    lifecyclePosition: verify | post-implementation
+    kindInferred: verify
+  - id: unit.verify
+    family: unit
+    goal: Run the app's FULL back-end unit suite (npm test at the app root) against the delivered source
+      and report the observed result - never a subset presented as the whole suite, never a repaired
+      product.
+    params:
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - implementation
+    completionProfile: implementation
+    sideEffects:
+      count: 2
+      summary: the repository's declared full unit run, in a job-private scratch and coverage directory
+    reads:
+      - target
+      - repo
+      - request
+      - profile
+      - op-loop
+      - unit-kit
+    writes:
+      - node
+      - evidence
+      - read-digest
+      - gate-proof
+      - unit-run
+    route:
+      nodeKinds:
+        - implementation
+      phase:
+        - verify
+        - post-implementation
+      intent:
+        - unit
+        - unit-suite
+        - full-unit
+        - verify
+      prerequisites:
+        - implementation done
+    lifecyclePosition: verify | post-implementation
+    kindInferred: verify
+  - id: work.author
+    family: work
+    goal: Author the canonical Work records one slice needs before it can be launched - in record mode
+      each record's own write scope, testable proof demands and one runnable check per demand; in
+      cut mode the ch
+    params:
+      maxFiles:
+        default: 12
+        setBy: kernel
+      maxProofDemands:
+        default: 8
+        setBy: kernel
+      componentsTriggeringCut:
+        default: 3
+        setBy: kernel
+      gateRounds:
+        default: 5
+        setBy: owner
+    nodeKinds:
+      - implementation
+      - uat
+      - ui
+      - operations
+    completionProfile: operations
+    reads:
+      - application-stacks
+      - target
+      - neighbours
+      - specification
+      - source
+      - scripts
+      - profile
+      - standard
+    writes:
+      - node
+      - integration
+      - accounts
+      - identity
+      - environment
+      - fixture
+      - parts
+      - evidence
+      - work-graph
+      - read-digest
+      - doc-gate
+    route:
+      nodeKinds:
+        - implementation
+        - uat
+        - ui
+        - operations
+      phase:
+        - scope
+        - pre-implementation
+      intent:
+        - work
+        - author
+        - nodes
+        - launchable
+        - decompose
+      prerequisites:
+        - scope defined
+    lifecyclePosition: scope | pre-implementation
+    kindInferred: author
+  - id: workspace.manage
+    family: workspace
+    goal: Create or reconstruct one canonical .starciwork workspace from a new purpose or selected
+      existing source and old worktrees, with verified bindings, preserved provenance and validated
+      scope, and declar
+    params:
+      mode:
+        default: select
+        setBy: kernel
+    nodeKinds:
+      - operations
+    completionProfile: operations
+    sideEffects:
+      count: 1
+      summary: Only the selected operation contract permits effects; no union of mode permissions.
+    reads:
+      - target
+      - selection
+      - profile
+      - worktree-api
+    writes:
+      - node
+      - evidence
+    route:
+      nodeKinds:
+        - operations
+      phase:
+        - scope
+        - pre-implementation
+      intent:
+        - workspace
+        - manage
+        - bootstrap
+        - import
+        - bind
+      riskHints:
+        - work-tree-writes
+    lifecyclePosition: scope | pre-implementation
+    kindInferred: manage

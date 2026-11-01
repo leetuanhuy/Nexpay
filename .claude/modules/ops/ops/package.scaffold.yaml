@@ -1,0 +1,222 @@
+schema: starci/op@1
+id: package.scaffold
+goal:
+  en: Create one new package or library module at the declared path and prove its public contract
+    surface — the package builds and a real consumer import resolves.
+params:
+  gateRounds:
+    type: integer
+    default: 5
+    min: 1
+    max: 10
+    setBy: owner
+    doc:
+      en: "Rounds of FIX then gate.mjs the op loop runs before it stops: a gate still red after the last round is reported blocked with the exact findings of that round (knowledge/op-gate.yaml)."
+      vi: "Số vòng SỬA rồi chạy lại gate.mjs của vòng lặp op trước khi dừng: hết vòng cuối mà cổng vẫn đỏ thì báo blocked kèm đúng các lỗi của vòng đó (knowledge/op-gate.yaml)."
+nodeKinds: [implementation]
+completionProfile: implementation
+sideEffects:
+  - owned source edits
+  - new package tree creation inside the bound repository at the declared path
+  - no commits of its own - the runtime commits a green settle as the workflow's checkpoint
+  - toolchain install/build in the declared sandbox
+  - no registry publication, no external release
+graphPolicy:
+  mode: read-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+reads:
+  - id: target
+    path: N/index.yaml
+    purpose:
+      en: "Read the selected implementation node this package realises: declared path, package identity
+        (name/scope), public surface refs, assertions. No selected node is a scope gap."
+  - id: architecture
+    path: .starciwork/features/<feature>/{sds,contract,integration}/**/index.yaml
+    purpose:
+      en: REQUIRED. Package boundaries — name, exports shape, dependency policy, consumer contract — are
+        settled architecture.
+  - id: repo
+    path: <app>/<bound-paths>
+    purpose:
+      en: Resolve the actual checkout and read sibling packages/manifests for house conventions — a new
+        package in an existing repo inherits that repo's toolchain wiring, not a parallel one.
+  - id: conventions
+    path: knowledge/patterns/be/* + knowledge/hfs/rules.yaml
+    purpose:
+      en: "The kit contracts a package satisfies: eslint kits, grammar packaging and the exports-map
+        policy."
+  - id: profile
+    path: modules/models/registry.yaml + selected runtime execution profile + actual host tools/model
+    purpose:
+      en: Resolve the request-bound profile; capabilities are the intersection of actual tools and profile
+        policy.
+  - id: op-loop
+    path: shared
+    purpose:
+      en: shared
+      vi: "Dữ liệu của vòng lặp op: bảng loại tệp sang tệp pattern, app ví dụ cho từng phía, và schema của cổng và bản tóm tắt đọc mà read-digest.mjs và gate.mjs dùng."
+writes:
+  - id: node
+    path: N/index.yaml
+    fields: [state, activity, codeRefs, evidence]
+    content:
+      en: Record the realised package root, its manifest identity and evidence.
+  - id: source
+    path: <app>/<declared-package-root>/**
+    fields: [manifest, exports, toolchainConfig, layout, harness]
+    content:
+      en: "The new package tree only: package.json with declared name/scope/exports, toolchain configs
+        inheriting house kits, declared layout, minimal public surface and its harness."
+  - id: evidence
+    path: evidence/**
+    fields:
+      - request
+      - scope
+      - criteria
+      - status
+      - outputs
+      - observations
+      - effects
+      - evidenceRefs
+      - codeRefs
+      - remaining
+      - recovery
+    artifacts: [result.json, effects.json, verification.json, artifacts]
+    content:
+      en: The scaffold result, the effects it had, the verification it ran and the artifacts it produced
+        for the selected package scope.
+  - id: read-digest
+    path: shared
+    content:
+      en: shared
+      vi: "Bản tóm tắt ĐỌC: các tệp sẽ sửa, bản đồ slot của chúng từ starci app explain, và mọi tệp pattern và ví dụ đã đọc kèm sha256."
+  - id: gate-proof
+    path: shared
+    content:
+      en: shared
+      vi: "Báo cáo cổng của vòng cuối: exit, commit gốc, head, các tệp đã đổi, số lỗi mới và lỗi có sẵn, và từng lỗi mới."
+steps:
+  - reads: [op-loop]
+    writes: [read-digest]
+    action:
+      en: "READ before coding (op loop, knowledge/op-gate.yaml): run starci gate read --root <app> --touch <every file the slice will create or change> --out $STARCI_JOB_SCRATCH/read-digest.json and read exactly what it lists, nothing wider - the knowledge/patterns/{be|fe}/*.yaml of each touched file kind, the matching example files of examples/<app>/{fe,be} and the slot map starci app explain prints per path (slot, tier, allowed imports, rules). Code only after this read; a file the slice comes to touch later is added with --touch and read the same way."
+      vi: "ĐỌC trước khi viết code (vòng lặp op, knowledge/op-gate.yaml): chạy starci gate read --root <app> --touch <mọi tệp slice sẽ tạo hoặc sửa> --out $STARCI_JOB_SCRATCH/read-digest.json và đọc đúng những gì nó liệt kê, không rộng hơn - các tệp knowledge/patterns/{be|fe}/*.yaml của từng loại tệp sẽ sửa, các tệp ví dụ cùng slot trong examples/<app>/{fe,be} và bản đồ slot mà starci app explain in cho từng đường dẫn (slot, tầng, import được phép, luật). Chỉ viết code sau bước đọc này; tệp phát sinh về sau được thêm bằng --touch và đọc theo cùng cách."
+  - reads:
+      - target
+      - architecture
+    writes: [evidence]
+    action:
+      en: Resolve package identity, public surface and dependency policy from settled records. Every
+        export the manifest declares traces to a record. Undecided boundaries report sds-gap; the
+        scaffold never invents a public API.
+  - reads:
+      - repo
+      - conventions
+    writes: [evidence]
+    action:
+      en: Resolve the checkout, confirm the declared package root is empty-or-absent, read sibling package
+        manifests and the kit contracts this package inherits. Read the kit contracts the package
+        must satisfy (eslint kits, grammar packaging, exports-map policy) before writing the
+        manifest.
+  - reads:
+      - architecture
+      - conventions
+    writes: [source]
+    action:
+      en: Write the manifest (name/scope/exports per the settled boundary), toolchain configs wired to
+        house kits, declared layout, minimal public surface and harness.
+  - reads:
+      - repo
+    writes: [source, evidence]
+    action:
+      en: Install, build, lint and test for real; prove the public contract with a real consumer smoke —
+        pack or workspace-import the package and resolve its declared export from an actual consumer
+        file.
+  - reads:
+      - target
+    writes: [node, evidence]
+    action:
+      en: Record the package root and codeRefs on the node; return the evidence bundle including the
+        consumer-smoke output.
+  - reads: [op-loop]
+    writes: [gate-proof]
+    action:
+      en: "FORCE THE CHECKS after coding: run starci gate run --root <app> --changed <the files the slice changed> [--tests <the slice spec pattern>] --out $STARCI_JOB_SCRATCH/gate.json. FIX what it reports and run it again, at most params.gateRounds rounds: exit 0 is green; exit 1 lists the new findings (lint per file and rule, tsc per message, failing specs - a finding the base already has never counts); exit 2 means a tool could not run and is never green. Still red after the last round: report blocked with the exact findings of that gate.json. Never report done while the gate is red or could not run. REPORT with gate.json and read-digest.json attached."
+      vi: "ÉP CHẠY KIỂM TRA sau khi viết code: chạy starci gate run --root <app> --changed <các tệp slice đã đổi> [--tests <mẫu spec của slice>] --out $STARCI_JOB_SCRATCH/gate.json. SỬA những gì nó báo rồi chạy lại, tối đa params.gateRounds vòng: exit 0 là xanh; exit 1 liệt kê lỗi mới (lint theo tệp và luật, tsc theo thông điệp, spec thất bại - lỗi đã có trên commit gốc không bao giờ bị tính); exit 2 là một công cụ không chạy được và không bao giờ là xanh. Hết vòng cuối mà vẫn đỏ: báo blocked kèm đúng các lỗi trong gate.json đó. Không bao giờ báo done khi cổng đỏ hoặc không chạy được. BÁO CÁO kèm gate.json và read-digest.json."
+proofs:
+  - id: package-builds
+    requirement:
+      en: The declared toolchain ran green against the new package and real output is recorded.
+  - id: contract-resolves
+    requirement:
+      en: A real consumer resolved the declared export — pack or workspace import executed, not asserted.
+  - id: conventions-inherited
+    requirement:
+      en: The package uses the house kits/toolchain wiring of its repo — no parallel toolchain.
+  - id: scope
+    requirement:
+      en: Every created file lives under the declared package root.
+  - id: op-gate
+    requirement:
+      en: "starci kernel settle re-reads the attached gate.json (exit 0 over the slice's changed files) and read-digest.json (a pattern file named for every touched file kind) and records the runtime check op-gate; a done without them, with a tool that could not run or with a new finding is refused, and the Kernel re-runs the same gate on the branch at landing."
+      vi: "starci kernel settle tự đọc lại gate.json đính kèm (exit 0 trên các tệp slice đã đổi) và read-digest.json (có tệp pattern cho mọi loại tệp đã sửa) rồi ghi check op-gate; done thiếu chúng, có công cụ không chạy được hoặc có lỗi mới đều bị từ chối, và Kernel chạy lại đúng cổng đó trên nhánh khi land."
+judge:
+  - by: machine
+    measures: [declared-checks, op-gate]
+    proofs: [op-gate]
+    why: "settle re-reads the gate over the new package tree; the build and the consumer import it ran are the op's own"
+  - by: next-leg
+    leg: review.verify
+    why: "the planned chain closes with review.verify, which re-runs the gate over the reviewed range and classifies every defect it finds without repairing the producer"
+blockers:
+  - code: SDS_MISSING
+    condition:
+      en: No settled architecture names the package identity, boundary or public surface.
+  - code: REPO_UNBOUND
+    condition:
+      en: No bound repository checkout exists to receive the package.
+  - code: CONVENTION_CONFLICT
+    condition:
+      en: The declared boundary contradicts the repo's kit contracts (exports policy, lint kits).
+  - code: TOOLCHAIN_UNAVAILABLE
+    condition:
+      en: The declared toolchain cannot install or run in the available environment.
+  - code: OUTSIDE_SCOPE
+    condition:
+      en: The required tree would write outside the declared package root.
+placeholders:
+  app: shared
+  bound-paths: Inspected relevant source read set
+  declared-package-root: The exact path the node/design declares for the new package
+layoutPolicy:
+  checks: [starci-validate]
+policy:
+  cutSetAuthority:
+    scope: package.scaffold-cut-sets
+    appliesWhen: The dispatch packet carries context.cut {id, ordinal, total} with total >= 2, every cut
+      job uses this same approved package.scaffold leg and goal binding, and the complete pairwise-disjoint path
+      union (shared root config - package.json, lockfile, tsconfig, eslint config, hfs.json -
+      in exactly one ordinal, normally the seam) was preflighted before the first slice launched.
+    permits: "A repository-wide gate (install, typecheck, lint:check, starci app lint, test, build)
+      may remain nonzero after a NON-FINAL ordinal only for findings whose paths belong exclusively to
+      not-yet-passed sibling ordinals of the same cut set. The current slice must pass the same gates
+      scoped to its own owned paths, recorded as check cut-slice-postcondition; the full gate commands
+      and their finding inventory stay unchanged except for sibling-owned paths, recorded as
+      cut-regression-inventory; a finding a passed ordinal resolved may not reappear. The raw nonzero
+      full result is integration evidence, not the slice's red verdict. The pass that CLOSES the set -
+      the last ordinal to settle, whichever it is, not the highest (inc-751dd1ac4492) - must record
+      full-regression-final green from the unchanged full gates over the whole set before the leg advances."
+    forbids:
+      - declaring a non-final slice done without the scoped gates on its own paths
+      - accepting a full-gate finding on a path this slice or a passed ordinal owns
+      - advancing the leg before the pass that closes the set records full-regression-final green
+route:
+  nodeKinds: [implementation]
+  phase: [implement]
+  intent: [scaffold, greenfield, new-source, package, library, module, bootstrap, init]
+  prerequisites:
+    - architecture.decide settled pass (reviewed SDS seed; Work leaves remain todo)
+    - repository bound
+  riskHints: [source-edits, new-tree]

@@ -1,0 +1,80 @@
+schema: starci/reconciler-controller@1
+name: host
+title: Host controller - host services, Kernel and Supervisor seats, orphan processes, the boot order, ledger health
+# DESIGN (<tmp>/reconciler-design/DESIGN.md) sections 7.7, 8.4, 9.4, 9.5, 9.7 and 12; LANES.md Lane D.
+# The code is scripts/reconciler/controllers/host.mjs, scripts/reconciler/services.mjs and
+# scripts/reconciler/ledger-health.mjs. Every number the host controller acts on is here; ports and URLs are NOT:
+# services.mjs servicePorts reads them once from their one source each (runtimes.yaml
+# allocation.supervisorTick.statusApp.port, ~/.cloudflared/harness.yml ingress, config.yaml connectors.gateway.port).
+concerns: [host.kernel-seat, host.supervisor-seat, host.services, host.orca, host.processes, host.ledger-health]
+resyncMs: 60000
+concurrency: 1
+
+# Service state machine (DESIGN 9.7): healthy -> degraded on one failed probe; degraded -> failed after failAfter
+# consecutive failed probes; failed -> backoff (minMs doubling up to maxMs, the one retry budget) -> starting; starting ->
+# failed when no probe passes within startTimeoutMs; more than maxRestarts restarts within windowMs -> quarantined
+# (a DI service-quarantined for the Supervisor); quarantined -> starting again after retryMs.
+backoff: {minMs: 1000, maxMs: 300000}
+quarantine: {maxRestarts: 5, windowMs: 1800000, retryMs: 3600000}
+
+# One entry per registry service (services.mjs SERVICES). everyMs: the least time between two probes (the
+# controller resyncs every resyncMs; a service probed more recently than everyMs is not probed again).
+# slaMs: how long the service may be down before the SERVICE_DOWN clock is a violation (the sla layer reports it).
+# probeTries: one probe PASS tries this many times (each probeTimeoutMs) and passes on the first answer: a server's
+# first request after idle can take seconds (harness 2026-09-28: 5.0 s local, 11.5 s through the tunnel, then 2 ms).
+# aliveTimeoutMs: before any restart, the service's port/URL is asked once more with this timeout; one that still
+# answers HTTP is never restarted (the pass counts as degraded). SERVICE_DOWN starts at `failed`, never `degraded`.
+# task: the Windows task a service is restarted through. The harness UI's is statusApp.task of modules/models/runtimes.yaml
+# (one declaration, also read by `starci task register harness-app`).
+services:
+  orca: {everyMs: 60000, probeTimeoutMs: 30000, aliveTimeoutMs: 90000, failAfter: 5, startTimeoutMs: 600000, slaMs: 180000, closeWaitMs: 30000}
+  harness-ui: {everyMs: 60000, probeTimeoutMs: 15000, probeTries: 3, aliveTimeoutMs: 30000, failAfter: 3, startTimeoutMs: 120000, slaMs: 120000, probePath: /healthz}
+  harness-tunnel: {everyMs: 300000, probeTimeoutMs: 20000, probeTries: 3, aliveTimeoutMs: 45000, failAfter: 2, startTimeoutMs: 300000, slaMs: 300000, probePath: /healthz, task: 'StarCi Harness Tunnel'}
+  ask-gateway: {everyMs: 60000, probeTimeoutMs: 30000, probeTries: 2, aliveTimeoutMs: 30000, failAfter: 3, startTimeoutMs: 120000, slaMs: 120000}
+  ask-tunnel: {everyMs: 60000, probeTimeoutMs: 60000, probeTries: 2, failAfter: 3, startTimeoutMs: 300000, slaMs: 300000}
+  telegram-bridge: {everyMs: 60000, probeTimeoutMs: 30000, probeTries: 2, failAfter: 3, startTimeoutMs: 300000, slaMs: 300000}
+  sched-task:StarCi-Reconciler: {everyMs: 3600000, probeTimeoutMs: 30000, failAfter: 1, startTimeoutMs: 300000, slaMs: 60000}
+
+# The scheduled task StarCi-Reconciler is re-created only through `boot.mjs --install-task --apply`, and only when
+# this is true (owner-approved once, DESIGN 25 item 6). While false a missing task is reported `unmanaged`.
+allowTaskRepair: false
+
+# Checkers (Sonar, ...): probed and published as `checker:<name>` rows for the job controller, never restarted.
+# Each: {name, cmd, args, everyMs, probeTimeoutMs, slaMs}; a probe passes when the command exits 0.
+# Down longer than slaMs -> a DI for the Supervisor.
+checkers: []
+
+# Kernel seats (DESIGN 9.4): more than maxReplacementsPerHour replacements -> quarantined + DI seat-unrecoverable;
+# a quarantined seat is left alone for holdMs (or until `starci reconciler reopen <seat>`). A restart the watchdog answers
+# restart-blocked (no sender terminal to launch from: a refusal only a human opening a terminal changes) is tried again
+# once per blockedRetryMs, not every pass. A Kernel launch that fails again for the same cause (scripts/kernel/start-hold.mjs) waits
+# startRetryMs, doubling to startRetryMaxMs, between attempts; after startSameCauseMax failures of one cause it is held for
+# startHeldRetryMs and the seat is quarantined with one DI seat-unrecoverable that names the cause (hold `kernel-start-held` of
+# modules/kernel/op-incident-policy.yaml).
+seats:
+  kernel: {maxReplacementsPerHour: 3, holdMs: 3600000, timeoutMs: 900000, vacantSlaMs: 180000, inputSlaMs: 60000, gatedSlaMs: 600000, hostOutageSlaMs: 600000, quarantinedSlaMs: 1800000, blockedRetryMs: 300000, startRetryMs: 60000, startRetryMaxMs: 900000, startSameCauseMax: 3, startHeldRetryMs: 3600000}
+  supervisor: {timeoutMs: 900000}
+
+# Turn budget (the numbers are modules/models/runtimes.yaml allocation.liveness kernelTurnBudgetMs,
+# supervisorTurnBudgetMs, turnInterruptGraceMs): a seat busy in one turn past its budget gets its agent's own interrupt
+# key (interruptKeys: one entry per key press, `esc` = Escape; Devin asks for Esc twice), then the doorbell re-wake;
+# idleWaitMs bounds the wait for the turn to end before the ring. sameTurnSlackMs: two readings of the spinner timer
+# whose implied turn starts differ by less than this are the same turn. Intent never confirms a timestamp.
+# An unresolved actuator retains its exact terminal in the existing seat record and holds later watchdog effects.
+# Replacement requires a fresh Dispatch-to-terminal read and the worker owner's terminal/process closure proof.
+turnBudget:
+  interruptKeys: {claude: [esc], codex: [esc], devin: [esc, esc]}
+  idleWaitMs: 20000
+  sameTurnSlackMs: 180000
+  probeTimeoutMs: 60000
+
+# Processes (DESIGN 8.4): every everyMs. An orphan runtime loop (watchdog.mjs / start-workflow.mjs / serve-ask.mjs
+# whose --repo no managed ledger owns and whose workflow no managed ledger runs) older than orphanMinAgeMs is
+# stopped. The footprint scan runs every footprintEveryMs. More runtime-titled Orca tabs ([Kernel], [Op], [Worker], [Supervisor]; the owner's
+# own terminals are not counted) than active workers + terminalSlack -> the TERMINAL_COUNT_DRIFT clock, and the dedupe pass once per terminalDriftSlaMs.
+processes: {everyMs: 60000, orphanMinAgeMs: 1800000, orphanSlaMs: 60000, footprintEveryMs: 600000, terminalSlack: 5, terminalDriftSlaMs: 600000}
+
+# Ledger health (DESIGN 13): PRAGMA quick_check (read-only) every quickCheckEveryMs; nightly (from backupHour local
+# time) VACUUM INTO <backupDir>/<ledgerId>-<yyyymmdd>.sqlite, the newest keep kept; backupDir defaults to
+# <archive root>/ledger-backups (services.mjs). Restore is manual and owner-approved; nothing here restores.
+ledgerHealth: {quickCheckEveryMs: 3600000, backupHour: 3, keep: 7, backupTimeoutMs: 1800000, backupRetryMs: 900000}

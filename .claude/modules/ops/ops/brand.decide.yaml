@@ -1,0 +1,580 @@
+schema: starci/op@1
+id: brand.decide
+goal:
+  en: Settle one product's visual identity in the single brand record - colour tokens traced to the
+    real source files, typography, mascot, logo, iconography, imagery rules, voice and motion - and
+    in full edition write the product's layout tree in the single shell record (interface.draw writes it too when it
+    starts from a todo shell - owner ruling 2026-09-29 draw-from-todo, layout capture is not
+    this op's exclusive gate, a draw never waits for it) - scanned from the frontend's app/
+    directory (or planned before one exists), each visible layout captured at desktop and mobile in the
+    light theme (dark optional) with its page slot measured, navigation labels out of the i18n catalogs, product locale, demo
+    personas by role and the brand lockup - so every later drawing is composited into the real chrome
+    and every build lands at the real route instead of inventing either.
+nodeKinds: [brand]
+completionProfile: brand
+sideEffects:
+  - generated placeholder mascot/logo asset bytes under the brand record's own assets
+  - full edition only - local renders of the real frontend's layouts (page slot keyed) and brand lockup, captured under the shell record's own assets
+graphPolicy:
+  mode: read-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+params:
+  ownerRulings:
+    type: string
+    default: ''
+    setBy: kernel
+    doc:
+      en: The owner's identity rulings, verbatim, each with where it was recorded (an owner-gate
+        incident answer, a serve-ask answer). A StarCi Next brand op read only the empty bound
+        front end and reported no ruling while the owner's answer sat in an incident the
+        worker cannot open.
+  referenceSources:
+    type: string
+    default: ''
+    setBy: kernel
+    doc:
+      en: Comma-separated read-only paths the owner's ruling names as the identity to follow, for
+        example another product's global CSS and the dashboard and subscription pages it styles.
+        Values traced to a declaration in these files are traced to a real file.
+  directionArchetype:
+    type: string
+    default: ''
+    setBy: kernel
+    doc:
+      en: "Direction mode. When set to one page archetype (dashboard, list, detail, form, wizard or empty)
+        that `brand.direction.archetypes` lacks or that the owner asked to revise, this run writes only that
+        archetype of `brand.direction` (plus the principles, vocabulary, rubric and golden renders it needs),
+        renders its golden reference, and parks the owner's brand-direction-review ask; it re-traces no token
+        and re-captures no layout. Empty: the identity run. brand.decide routes on the think order, so this
+        mode runs on the claude family first (modules/models/runtimes.yaml order brand; owner ruling 2026-09-27:
+        claude decides the brand and its direction, codex is the fallback); devin draws (order draw)."
+reads:
+  - id: target
+    path: .starciwork/brand/index.yaml
+    purpose:
+      en: "Read the existing product brand record, its declared refs, its current `rev` and validator
+        freshness. There is exactly one brand record per product: this op revises that record rather
+        than adding a second identity. When the product has no brand record yet, this path is absent
+        and this op creates it at rev 1 as the record's first owner, not a second one."
+  - id: owner
+    path: .starciwork/features/*/{br,fr,decision}/**/index.yaml + the selected request and the owner's
+      recorded rulings + params.ownerRulings
+    purpose:
+      en: Inferring identity from a competitor, a template or a screenshot is not a ruling.
+  - id: grammar
+    path: consuming app manifest/lockfile + resolved component package exports/types/renderers/CSS + app
+      family root/style imports; before the app is scaffolded, the grammar package and family the
+      owner's ruling names
+    purpose:
+      en: Resolve the installed design grammar from the actual consuming app, honoring workspace aliases
+        and bundler resolution, and record package identity, version, resolved path and inspected
+        file hashes. A similarly named family variable is not proof it is wired. A frontend that is not
+        scaffolded yet has no manifest; then the family the owner ruled is read from the grammar
+        package itself and recorded as the family the scaffold installs.
+  - id: sources
+    path: <app>/<bound-paths> + params.referenceSources
+    purpose:
+      en: Read the real token and style files of the app's front end (`fe/`) - each app's global CSS, the
+        family root, the theme and token files the owner named or that `fe/` actually
+        contains - and record each file path with the exact declaration every token value comes
+        from.
+  - id: assets
+    path: .starciwork/brand/assets/* + <app>/<bound-paths>
+    purpose:
+      en: Read the mascot, logo and icon-set assets that already exist - beside the record and in the
+        front end (`fe/`) - with their formats, dimensions and provenance. Reuse an existing
+        verified asset before producing any new one; an asset whose rights or origin are unknown is
+        reported, not adopted.
+  - id: shell
+    path: .starciwork/shell/index.yaml
+    purpose:
+      en: "Full edition: the product's layout tree (work/layout-tree@1) with its rev, nodes, per-layout revs and captures
+        (cited blobs, engine/db/blob.mjs). Absent until the tree is first scanned or planned; this op then writes it at rev 1."
+  - id: shellSource
+    path: <app>/<bound-paths>
+    purpose:
+      en: "The frontend's App Router directory (app/: layout, template, page, loading, error, not-found and
+        default files, route groups, @slots and (.)intercepts), the chrome components its layouts render,
+        the navigation registry they import, the locale routing and the i18n message catalogs - read-only,
+        through scripts/work/layout-tree.mjs - and the seed or fixture data the demo personas are taken
+        from. Absent when no frontend exists yet."
+  - id: settledDesign
+    path: .starciwork/features/*/{journey,sds}/**/index.yaml
+    purpose:
+      en: The accepted journeys and frontend design records a planned layout tree takes its routes, layouts
+        and personas from when the frontend does not exist yet.
+  - id: knowledge
+    path: knowledge/index.yaml + applicable UI presentation/composition and installed family topics
+    purpose:
+      en: Read the applicable presentation, composition and family topics before mapping a decision onto a
+        token name, a contrast floor or an icon rule. Knowledge explains ownership and composition;
+        the installed package and the real source files determine what a value may actually be.
+  - id: direction
+    path: knowledge/ui/composition/{taste,hierarchy,accent}.yaml + knowledge/ui/proof/{taste,brand}.yaml +
+      knowledge/grammars/<family>/DNA.yaml + knowledge/ui/examples/brand-direction.example.yaml
+    purpose:
+      en: "Read in direction mode: the owner's nine-step UX/UI discipline (DISCIPLINE-1..3, HIERARCHY-6,
+        ACCENT-6 and the TASTE proof cases), the DNA components the recipes map onto, and a worked
+        proposed direction whose shape the direction step copies (not its product content)."
+  - id: profile
+    path: modules/models/registry.yaml + selected runtime execution profile + actual host tools/model
+    purpose:
+      en: Resolve this operator's request-bound external-agent chain from the selected StarCi skill and
+        active profiles. This op's agent runs no image model; an image it needs is made by the headless
+        `starci work imagegen` call, which can be refused (quota, capacity, unavailable). Use current host
+        model configuration; historical model names are not availability proof. Capabilities are the intersection of actual tools, selected profile policy, op
+        permissions and existing task authority.
+  - id: standard
+    path: docs/architecture.md + docs/code-pattern-enforcement.md + knowledge/op-gate.yaml + knowledge/ui/index.yaml + knowledge/grammars/index.yaml + knowledge/patterns/fe/css.yaml
+    purpose:
+      en: shared
+      vi: "Chuẩn mà quyết định và bản ghi của op dẫn ra: knowledge/op-gate.yaml (proofs.read-knowledge), các tệp knowledge liệt kê ở bước ĐỌC và bản đồ slot hfs của mọi bản ghi op viết (starci app explain ở gốc app). Các tệp được đọc tại chỗ và ghi kèm sha256 vào bản tóm tắt ĐỌC; không chép lại vào bản ghi."
+writes:
+  - id: node
+    path: .starciwork/brand/index.yaml
+    fields:
+      - schema
+      - id
+      - state
+      - rev
+      - colour
+      - typography
+      - mascot
+      - logo
+      - iconography
+      - imagery
+      - voice
+      - motion
+      - donts
+      - direction
+      - review
+      - extensions
+    content:
+      en: "Write the whole identity into the one brand record (schema work/brand@1, id brand): colour
+        tokens as name -> value with role and the policy that governs them (whether danger may match
+        primary, the contrast floor - stated in `donts` concretely enough to check), typography,
+        mascot, logo, iconography, imagery, voice, motion, the `donts` list every later surface is
+        judged against, and `review` naming who settled this revision and on what authority - a
+        brand reaches done only through that review. `sources`-style traces to the real files each
+        value was read from live in the record's extension fields; every asset byte lives under the
+        brand record's own `assets/` with its sha256. Bump `rev` once per accepted revision and
+        state what changed. No product code, no second brand owner and no identity claim the owner
+        did not rule."
+  - id: brandAssets
+    path: .starciwork/brand/assets/<asset>
+    fields: [asset bytes with sha256 provenance]
+    content:
+      en: "Store reused or newly generated identity bytes under the brand record's own assets in their
+        actual formats, each with its sha256 and its provenance recorded beside them. A mascot the
+        product does not yet have may be produced once as an explicit placeholder from the owner's
+        description with `starci work imagegen` (--out the brand record's assets directory; its receipt
+        generation-receipts.yaml is the provenance); it is recorded as a placeholder, never as
+        the final mascot and never as a capture of a shipped surface. When the call is refused, record a
+        concrete deferred brief instead and leave the slot empty: a missing file
+        is never described as generated."
+  - id: shellNode
+    path: .starciwork/shell/index.yaml
+    schema: work/layout-tree@1
+    fields:
+      - schema
+      - id
+      - kind
+      - state
+      - rev
+      - origin
+      - app
+      - source
+      - productLocale
+      - i18n
+      - brand
+      - personas
+      - breakpoints
+      - themes
+      - nodes
+      - review
+      - change
+    content:
+      en: "Full edition only: the one layout tree (schema work/layout-tree@1, id shell), generated, never hand-listed: `node
+        scripts/work/layout-tree.mjs scan --work .starciwork --write` writes app, source digest, i18n
+        catalogs and, for each app the workspace declares, one node per app/ segment with its special files and digests, the component each
+        layout renders and the navigation it imports with labels per locale and its findings. This op then
+        decides each layout's `chrome` (visible or passthrough), captures every visible layout with
+        `layout-tree.mjs capture` (which measures the slot and bumps the layout rev on a changed capture),
+        writes `personas` (one per role, one default, from the seed or fixture data the app demos with),
+        `brand.lockups`, and marks each layout and the tree done when settled. On a greenfield product it
+        writes origin planned nodes with `layout-tree.mjs plan --node <id> --files layout,page --design
+        <ui-id>`, naming the surface-layout ui record that draws each planned visible layout by
+        the one name both ops use - ui.<feature>.<layout>-layout at
+        features/<feature>/ui/<layout>-layout/, where <feature> is an existing catalog feature whose
+        accepted journeys the layout frames (for a layout every feature shares, the feature of its default
+        page), never a pseudo-feature such as shell, and <layout> the node's last named segment (a group
+        without its parentheses). The pointer is a plan until interface.draw creates that record: starci
+        validate lists it as DESIGN_PLANNED, never refuses it, so it stays in layout.design and is never moved into blockers.
+        A sibling evidence.yaml binds the scan and capture runs."
+  - id: shellAssets
+    path: blob store (+ <STARCI_JOB_SCRATCH>/captures/layouts, attached by starci kernel report) - never .starciwork/shell/assets
+    fields: [capture bytes cited by name + sha256 in shell/index.yaml]
+    content:
+      en: "Agent data (docs/ledger-db.md): `layout-tree.mjs capture|lockup --write` puts the bytes in the blob store and
+        the layout tree cites each {name, sha256, ...}. Real browser renders of the running frontend named assets/layouts/<node>--<breakpoint>--<theme>.png -
+        each visible layout rendered with the full chain above it, in the productLocale default, the page
+        slot's children hidden and the slot filled #FF00FF so its rectangle is measured from the image -
+        and the brand lockup cropped from the same render. Never a generated image; a planned layout is
+        drawn by its design ui record, not here. On a greenfield product no render shows a lockup yet: it is
+        cropped from the planned layout's ACCEPTED layout composite instead (`layout-tree.mjs lockup --work
+        .starciwork --from <design-ui-id>:<layout composite path> --rect x,y,w,h --write`, which records
+        brand.lockups[].source), and re-cropped from a real render (`--from shell/<capture path>`) once
+        the frontend renders it; a capture is named shell/<name> in --from."
+  - id: evidence
+    path: evidence/**
+    fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, extensions]
+    artifacts: [manifest.yaml, token-trace.md]
+    content:
+      en: Retain the actual output of the brand checks with their exit status, the token-to-source trace
+        (token name, value, file and declaration it was read from), the resolved package/family
+        evidence and the provenance of every asset. An honest not-run or failing check cannot earn
+        done.
+  - id: read-digest
+    path: STARCI_JOB_SCRATCH/read-digest.json
+    schema: starci/read-digest@1
+    content:
+      en: "The READ digest (read-digest.mjs --knowledge): every knowledge file the decision cites and the hfs slot of every record written, each with its sha256."
+      vi: "Bản tóm tắt ĐỌC (read-digest.mjs --knowledge): mọi tệp knowledge mà quyết định dẫn ra và slot hfs của mọi bản ghi đã viết, kèm sha256 của từng tệp."
+steps:
+  - reads: [standard, knowledge]
+    writes: [read-digest]
+    action:
+      en: "Resolve the app edition from hfs.json first. In lite, .starciwork is required only when brand records exist and permits only .gitignore, optional workspace.yaml and brand/**: the existing brand records, references and assets. Read workspace.yaml normally when present for the project id and repo roles that tie brand records to the frontend. Skip catalog, feature, resource and shell reads/writes, layout-tree planning/rendering and shell proofs below; run the brand checks and keep their evidence in the external ledger. READ the standard before deciding (knowledge/op-gate.yaml proofs.read-knowledge): run starci gate read --root <app> --touch <every record this op will write> --knowledge knowledge/ui/index.yaml knowledge/grammars/index.yaml knowledge/grammars/<the product family>/* knowledge/patterns/fe/css.yaml --out $STARCI_JOB_SCRATCH/read-digest.json, and read what it records - the knowledge files in place and the hfs slot map of each record (slot, tier, rules). Every token, tone pair and asset rule the brand record settles cites the grammar or ui knowledge entry it follows (the HeroUI solid and soft tone pairs, contrast-aa thresholds); a value the grammar forbids is an owner question, never a silent override. A record the op comes to write later is added with --touch and read the same way; REPORT with read-digest.json attached."
+      vi: "ĐỌC chuẩn trước khi quyết định (knowledge/op-gate.yaml proofs.read-knowledge): chạy starci gate read --root <app> --touch <mọi bản ghi op sẽ viết> --knowledge knowledge/ui/index.yaml knowledge/grammars/index.yaml knowledge/grammars/<họ của sản phẩm>/* knowledge/patterns/fe/css.yaml --out $STARCI_JOB_SCRATCH/read-digest.json, rồi đọc những gì nó ghi - các tệp knowledge tại chỗ và bản đồ slot hfs của từng bản ghi (slot, tầng, luật). Mọi token, cặp tông và luật tài sản mà bản ghi thương hiệu chốt đều dẫn mục grammar hoặc ui knowledge nó theo (cặp tông solid và soft của HeroUI, ngưỡng contrast-aa); giá trị mà grammar cấm là câu hỏi cho chủ sở hữu, không bao giờ ghi đè ngầm. Bản ghi phát sinh về sau được thêm bằng --touch và đọc theo cùng cách; BÁO CÁO kèm read-digest.json."
+  - reads:
+      - target
+      - owner
+      - grammar
+      - profile
+    writes: [node]
+    action:
+      en: "Freeze the brief before writing anything: the product name, the actually installed grammar
+        family, and each identity decision the owner has ruled - primary hue, whether danger may
+        match primary, the mascot and where it may never appear, typography, voice. Record the
+        decisions as closed options with the ruling that selected them; an unruled taste decision is
+        a question with the options, never a preference this op supplies. Resolve the execution
+        profile before planning any asset work; an image is made only by `starci work imagegen`,
+        so this selects no model and spawns no worker. An absent brand record is not a gap: this op writes
+        the product's first one at .starciwork/brand/index.yaml. A brand record that exists anywhere
+        else, or a second one, is the scope/graph gap to report; never create a second brand owner. Read the
+        accepted requirement and decision records plus the owner's actual rulings about identity -
+        the name, the primary hue, whether danger may match primary, the mascot and what it may
+        never appear in, the voice. A taste decision belongs to the owner: an unanswered one is a
+        question with the closed options, never a choice this op makes on the owner's behalf. The
+        family's own token names are the vocabulary this record may use: a colour is declared as the
+        grammar token the renderer actually consumes, never as a free-floating hex value with an
+        invented name."
+  - reads:
+      - sources
+      - grammar
+      - knowledge
+    writes: [node]
+    action:
+      en: "Derive every colour token from the real source files and nothing else: open the app's global
+        CSS, family root and theme/token files, and for each value record the token name the
+        renderer consumes, the value, and the exact file and declaration it came from. Map the
+        owner's decisions onto those grammar token names rather than inventing a parallel palette. A
+        value you cannot trace to a declaration in a real file is not written: it is a question
+        naming the token and the file it should live in. Declare `sources` as that exact file list.
+        These files are the source of truth for a value: this op copies them, it never proposes a
+        palette the product does not already serve. A source file the record names and that does not
+        exist is an environment blocker, never a value filled in from memory. A token the owner ruled
+        into the product that the app's theme does not declare yet (interface.implement writes it later)
+        is still traced, to the reference render it was read from: give it `valueSource: {path, token,
+        value, line, sha256}` - the reference file relative to the --source root (read-only), the
+        custom property it declares there, the exact value, its line and the file digest. The brand
+        checks pass it as planned-from-reference until the app declares it and refuse it at
+        review.verify if the app still does not; the token name must still be one the grammar DNA
+        declares. A token the owner ruled in an ask that is already answered (owner_answers carries
+        `[dispatchId, ...]` and the chosen option's words hold the value) and that no file declares is traced to
+        that ruling: `valueSource: {ruling: <dispatchId>, token: <this brand token>, value: <the ruled
+        value>}`. The checks read the ledger's recorded answer, require it to carry the value and mark the token
+        planned-from-ruling; the declaration in the app theme is then owed to interface.implement, which must
+        write it, and review.verify refuses the token until it does. Such a token is never a question to the
+        owner again and never a blocker."
+  - reads:
+      - sources
+      - knowledge
+      - owner
+    writes: [node]
+    action:
+      en: Give every token its role (primary, danger and the rest) and write the policy that governs the
+        set - whether danger may match primary, and the minimum contrast every text-on-surface pair
+        must hold. Status tones follow HeroUI - a solid pair (`--<tone>` with its foreground) and a soft
+        pair (a token with role `<tone>-soft` carrying its soft foreground), the soft pair and the
+        soft foreground as a bare glyph on each surface held to `policy.softMinContrast` (3 by
+        default), never a solid tone darkened until it reads as a bare glyph at 4.5. Check the pairs the record itself declares against that floor and against the
+        policy, and record the measured ratios. A token set that cannot satisfy the owner's ruling
+        and the floor at the same time is reported with both numbers, never quietly adjusted to
+        pass. When the owner accepts named pairs below the floor, keep `policy.minContrast` at the
+        floor and record each accepted pair in `policy.contrastExceptions` - `foreground` and
+        `background` as the two declared token names, `ratio` as the measured ratio the owner
+        accepted, `reason`, `acceptedBy` as the owner ask's dispatch id and `receipt` as its
+        starci/ask-answer@1 receipt path; a muted-text or link-ink pair no token declares as a fill is
+        listed the same way and the check measures it from the two tokens. Never lower the global floor
+        to the lowest accepted ratio, and never write an exception without the owner's receipt - the
+        brand checks refuse it, and they refuse an exception whose pair no longer measures within 0.05
+        of its recorded ratio.
+  - reads:
+      - assets
+      - owner
+      - profile
+    writes: [brandAssets, node]
+    action:
+      en: Settle the mascot, the logo and the icon set. Reuse the assets the repository already has, with
+        their real paths and provenance. Only when the product has no mascot asset at all, generate
+        one explicit placeholder from the owner's description with `starci work imagegen` (the prompt
+        written to a file first, --out the brand record's assets directory),
+        keep it there with its sha256 and the receipt, and record it as a placeholder
+        pending the owner's acceptance; if the call is refused, write a concrete deferred
+        brief instead and never claim a file exists. Write `mayAppearIn`, `neverIn` and the usage
+        rules for each, and name the single icon set the product may use so no later screen
+        introduces a second one.
+  - reads:
+      - target
+      - knowledge
+      - owner
+    writes: [node]
+    action:
+      en: "Write the rules that make every later surface derive from this record rather than from taste:
+        imagery style with its explicit forbidden list and prompt rules that require every later
+        image prompt to state this brand by name, family, palette and mascot policy; the
+        artwork-slot conventions a drawing fills; voice; motion; and the `donts` list the record is
+        judged against. A rule nobody could check from the record is rewritten until it can be."
+  - reads:
+      - target
+      - direction
+      - owner
+      - knowledge
+    writes: [node, brandAssets, evidence]
+    action:
+      en: "Direction mode (params.directionArchetype set) - write `brand.direction` (work/brand@1
+        $defs.direction) for that one archetype and nothing else of the identity: {rev, status: proposed,
+        principles[{id, name, rule, cites}], archetypes.<name> {status: proposed, regionOrder, grid1184,
+        grid390, emphasis (one primary focal point, two or three secondaries), primaryActionPlacement, never[],
+        whenNotToUse, components}, vocabulary.<recipe> {dna: [DNA components], proposals?}, voice,
+        antiPatterns[], rubric {checks[{id, group, test, cites, gate?}], gateCap, beautyAnchors}, golden
+        [{archetype, html, png, sha256}], pendingRulings[]}. Keep the other archetypes as they are; a changed
+        principle, recipe or rubric check bumps `direction.rev`, which un-accepts nothing silently - the
+        checker then refuses every acceptance of an older rev until the owner reviews again. Every cite names
+        a knowledge/ui rule or the DNA; every recipe maps onto components the family DNA renders, and a need
+        it cannot render is a `proposals` entry (status pending), never an element drawn inline. Apply the
+        owner's standing rulings (grammar defaults first, HeroUI `--background` canvas, notices DNA `Alert`,
+        ratios DNA `Meter`, neutral identity tiles, accent under ten percent of the content area); an owner
+        question the direction depends on and nobody ruled goes to `pendingRulings` with its options, never
+        applied. Render the archetype's golden reference (desktop 1184 and mobile 390, light) as HTML plus PNG
+        under brand/assets/direction/, record each with its sha256, then run `node
+        scripts/work/brand-direction.mjs question --work .starciwork --archetype <name>` and park that exact
+        question as this op's `ask` - it carries question.review, so it is never answered automatically. When
+        the owner's answer arrives (the next leg of this op), apply it with `brand-direction.mjs apply --work
+        .starciwork --receipt <answer.json> --write`: accept writes the archetype (and the direction, the
+        first time) `accepted` with its acceptance {acceptedBy, receipt, acceptedAt, rev}; revise writes
+        nothing and its note is the brief of the revision. Never write `accepted` by hand. Run the brand
+        checks: `direction` must pass - it is what lets drawing proceed before the owner answers: under autopilot
+        (runtimes.yaml allocation.autopilot) a proposed archetype whose direction check passes and whose golden
+        is on disk at its recorded sha256 is provisionally ready for interface.draw (ui-archetype.mjs
+        directionReadiness), so a direction with any problem blocks every draw under it; fix each problem before
+        you park the ask, and never park an ask for a direction that fails."
+  - reads:
+      - shell
+      - shellSource
+      - settledDesign
+      - assets
+      - profile
+    writes: [shellNode, shellAssets, evidence]
+    action:
+      en: "Full edition only. Write the layout tree (not exclusively: interface.draw scans, draws or captures it itself when it starts from a
+        todo shell, and only one workflow at a time draws the shared shell foundation - a tree another workflow's draw is
+        settling is left to it). When the frontend exists, run `starci work layout-tree scan --work
+        .starciwork --write` and read what it
+        reports: every node, every layout's component and chrome guess, and the navigation findings - a
+        destination with no route, a route no page answers, a label a catalog lacks, a top-level route no
+        destination reaches. Report each finding as it is; never edit the navigation to hide one, and never
+        type a label the catalogs do not hold. Decide every layout whose chrome is unknown: visible when it
+        draws a rail, bar or frame around its children, passthrough when it renders only document,
+        providers or a guard. For every visible layout at desktop and mobile in
+        the light theme (dark only where the tree already carries it - never demanded), get the render from the runtime:
+        `starci work layout-render --work .starciwork [--app <name>] --node <id> --breakpoint <bp> --theme <theme> --write`.
+        The verb serves the app itself (next dev on a free port with no host pin, every URL on localhost - the app's i18n proxy
+        rewrites to localhost, so a server pinned to 127.0.0.1 loops 307 for ever), loads the layout's route with the whole
+        chain above, hides the slot's children (`--slot <selector>`, default `main`, exactly one match) and fills the slot
+        #FF00FF, captures the viewport, stops the server and records the capture as `starci work layout-tree capture`
+        does. Never start next, `npm run dev` or any server by hand and never browse 127.0.0.1: the command guard refuses it
+        and names the verb. A render the verb cannot produce is reported through SHELL_RENDER_UNAVAILABLE. A layout that marks where the
+        user is (an active sidebar destination, an active tab) is also captured once per active state, with
+        that state active, into layout.destinations: `layout-tree.mjs capture ... --destination <nav or tab
+        key> [--route <node-id>]...` (a nav key defaults to its item's target node; a tab names the nodes it is
+        active for) - compose-direction places each page into its own destination's render. Crop the brand lockup from
+        the same render into brand.lockups with `layout-tree.mjs lockup --work .starciwork --from
+        shell/<capture path> --rect x,y,w,h --write`. On a greenfield product (planned tree, nothing renders
+        a lockup) the order is: plan the visible layout with --design; interface.draw draws that layout
+        record (its draw is exempt from the lockup requirement) and parks the owner's draw-review ask of its
+        drawn parts; once it is accepted (by the owner, or auto-accepted when the owner did not ask for it; interface.draw applies the answer with `scripts/work/draw-review.mjs
+        apply`, which writes the design record done), crop the lockup from its accepted layout composite with
+        `--from <design-ui-id>:<composite path>`. A design record still todo is the draw's owner review, not
+        this op's: report it blocked naming the record, never mark it done here. Write the personas, one per role the product serves, from the
+        seed or fixture data it demos with. When no frontend exists yet, plan the tree from the accepted
+        journeys and frontend design with `layout-tree.mjs plan` (origin planned), naming for each visible
+        planned layout with --design the surface-layout ui record interface.draw draws first, by
+        the one name both ops use - ui.<feature>.<layout>-layout at
+        features/<feature>/ui/<layout>-layout/, where <feature> is an existing catalog feature whose
+        accepted journeys the layout frames (for a layout every feature shares, the feature of its default
+        page), never a pseudo-feature such as shell, and <layout> the node's last named segment (a group
+        without its parentheses); the unresolved pointer is DESIGN_PLANNED, not a dangling ref. A persona no seed or
+        record names is a question with the candidate values, never an invented one. Mark a layout done
+        once settled and the tree done when every layout is."
+  - reads:
+      - target
+      - sources
+    writes: [node, evidence]
+    action:
+      en: "Run the brand checks against the real front end (`fe/`) and keep their output: token values
+        match their declared sources, every declared text pair holds the contrast floor (a status soft pair and its glyph, the
+        soft floor) or an owner-receipted contrast exception, primary and danger are distinct unless the policy permits
+        otherwise, every declared mascot asset exists
+        with its recorded hash, and the icon set is the only one named; in full edition run `node
+        scripts/work/ui/shell-conformance.mjs .starciwork/shell/index.yaml` and keep its output as
+        STARCI_JOB_SCRATCH/shell-conformance.txt, attached at starci kernel report. Bump `rev` and record what
+        changed. Report `done` exactly once with the new `rev`, the checks and the token-to-source
+        trace; a failing check is `failed` with its output; a value that cannot be traced to a
+        source is `ask` naming the token and the file; a source file the record needs and that does
+        not exist is `blocked` with `environment` and the exact path. Never report done on unrun
+        checks."
+  - reads:
+      - direction
+      - owner
+    writes: [node]
+    action:
+      en: "Autopilot (owner ruling 2026-09-28 autopilot-run-to-finish; modules/kernel/driver-loop.yaml autopilot):
+        file the brand-direction-review ask exactly as before, but the owner does not see it mid-flow - autopilot
+        answers it. An answer receipt in context.owner_answers with answeredBy autopilot and provisional true is a
+        PROVISIONAL acceptance: apply it with `brand-direction.mjs apply --receipt <receipt> --write`, which writes
+        brand.direction.archetypes.<name>.provisional (the status stays proposed, nothing becomes golden, no learned
+        ruling is accepted) and file done - interface.draw may draw from a provisional archetype. An autopilot revise
+        answer carries the failing gate findings (or says the ask went stale) as its note: that note is the brief;
+        revise and file the review of the CURRENT direction rev again. Never write that the owner accepted a
+        direction autopilot accepted; the owner reviews it once, at handover."
+proofs:
+  - id: binding
+    requirement:
+      en: Run the record-class validator `starci runtime validate` and, on every record directory it writes, `starci runtime validate --strict`; every cited ID/path exists or is explicitly
+        proposed, required assertions are covered, input bindings are current, and an honest
+        not-run/fail cannot earn done.
+  - id: token-traceability
+    requirement:
+      en: Every colour token in the record names the grammar token the renderer consumes and the exact
+        source file and declaration its value was read from, and `sources` lists those files. A
+        value with no traceable source is a question, never a record entry; a resolved package name
+        and version alone is not a trace.
+  - id: brand-checks
+    requirement:
+      en: "The machine checks ran against the actual front end (`fe/`) and their real output is retained
+        with its exit status: source match, contrast floor, primary/danger distinctness under the
+        declared policy, mascot assets present with their recorded hashes, and a single icon set. A
+        green summary without retained output is not proof."
+  - id: asset-provenance
+    requirement:
+      en: Every identity asset the record declares exists under the record's own assets with its sha256
+        and its provenance, and a generated placeholder is recorded as a placeholder. A deferred
+        asset carries a concrete brief and an empty slot; no missing file is described as generated
+        or accepted.
+  - id: direction
+    requirement:
+      en: "When the record carries `brand.direction`, `starci work brand <work-root>` reports its
+        `direction` check pass: every required archetype field present, every recipe mapped onto a DNA component
+        (else a pending grammar proposal), unique rubric checks with cites, golden renders on disk with their
+        sha256, and every `accepted` archetype - and an accepted direction - backed by the owner's own
+        starci/ask-answer@1 receipt for the direction rev and golden digests it names. An auto-recommended or
+        delegate answer never accepts a direction."
+    check: scripts/work/brand/brand.mjs
+  - id: shell-capture
+    requirement:
+      en: "Full edition only: `starci work shell-conformance .starciwork/shell/index.yaml` exits 0 on the written layout
+        tree: it is a work/layout-tree@1 record and done, a re-scan of app/ still matches its source digest,
+        every visible layout has a slot-measured capture at desktop and mobile in the light theme (dark
+        optional) on disk with its
+        recorded hash, the brand lockup and at least one persona are recorded, every nav item has a
+        productLocale default label and a route that lands on a page (a null route is a disabled
+        destination), and every layout capture is painted in this record's colours (PALETTE_OFF_BRAND
+        names a colour the brand does not declare, its area share and the nearest token;
+        scripts/work/brand/brand-palette.mjs). `starci runtime validate --strict` compiles it against work/layout-tree@1."
+    check: scripts/work/ui/shell-conformance.mjs
+  - id: checkpointed
+    requirement:
+      en: Every Work record file this operation wrote under its owned paths is committed by the runtime
+        as its workflow's checkpoint when the operation settles green (scripts/kernel/workflow-checkpoint.mjs
+        checkpointOp). The operation never commits and changes nothing outside its owned paths; settle
+        refuses workflow-foreign-commit or workflow-foreign-change otherwise.
+  - id: read-knowledge
+    requirement:
+      en: "starci kernel settle re-reads the attached read-digest.json (runtime check op-proof, proof read-knowledge): a done whose digest is missing (op-read-digest-missing), names no knowledge file or leaves a written record without its hfs slot (op-read-digest-no-knowledge) is refused."
+      vi: "starci kernel settle tự đọc lại read-digest.json đính kèm (check op-proof, proof read-knowledge): done thiếu bản tóm tắt (op-read-digest-missing), không nêu tệp knowledge nào hoặc có bản ghi đã viết thiếu slot hfs (op-read-digest-no-knowledge) đều bị từ chối."
+    check: scripts/kernel/gate-settle.mjs
+judge:
+  - by: machine
+    measures: [declared-checks, work-hygiene, contract-script, brand-consumable, op-proof:read-knowledge]
+    proofs: [direction, shell-capture, read-knowledge]
+    why: "the brand and shell-conformance checks are runtime scripts the settler re-runs over the records, and the READ of the standard is re-read from the digest"
+  - by: owner
+    why: "the brand direction is ready only on the owner's own receipt of its direction review ask for the current revision"
+blockers:
+  - code: SHELL_RENDER_UNAVAILABLE
+    condition:
+      en: "`starci work layout-render` printed code SHELL_RENDER_UNAVAILABLE - the frontend has a visible layout but the
+        runtime could not serve or render it, so no real layout capture can be taken. Report `blocked` with `environment`,
+        the verb's `cause`, its failing `url` and its redirect chain; never start a server by hand, never retry in a loop
+        and never substitute a generated image or a description for the capture."
+  - code: BRAND_SOURCE_MISSING
+    condition:
+      en: A token/style source file this record must read does not exist in the selected repository, or
+        the repository itself is not resolvable. Report `blocked` with `environment` and the exact
+        path; never substitute a remembered value for an unreadable file.
+  - code: BRAND_TOKEN_UNTRACEABLE
+    condition:
+      en: A required token value cannot be traced to a declaration in a real source file, to a reference
+        render (`valueSource.path`) or to an answered ruling (`valueSource.ruling`), or two sources disagree
+        about it. Report `ask` naming the token, the candidate values and the files; never write the value
+        you would have chosen. A value the owner already ruled in an answered ask is traced to that ruling,
+        not asked again and not reported blocked for a declaration a later leg owes.
+  - code: BRAND_DECISION_UNRULED
+    condition:
+      en: An identity decision the record needs - primary hue, whether danger may match primary, the
+        mascot and its forbidden placements - has no owner ruling, or the ruling contradicts the
+        contrast floor. Report `ask` with the closed options and what each one costs.
+  - code: BRAND_DIRECTION_UNACCEPTED
+    condition:
+      en: Direction mode wrote or revised an archetype of `brand.direction` and the owner has not accepted it
+        yet. Report `ask` with the brand-direction-review question `scripts/work/brand-direction.mjs
+        question` printed; never mark the archetype accepted without the owner's receipt.
+  - code: DECLARED_DEPENDENCY_UNMET
+    condition:
+      en: A declared prerequisite is not effectively done, or a required declared input/scope is missing.
+        Report node/resource IDs and propose a separately selected graph update when needed; never
+        run predecessors or weaken dependsOn/refs/required to proceed.
+placeholders:
+  app: shared
+  bound-paths: shared
+  asset: shared
+  family: "The bound brand record's brand.identity.family - the grammar family its
+    knowledge/grammars/<family>/ DNA reads resolve. Direction mode only: the identity
+    run has no brand record yet and never binds it."
+layoutPolicy:
+  checks: [starci-validate]
+policy:
+  modes:
+    direction:
+      param: directionArchetype
+      reads: [direction]
+route:
+  nodeKinds: [brand]
+  phase: [decide, pre-implementation]
+  intent: [brand, identity, tokens, decide, shell, chrome]
+  prerequisites: [scope defined]
+  riskHints: [generates-assets]

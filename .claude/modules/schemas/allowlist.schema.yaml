@@ -1,0 +1,46 @@
+schema: starci/schema@1
+id: starci/allowlist@1
+title: The one runtime allowlist
+description: >-
+  The shape of modules/kernel/allowlist.yaml, the ONE explicit allowlist of the runtime: every shrink-only
+  exception list a runtime check keeps lives in one named section of it, each entry carrying the reason the
+  exception exists. A reader loads its section through scripts/lib/allowlist.mjs (readAllowlist(kind)); no
+  second allowlist, baseline, pending or entries file is allowed anywhere in the tree
+  (scripts/checks/check-one-allowlist.mjs).
+type: object
+additionalProperties: false
+required: [schema, export-used, sonar-rules]
+properties:
+  schema:
+    const: starci/allowlist@1
+    description: The fixed doc stamp of the one allowlist.
+  export-used:
+    type: array
+    description: >-
+      Reserved: the export-to-reader exceptions of the symbol-graph check land here; shrink-only once
+      populated.
+  sonar-rules:
+    type: array
+    description: >-
+      The Sonar findings the sonar-rules self-check found on main when it landed, each as {rule, file, fingerprint, n,
+      weight?, reason}; written once by `--init`, shrink-only (a fix commit deletes its own entry), and ends as [].
+    items:
+      $ref: '#/$defs/sonarFinding'
+$defs:
+  sonarFinding:
+    type: object
+    additionalProperties: false
+    required: [rule, file, fingerprint, n, reason]
+    properties:
+      rule:
+        type: string
+      file:
+        type: string
+      fingerprint:
+        type: string
+      n:
+        type: integer
+      weight:
+        type: integer
+      reason:
+        type: string

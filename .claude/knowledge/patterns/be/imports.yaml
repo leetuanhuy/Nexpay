@@ -1,0 +1,202 @@
+schema: starci/knowledge-source@1
+id: be.imports
+title: Imports
+purpose: |-
+  Given a backend file, what may it import, through which path and in which direction? Layout of the import block (braces,
+  line breaks, wrapping) is Prettier's decision and is not a rule.
+appliesTo:
+  - backend
+family: be
+provenance:
+  reviewedAt: 2026-09-30
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/slots.yaml
+    - knowledge/hfs/rules.yaml
+    - knowledge/patterns/be/architecture-check.yaml
+    - owner-locked BE convention 2026-09-30
+    - https://www.typescriptlang.org/docs/handbook/modules/reference.html
+  limitations: |-
+    Static analysis resolves aliases, relative paths, literals, re-exports and packages through the repository's actual
+    TypeScript project. It does not prove Nest provider identity. A path that cannot resolve is a configuration failure.
+rules:
+  - id: BE-IMPORTS-1
+    title: Paths
+    kind: mandatory
+    hfsRules: [R30, R25, R280]
+    requirement: |-
+      Across owners use the back end's aliases (the managed `be/tsconfig.json` `paths`: `@modules/*`, `@features/*`, `@tests/*`) or a workspace
+      package export, and always resolve to the target owner's `index.ts`. Inside one owner use relative imports and never
+      import the owner's own public `index.ts` back into its implementation. Deep imports into another owner's files are
+      forbidden, a barrel that re-exports a folder wholesale (`export *`) is forbidden, and a nested `index.ts` does not exist.
+      An `index.ts` holds only named `export { }` and `export type { }` lines, within its slot's `budget.indexExports`:
+      60 names for domain, platform and feature owners, 80 for be.integrations provider entries. A specialized slot with
+      no explicit export budget inherits its tier's owner-slot budget. No exported symbol lacks a supported external
+      consumer (HFS_UNUSED_EXPORT); the single-file export count cannot exempt spec-only consumers.
+      Every enum member, queue constant, error code and catalog key has a production consumer. A test reference or an error's
+      kind or message mapping does not keep that symbol alive. A namespace import consumes only the members it actually reads.
+    rationale: |-
+      One public entry per owner is the only way to change internals without a cross-repository search.
+    cases:
+      - id: case-1
+        when: Across a capability boundary
+        write: 'import { PurchaseService } from "@modules/domain/purchase"'
+      - id: case-2
+        when: Inside one owner
+        write: 'import { FIND_OPEN_PURCHASES } from "./persistence/purchase.sql"'
+      - id: case-3
+        when: Test helpers
+        write: 'import { mockEntityManager } from "@starci/jest-preset"'
+    verification:
+      automated:
+        - BE_PUBLIC_SURFACE
+        - ARCH_OWNER_EXPORT_BYPASS
+        - ARCH_OWNER_EXPORT_STAR
+        - HFS_ALIAS_REEXPORT
+        - ARCH_PACKAGE_EXPORT_BYPASS
+        - HFS_UNUSED_EXPORT
+        - HFS_UNUSED_FILE
+        - HFS_UNUSED_SYMBOL
+      manual: []
+    relatedExamples: []
+  - id: BE-IMPORTS-2
+    title: Layout is Prettier's
+    kind: mandatory
+    hfsRules: [R19]
+    requirement: |-
+      The layout of an import declaration (single line, wrapped, trailing comma) is produced by Prettier
+      (`@starci/prettier-config`: printWidth 120, 4 spaces, no semicolons, double quotes, trailing commas) and is neither linted
+      nor reviewed; ESLint carries no formatting rule. Type-only bindings use `import type`. Side-effect, default-only and
+      namespace imports use their valid TypeScript forms.
+    rationale: |-
+      A formatter that decides layout removes a whole class of review noise and one-binding-per-line inflation.
+    cases:
+      - id: case-1
+        when: A type-only binding
+        write: 'import type { EntityManager } from "typeorm"'
+    verification:
+      automated:
+        - HFS_FORMAT
+      manual: []
+    relatedExamples: []
+  - id: BE-IMPORTS-3
+    title: Order
+    kind: residual
+    hfsRules: [R19]
+    requirement: |-
+      Import order is not enforced. The conventional grouping is the Nest and framework packages first, then capability imports
+      through aliases, then relative imports, and is left to the author.
+    rationale: |-
+      Order carries no dependency meaning that a check could judge.
+    cases:
+      - id: case-1
+        when: A conventional file
+        write: '@nestjs packages, then @modules and @features aliases, then ./ relative imports'
+    verification:
+      automated:
+        - HFS_FORMAT
+      manual: []
+    relatedExamples: []
+  - id: BE-IMPORTS-4
+    title: Layering direction
+    kind: mandatory
+    hfsRules: [R26, R27, R28, R30]
+    requirement: |-
+      Dependencies follow the tier matrix in architecture-check.yaml BE-ARCHITECTURE-1. A feature never imports a feature.
+      Cross-owner imports use explicit public entries. A cycle between owners, including through `import type`, is a finding.
+    rationale: |-
+      The direction is what lets owners be tested and split separately.
+    cases:
+      - id: case-1
+        when: Across a capability boundary
+        write: Import the explicit public entry and inject the exported service or port; the app registered the capability once.
+      - id: case-2
+        when: Inside one owner
+        write: Use local relative paths.
+    verification:
+      automated:
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+        - ARCH_OWNER_CYCLE
+        - BE_FEATURE_IMPORTS_FEATURE
+        - BE_PUBLIC_SURFACE
+        - ARCH_OWNER_EXPORT_BYPASS
+        - ARCH_OWNER_EXPORT_STAR
+        - HFS_ALIAS_REEXPORT
+        - ARCH_PACKAGE_EXPORT_BYPASS
+      manual:
+        - Review same-source public API use, exports and actual DI identity.
+    relatedExamples: []
+  - id: BE-IMPORTS-5
+    title: What a transport or handler imports
+    kind: mandatory
+    hfsRules: [R26, R37, R88, R28]
+    requirement: |-
+      A handler imports its message, its plain contracts, `platform/*` ports and the public APIs of domain capabilities. A
+      resolver or controller imports its transport DTOs, the application messages of its own feature and `platform/cqrs`. No
+      transport file imports another feature, and no application file imports a transport file.
+    rationale: |-
+      The import set of a unit shows its responsibility.
+    cases: []
+    verification:
+      automated:
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+        - BE_ENTITY_IN_CONTRACT
+        - BE_TRANSPORT_SHAPE
+        - BE_FEATURE_IMPORTS_FEATURE
+      manual: []
+    relatedExamples: []
+  - id: BE-IMPORTS-6
+    title: Forbidden
+    kind: mandatory
+    hfsRules: [R40, R43, R89, R90]
+    requirement: |-
+      Source exports are named; the only default export is a Jest `*.global-setup.ts` entry. `platform/config` owns `EnvSource`;
+      only `apps/<app>/src/main.ts` and its matching `<app>.env.ts` may read the app's `process.env` or `EnvSource`. They use
+      the typed `read<App>Env` reader; compose groups and `<app>.options.ts` receive values and never read the environment.
+      All other source receives typed options. A raw infrastructure library is imported only by its owner
+      (infra.yaml). No `console.*` and no Nest `Logger` in source; use the `Logger` port of `platform/logging`.
+    rationale: |-
+      One reader of the environment and one logger port keep configuration and diagnostics in one place.
+    cases:
+      - id: case-1
+        when: Default export
+        write: Named exports everywhere; only be/src/tests/world/global-setup.ts and global-teardown.ts default-export the Jest API.
+      - id: case-2
+        when: process.env
+        write: 'Allowed in the EnvSource owner and the app bootstrap roles main.ts and <app>.env.ts; use EnvSource.fromProcess() and read<App>Env so secrets use env.secret with <NAME>_FILE first. Compose groups and <app>.options.ts never read it.'
+      - id: case-3
+        when: console.* or the Nest Logger
+        write: Use `this.logger.info(PurchaseLogEvent.CheckoutOpened, { purchaseId })` on the injected Logger port.
+    verification:
+      automated:
+        - BE_LOGGER_REQUIRED
+        - BE_CONFIG_OWNER
+        - BE_SOURCE_FORM
+        - BE_PUBLIC_CONTRACT_FORM
+        - BE_INFRA_OWNER
+      manual: []
+    relatedExamples: []
+  - id: BE-IMPORTS-7
+    title: Jest sees the same aliases
+    kind: mandatory
+    hfsRules: [R47]
+    requirement: |-
+      The jest preset mirrors the tsconfig path aliases in `moduleNameMapper`, and specs import through those aliases (a spec never
+      `jest.mock`s a module path).
+    rationale: |-
+      A spec must resolve the same module the compiler resolves.
+    cases:
+      - id: case-1
+        when: The preset
+        write: 'moduleNameMapper: { "^@modules/(.*)$": "<rootDir>/src/modules/$1", "^@features/(.*)$": "<rootDir>/src/features/$1", "^@tests/(.*)$": "<rootDir>/src/tests/$1" }'
+    verification:
+      automated:
+        - BE_TEST_TOPOLOGY
+        - BE_CONTRACT_UNGUARDED
+        - BE_UNIT_SPEC_NOT_STAGED
+      manual: []
+    relatedExamples: []

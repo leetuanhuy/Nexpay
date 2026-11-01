@@ -1,0 +1,193 @@
+schema: starci/knowledge-source@1
+id: be.supabase-queues
+title: Supabase adapters of the lite edition
+purpose: |-
+  Given a lite app (hfs.json `edition: lite`), how do the queue, event-bus, realtime, cache, lock and scheduling ports run without
+  self-hosted backing services? Lite keeps the full code structure with Supabase backing services (R212;
+  owner ruling 2026-10-14: app-owned schedules and docker-swarm production): the
+  ports, slots, folders, producers, processors, consumers and unit specs are exactly full's, and only the adapter behind each
+  port changes. The queue and event-bus transport is Supabase Queues (pgmq, confirmed by the owner the same day): the outbox
+  relay of `platform/outbox` sends committed rows to pgmq through the shared EntityManager, a processor or consumer reads with a
+  visibility timeout, a failed delivery is retried when the timeout lapses (backoff by extending it), and a message read more
+  times than the budget is archived (the dead letter). Realtime is the full socket.io gateway run inside the api process (one
+  instance, no Redis adapter), cache and locks are Postgres, schedules are pg_cron. This topic is the one authority for those adapters; each pattern topic's `liteAdapter` cites it.
+appliesTo:
+  - backend
+family: be
+# The slot ids this topic teaches (knowledge/hfs/slots.yaml); scripts/gates/read-digest.mjs inverts these
+# into the READ-step slot -> pattern-topic map (knowledge/op-gate.yaml kinds), each slot's topics in index.yaml order.
+slots: [be.platform.queue, be.platform.event-bus, be.queues, be.feature.jobs, be.transport.message]
+provenance:
+  reviewedAt: 2026-10-13
+  sources:
+    - knowledge/hfs/slots.yaml
+    - knowledge/hfs/rules.yaml
+    - ruling:R212/case-1 (owner:lite-production-swarm) (2026-10-12, with the Work boundary amended by ruling:R212/case-4; lite keeps full architecture with Supabase backing services; queue transport Supabase Queues/pgmq)
+    - https://supabase.com/docs/guides/queues
+    - https://github.com/pgmq/pgmq
+    - https://supabase.com/docs/guides/cron
+  limitations: |-
+    Static checks prove that a lite back end imports no BullMQ, Kafka, Redis or graphql-ws library (the lite infraOwners) and that
+    the outbox is written in the caller's transaction. They do not prove visibility timeouts, retry budgets or that a pg_cron
+    cadence suits the business; the declared pattern's integration scenarios on `starci supabase start` prove delivery
+    against the real pgmq (R284).
+rules:
+  - id: BE-SUPABASE-QUEUES-1
+    title: Lite keeps the ports and swaps only the adapter
+    kind: mandatory
+    hfsRules: [R212, R90]
+    requirement: |-
+      A lite back end declares its patterns in hfs.json exactly as full and writes the same ports: `QueueOutbox` and
+      `QueueWorkerRegistry` of `platform/queue`, `EventPublisher`/`EventConsumer` of `platform/event-bus`, `RealtimeHub` of
+      `platform/realtime`, the cache and lock ports of their owner. Under lite the adapter behind each port is a Supabase one (the
+      realtime hub keeps the socket.io server of the api process, one instance), and `bullmq`, `@nestjs/bullmq`, `kafkajs`,
+      `redis`, `ioredis`, `graphql-ws` and `graphql-subscriptions` are owned nowhere (ruleParams.be.lite.infraOwners) and absent
+      from package.json (R212).
+    rationale: |-
+      Domain services, handlers, processors and their unit specs never see the transport, so lite -> full is an adapter swap and a
+      test-world addition, never a rewrite.
+    cases:
+      - id: case-1
+        when: A lite app needs a send-receipt job
+        write: 'receipt.queue.ts enqueueSendReceipt(payload, tx) and send-receipt.processor.ts exactly as full; platform/queue''s transport client is pgmq-queue-transport.client.ts instead of the BullMQ one.'
+    verification:
+      automated:
+        - HFS_EDITION_INVALID
+        - HFS_EDITION_FORBIDDEN_PRESENT
+        - HFS_STARCIWORK_LITE_FORBIDDEN
+        - BE_INFRA_OWNER
+      manual:
+        - Confirm no domain or feature file names pgmq, Supabase or a channel; only the platform adapter does.
+    relatedExamples: []
+  - id: BE-SUPABASE-QUEUES-2
+    title: The queue transport is pgmq behind the outbox relay
+    kind: mandatory
+    hfsRules: [R152, R154, R258]
+    requirement: |-
+      Every queue constant under `modules/queues` has a matching pgmq queue created by an active Supabase migration
+      (`select pgmq.create('<queue>')`), and every created queue has a constant. Queue objects grant privileges only to the
+      application role (`app_be` by default); neither `pgmq` nor `pgmq_public` is exposed to the client. A producer still writes the outbox in the caller's transaction; the relay
+      reads committed outbox rows and calls `pgmq.send(queue, message, delay)` through the shared EntityManager with the outbox id
+      inside the message, then marks the row sent in the same transaction. A processor reads with
+      `pgmq.read(queue, vt, qty)`, runs the job, and on success calls `pgmq.delete(queue, msg_id)`; the handler's inbox claim on the
+      outbox id makes a second delivery a no-op.
+    rationale: |-
+      Because pgmq lives in the same Postgres as the outbox, the relay can send and mark in one transaction: a crash leaves the row
+      unsent and the message unsent, never one without the other.
+    cases:
+      - id: case-1
+        when: The relay sends a committed row
+        write: "await manager.query('select pgmq.send($1, $2::jsonb)', [queue, { outboxId: row.id, payload: row.payload }]) and the sent mark in the same transaction."
+    verification:
+      automated:
+        - BE_OUTBOX_WRITE_TX
+        - BE_QUEUE_PRODUCER_SHAPE
+        - DB_PGMQ_DECLARED
+        - DB_CRON_OWNED
+      manual:
+        - Confirm the migration creates every declared queue and exposes no pgmq function to anon or authenticated.
+    relatedExamples: []
+  - id: BE-SUPABASE-QUEUES-3
+    title: Retry, backoff and dead letter come from the visibility timeout and read_ct
+    kind: mandatory
+    hfsRules: [R46]
+    requirement: |-
+      A failed job is not deleted: its visibility timeout lapses and the next `pgmq.read` returns it again with `read_ct`
+      incremented. Backoff is `pgmq.set_vt(queue, msg_id, delay)` with the delay of the queue policy (`queue.policy.ts`, the same
+      attempts and backoff numbers as full); a message whose `read_ct` exceeds the attempts is moved to the archive with
+      `pgmq.archive(queue, msg_id)` and logged as dead-lettered. Every queue has a processor composed by an app (the api, or the
+      optional worker), so no message waits for a reader that does not exist (BE_BACKGROUND_UNOWNED).
+    rationale: |-
+      pgmq has no worker of its own; the attempt counter and the archive table are the retry ledger and the dead letter.
+    cases:
+      - id: case-1
+        when: The third read of a failing message with attempts 3
+        write: 'queue.policy.ts deadLetter(readCt) is true; the worker calls pgmq.archive and logs queue.dead_lettered with the msg id.'
+    verification:
+      automated:
+        - BE_BACKGROUND_UNOWNED
+      manual:
+        - Confirm the attempts and backoff are the queue policy's, not a literal in the worker.
+    relatedExamples: []
+  - id: BE-SUPABASE-QUEUES-4
+    title: An event-bus topic is a pgmq queue per consumer group
+    kind: mandatory
+    hfsRules: [R151, R153]
+    requirement: |-
+      Under lite the event bus publishes through the same outbox; the relay fans each committed event out to one pgmq queue per
+      consumer group that subscribes to its topic (`<service>__<event>__<group>`, created by migration), and a consumer reads,
+      dedupes through the inbox and deletes or archives exactly as a queue processor does. A back end with a single api app may
+      deliver in process after commit instead, behind the same EventConsumer port. Typed event classes and vendored contracts
+      (`be/contracts/<service>/events.json`) are full's.
+    rationale: |-
+      A queue per group gives each consumer its own cursor and dead letter, the property Kafka consumer groups give full.
+    cases:
+      - id: case-1
+        when: order.placed has two consumers (billing and stock)
+        write: 'Two pgmq queues order__order-placed__billing and order__order-placed__stock; the relay sends the event to both in the transaction that marks the outbox row.'
+    verification:
+      automated:
+        - BE_EVENT_CLASS_CONTRACT
+        - BE_EVENT_CONSUMER_SHAPE
+      manual: []
+    relatedExamples: []
+  - id: BE-SUPABASE-QUEUES-5
+    title: Schedules, cache and locks run on Supabase; realtime runs in the api process
+    kind: mandatory
+    hfsRules: [R90, R212, R258]
+    requirement: |-
+      A schedule is an app-owned queue scheduler, a pg_cron job declared in a Supabase migration, or a declared replicated-job
+      running the app's cli command. Each pg_cron job has a unique name and only enqueues to an existing queue, directly with
+      `pgmq.send` or through one enqueue-only `*_tick` function. It runs no business DML or HTTP request, and its tick is never
+      also owned by an app scheduler. A migration that removes a tick unschedules its job. The schedule and overlap policy
+      are declared in `.starcistacks/application-stacks.yaml`; never use a host scheduler, `@nestjs/schedule` or a cron
+      process of its own. Cache is Postgres (an unlogged table owned by the cache capability) and a lock or lease is a Postgres
+      advisory lock (`pg_try_advisory_xact_lock`) or a row claim. Realtime is the socket.io gateway of be.feature.realtime.websocket
+      inside the api process, one instance with no Redis adapter (knowledge/patterns/be/realtime.yaml liteAdapter); a push that
+      must follow a commit is published by a reactor of the committed event.
+    rationale: |-
+      Every one of these is a feature of the Supabase project or the api process the app already has, so lite runs no second
+      piece of infrastructure.
+    cases:
+      - id: case-1
+        when: Expire unpaid orders every five minutes in a lite app
+        write: "A migration schedules cron.schedule('expire-orders', '*/5 * * * *', $$select pgmq.send('order-expiry', '{}'::jsonb)$$); the expire-orders processor is full's."
+    verification:
+      automated:
+        - BE_INFRA_OWNER
+        - HFS_EDITION_INVALID
+        - HFS_EDITION_FORBIDDEN_PRESENT
+        - HFS_STARCIWORK_LITE_FORBIDDEN
+        - DB_PGMQ_DECLARED
+        - DB_CRON_OWNED
+      manual:
+        - Confirm each pg_cron job is declared in a migration and enqueues, never runs business SQL itself.
+    relatedExamples: []
+  - id: BE-SUPABASE-QUEUES-6
+    title: Unit specs as full; declared patterns prove integration on the local Supabase stack
+    kind: mandatory
+    hfsRules: [R47, R48, R212, R284]
+    requirement: |-
+      The adapters are logic files of `coverage: required` slots: each owes 100 per file through unit specs that use the
+      @starci/jest-preset doubles (the recording queue outbox, the fake transaction, the mock EntityManager whose `query` answers
+      the pgmq calls). A declared queue or event-bus pattern requires integration specs on `starci supabase start`
+      through useTestWorld({ modules }), titled with its `queue/<scenario>` or `event-bus/<scenario>` ids (R284).
+      Lite may also hold contract specs; e2e specs, test containers and toxiproxy remain full-only.
+    rationale: |-
+      The ruling keeps the unit world whole and removes only the infrastructure the e2e world would need.
+    cases:
+      - id: case-1
+        when: The pgmq transport client
+        write: 'pgmq-queue-transport.client.spec.ts beside it asserts the SQL and parameters each call sends through mockEntityManager().'
+    verification:
+      automated:
+        - BE_TEST_TOPOLOGY
+        - BE_CONTRACT_UNGUARDED
+        - BE_UNIT_SPEC_NOT_STAGED
+        - BE_SPEC_QUALITY
+        - HFS_EDITION_INVALID
+        - HFS_EDITION_FORBIDDEN_PRESENT
+        - HFS_STARCIWORK_LITE_FORBIDDEN
+        - BE_LITE_PROOF_LANE_MISSING
+      manual: []
+    relatedExamples: []

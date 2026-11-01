@@ -1,0 +1,146 @@
+# owner: which automated checks judge which rules, and each check's limits; rule law lives in knowledge/hfs/rules.yaml only.
+schema: starci/knowledge-source@1
+id: patterns.scan-coverage
+title: Source scan coverage and enforcement limits
+purpose: |
+  Record which automated checks judge the HFS rules and which limits each check has. This is coverage and limitation
+  evidence, not certification of any repository.
+appliesTo: [backend, frontend]
+family: cross-cutting
+provenance:
+  reviewedAt: 2026-09-30
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/slots.yaml
+    - modules/models/code-patterns.yaml
+  limitations: |
+    A rule whose machine has not landed is an unimplemented obligation in modules/models/code-patterns.yaml and cannot be
+    replaced by agent approval. Passing every check proves the checked shape, not behavior.
+guidance:
+  - id: probe-helper
+    requirement: |
+      Repeat the installed-rule behavioral probes with
+      `starci gate reference-conventions <backend-reference-root>`. Passing these probes confirms the documented
+      checker behavior, including gaps; it is not a product quality gate.
+  - id: collocation
+    requirement: |
+      Concrete source references are indexed by examples/index.yaml; enforcement obligations live in patterns/enforcement.yaml.
+observations:
+  - id: repo-tree-law
+    lane: cross-cutting
+    kind: observation
+    summary: |
+      The repository root and tree are normative knowledge. knowledge/hfs/slots.yaml owns every slot and
+      knowledge/patterns/repo/folder.yaml (REPO-FOLDER-1..6) states the law. The slot check reports HFS_SLOT_UNDECLARED and
+      HFS_SLOT_REQUIRED_MISSING and the architecture machine reports the HFS_* root and layout codes.
+    automated:
+      - HFS_SLOT_UNDECLARED
+      - HFS_SLOT_REQUIRED_MISSING
+      - HFS_ROOT_ENTRY_FORBIDDEN
+      - HFS_ROOT_ENTRY_MISSING
+      - HFS_APPS_REQUIRED
+      - HFS_ROOT_SRC_FORBIDDEN_FE
+      - HFS_MODULE_TIER_INVALID
+      - HFS_WORK_IN_FE
+      - HFS_STACKS_IN_SIDE
+      - HFS_PACKAGE_MANAGER_MIXED
+  - id: be-tier-and-cycles
+    lane: backend
+    kind: observation
+    summary: |
+      The architecture machine resolves imports through the TypeScript project and judges the tier direction matrix, feature
+      isolation, acyclic owners (type-only edges included), the owner public entry, whether every feature is composed by an
+      app, and that each capability's representative module is registered once per app root. Dynamic decorator or name expressions it cannot resolve are unavailable coverage, not accepted exceptions.
+    automated:
+      - BE_TIER_DIRECTION
+      - BE_FEATURE_IMPORTS_FEATURE
+      - ARCH_OWNER_CYCLE
+      - BE_PUBLIC_SURFACE
+      - BE_FEATURE_NOT_COMPOSED
+      - BE_MODULE_SHAPE
+  - id: be-module-and-tests
+    lane: backend
+    kind: observation
+    summary: |
+      The e2e run that boots the real apps is the evidence for registration and DI identity. Service unit specs do not prove
+      bootable dependency injection. Test topology is one jest config with the projects unit, integration, e2e and contract
+      (BE-TEST-1, BE-TEST-13).
+    automated:
+      - BE_APP_COMPOSITION_ONLY
+      - BE_TEST_TOPOLOGY
+  - id: be-schema-and-config
+    lane: backend
+    kind: observation
+    summary: |
+      Schema authority, SQL text placement and table ownership, connection uniqueness, configuration ownership and secret
+      defaults are lint and check rules. They prove where code lives and which connection and tables it touches, not that a
+      migration is safe on live data or that a deployed environment provides every key.
+    automated:
+      - BE_SCHEMA_AUTHORITY
+      - BE_SCHEMA_OWNER
+      - BE_SQL_OUTSIDE_PERSISTENCE
+      - BE_SQL_TABLE_OWNER
+      - BE_CONNECTION_DUPLICATE
+      - BE_CONFIG_OWNER
+      - BE_SECRET_DEFAULT
+  - id: lint-injection-by-type
+    lane: backend
+    kind: checker-limit
+    summary: |
+      The injection rules identify a constructor parameter by the declared type and the file that declares it, never by the
+      variable name, and compare an injector's declared type with the parameter annotation. They do not verify that the
+      module provides the token at runtime; the e2e run that boots the real apps does.
+    automated:
+      - BE_RAW_INJECT
+      - BE_UNNAMED_DATA_ACCESS
+  - id: lint-transaction-callback
+    lane: backend
+    kind: checker-limit
+    summary: |
+      The transaction rules read the callback of an EntityManager transaction call, whichever overload carries it, and judge
+      the receivers used inside it by type. Transaction-manager propagation through a helper and refusal-after-write rollback
+      still need a real PostgreSQL rollback test, because an AST check cannot prove transaction semantics.
+    automated:
+      - BE_UNNAMED_DATA_ACCESS
+      - BE_TRANSACTION_EXTERNAL_CALL
+    relatedExamples: []
+  - id: fe-units
+    lane: frontend
+    kind: observation
+    summary: |
+      component.tsx receives resolved props and actions and the connected index owns external state. Connected block twin
+      enforcement is scoped to blocks and cannot establish conformance of every tier. Purity rules inspect known call patterns;
+      alias, member-call escape routes and transitive dependencies still require review.
+    relatedExamples:
+      - connected-block
+  - id: fe-data-and-i18n
+    lane: frontend
+    kind: observation
+    summary: |
+      Transport ownership, the Outcome vocabulary, generated wire types, mandatory boundaries, i18n placement and the absence of
+      display text are lint and check rules. They prove where code lives and that the files exist. They do not prove that
+      translations are correct, that a boundary recovers, or that a contract copy matches the running backend beyond its hash.
+    automated:
+      - FE_TRANSPORT_OWNER
+      - FE_HTTP_STATUS_COLLAPSE
+      - FE_WIRE_GENERATED
+      - FE_ERROR_BOUNDARY_MISSING
+      - FE_I18N_PLACEMENT
+      - FE_I18N_LITERAL
+  - id: fe-styles
+    lane: frontend
+    kind: observation
+    summary: |
+      Stylelint canon proves what a stylesheet contains: colour only in brand.css, no !important, no CSS module, resolved @source.
+      The interface audit against the installed Grammar anatomy and tokens judges how a screen looks.
+    automated:
+      - FE_STYLE_TOKEN_ONLY
+      - FE_STYLE_SOURCE_UNRESOLVED
+  - id: remaining-coverage
+    lane: cross-cutting
+    kind: gap
+    summary: |
+      Not covered by any static check: cohesive ownership, complete public API design, DI identity beyond the e2e boot,
+      resource authorization, transaction isolation, idempotency, crash recovery, remote fencing, translation quality and
+      rendered UI. Each needs its own executed evidence against the exact source revision. Do not claim these are verified from a
+      green static run.

@@ -1,0 +1,214 @@
+schema: starci/knowledge-source@1
+id: be.index
+title: Backend code patterns
+purpose: |-
+  Read knowledge/hfs/README.md (HFS) and docs/architecture.md first. The standard defines ownership, the
+  tier direction, features grouped by trigger kind (api features with a CQRS application layer, the cli feature root of
+  one-off actions), one schema authority, one connection per database, injected infrastructure, default-deny,
+  per-capability configuration and background work as a transport, then the concrete Nest and TypeScript code forms
+  below. It is the owner-locked BE convention of 2026-09-30. Each rule cites the HFS rule ids it implements
+  (hfsRules) and the finding codes that judge it (verification.automated); the one rule catalog is knowledge/hfs/rules.yaml.
+  An owner has one explicit public index.ts. Its named-export budget comes from the owning slot: be.integrations permits
+  80 names, while be.domain remains at 60. An integration such as modules/integrations/data-sources exposes a provider's
+  whole port surface (client, configuration, options, tokens and errors), which is wider than a domain contract. The
+  no-folder-reexport rule sees one file and cannot distinguish a spec-only consumer from a production consumer, so the
+  budget counts every exported name without a test-token exemption. HFS_UNUSED_EXPORT still prunes public names with no
+  supported external consumer; raising the integration budget does not make unused exports valid. Besides production
+  consumers, the dead-export check recognizes the supported unit and logic role specs, door specs, fixture builders,
+  test-world files and the integration spec of the same provider; an arbitrary spec or e2e-only consumer does not qualify.
+appliesTo:
+  - backend
+family: be
+provenance:
+  reviewedAt: 2026-09-30
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/slots.yaml
+    - knowledge/hfs/rules.yaml
+    - docs/architecture.md
+    - owner-locked BE convention 2026-09-30
+  limitations: |-
+    Patterns place code and shape it. They do not approve business requirements or architecture, which belong to
+    .starciwork, and static checks do not prove behavior. Inspect the selected repository's installed types, APIs, aliases
+    and lint and test setup.
+topics:
+  - id: be.architecture-check
+    title: Architecture check
+    path: architecture-check.yaml
+    decides: Tier direction matrix, acyclic owners, thin application composition roots, the one module shape (one representative module per capability, registered once per app), public owner surface, composed features
+    rules: BE-ARCHITECTURE-1 … BE-ARCHITECTURE-5
+  - id: be.api
+    title: Api feature
+    path: api.yaml
+    decides: The api feature shape under src/features/api/<feature>/, Command and Query messages with ExecuteParams, handlers extending ICQRSHandler, direct bus dispatch, no use cases, forwarders or in-process events, synchronous work inside one context and events only across contexts or for async work
+    rules: BE-CQRS-1 … BE-CQRS-4, BE-API-1, BE-API-2
+  - id: be.cli
+    title: Cli
+    path: cli.yaml
+    decides: The one cli app on nest-commander, commands as groups and sub-commands under src/features/cli/, commands as unit-tested action runners, no other command-line parsing, migrations and seeds as cli commands
+    rules: BE-CLI-1 … BE-CLI-5
+  - id: be.injection
+    title: Dependency injection
+    path: injection.yaml
+    decides: Inject<Thing>() injectors over unique symbol tokens, the fixed injector catalog, no ModuleRef, forwardRef or property injection
+    rules: BE-INJECTION-1 … BE-INJECTION-4
+  - id: be.api
+    title: Api features
+    path: api.yaml
+    decides: The api trigger kind, a flat feature of plain CQRS and thin graphql or http transports, the typed operation table, the e2e flow of every operation, the app composition files (options, compose/<area>.ts groups, the root)
+    rules: BE-API-1 … BE-API-4, BE-OPERATIONS-1
+  - id: be.cli
+    title: Operator commands
+    path: cli.yaml
+    decides: The cli trigger kind, one entry that dispatches one command, composed only by a cli app and run on the world
+    rules: BE-CLI-1 … BE-CLI-2
+  - id: be.domain
+    title: Domain capabilities
+    path: domain.yaml
+    decides: A capability that owns its rules, tables and one transaction on its context connection, synchronous inside a context and events across
+    rules: BE-DOMAIN-1 … BE-DOMAIN-2
+  - id: be.transport
+    title: Transport
+    path: transport.yaml
+    decides: GraphQL as the default door, bus-only injection, no envelope, REST, WebSocket, message shapes
+    rules: BE-TRANSPORT-1 … BE-TRANSPORT-3
+  - id: be.infra
+    title: Infrastructure ownership
+    path: infra.yaml
+    decides: One owning capability per raw library, the HttpClient port with a required timeout, the integration folder, cache keys
+    rules: BE-INFRA-1 … BE-INFRA-4
+  - id: be.folder
+    title: Folder
+    path: folder.yaml
+    decides: Composition, features grouped by trigger kind, reusable capabilities, persistence, errors and test ownership, closed folder vocabulary
+    rules: BE-FOLDER-1 … BE-FOLDER-7
+  - id: be.naming
+    title: Naming
+    path: naming.yaml
+    decides: Closed file-suffix vocabulary, class role suffixes, error identity, enums, constants and injectors, methods, GraphQL fields
+    rules: BE-NAMING-1 … BE-NAMING-8
+  - id: be.function
+    title: Function
+    path: function.yaml
+    decides: One handler per operation, transport adapters, transaction identity, concurrency invariants, module registration, small function forms and budgets
+    rules: BE-FUNCTION-1 … BE-FUNCTION-9
+  - id: be.imports
+    title: Imports
+    path: imports.yaml
+    decides: Aliases and the one owner entry, layering direction, banned imports; layout is Prettier's
+    rules: BE-IMPORTS-1 … BE-IMPORTS-7
+  - id: be.comment
+    title: Comment
+    path: comment.yaml
+    decides: Docblock after decorators, responsibility over name, enum member docs, prose comments, ASCII, no suppression
+    rules: BE-COMMENT-1 … BE-COMMENT-7
+  - id: be.typing
+    title: Typing
+    path: typing.yaml
+    decides: Strict flags, plain application contracts, ExecuteParams, protocol DTOs, bounded input, no type escapes anywhere
+    rules: BE-TYPING-1 … BE-TYPING-7
+  - id: be.error
+    title: Error
+    path: error.yaml
+    decides: Code enum plus kind table per capability, Outcome for refusals, DomainError for failures, the masking REST filter and GraphQL formatError, catalog display text
+    rules: BE-ERROR-1 … BE-ERROR-7
+  - id: be.test
+    title: Test
+    path: test.yaml
+    decides: Unit and e2e placement, the jest topology, unit specs of the spec-required roles (services and cli commands) built on the testing module with kit doubles, the thin feature tier (R203), per-file 100 coverage of the logic roles of the measured slots from one derivation (R204), real-app e2e, what an assertion proves
+    rules: BE-TEST-1 … BE-TEST-7
+  - id: be.api-auth
+    title: API authentication and input bounds
+    path: api-auth.yaml
+    decides: Default deny with APP_GUARD and public reasons, CSRF origin guard, identity-owned verification, signed webhooks, typed operations, bounded validated input, cursor pagination, exact API edge trust and distinct live/ready probes
+    rules: BE-AUTH-1 … BE-AUTH-8
+  - id: be.config
+    title: Configuration and secrets
+    path: config.yaml
+    decides: EnvSource, app-level typed <App>Env and read<App>Env in <app>.env.ts, unchanged config per capability with Inject<Cap>Options, no default secrets or addresses, all-or-nothing optional integrations, _FILE-first sealed secrets
+    rules: BE-CONFIG-1 … BE-CONFIG-4
+  - id: be.logging
+    title: Logging
+    path: logging.yaml
+    decides: The mandatory Logger port and InjectLogger, JSON-lines adapter, enum identities from log-events, structured fields, handled catches
+    rules: BE-LOGGING-1 … BE-LOGGING-3
+  - id: be.persistence
+    title: Persistence and migrations
+    path: persistence.yaml
+    decides: Migrations as the only schema authority, the cli migrate command as the only runner, persistence per capability, SqlText constants, the outbox, no transaction spanning an external call, the named shared EntityManager, one connection per database, table ownership and bounds, transactions, Supabase browser access, least-privilege app roles, hardened RLS, immutable baselines and database configuration
+    rules: BE-PERSISTENCE-1 … BE-PERSISTENCE-21
+  - id: be.background
+    title: Background work
+    path: background.yaml
+    decides: Jobs and consumers as transports composed by the owning api app or a worker app, runners for every sweep, producers through the bus or a typed queue
+    rules: BE-BACKGROUND-1 … BE-BACKGROUND-2
+  - id: be.event-bus
+    title: Event bus
+    path: event-bus.yaml
+    decides: Synchronous work inside one context, typed event classes equal to the vendored contract, publish(event, tx) from a domain transaction, the transactional outbox, relay, Kafka, consumers with retry, dead letter and the inbox
+    rules: BE-EVENT-BUS-1 … BE-EVENT-BUS-5
+  - id: be.queues
+    title: Queues and schedulers
+    path: queues.yaml
+    decides: Typed queue producers that write the outbox in the caller's transaction, the BullMQ owner and relay, job schedulers instead of cron
+    rules: BE-QUEUES-1 … BE-QUEUES-4
+  - id: be.supabase-queues
+    title: Supabase adapters of the lite edition
+    path: supabase-queues.yaml
+    decides: Under edition lite the same ports on Supabase - the queue and event-bus transport on Supabase Queues (pgmq) behind the outbox relay, retry and backoff by visibility timeout, dead letter by read_ct and archive, a queue per consumer group, schedules on pg_cron, cache and locks on Postgres, realtime on the socket.io gateway of the api process, unit specs as full and integration scenario proofs for declared patterns on starci supabase start
+    rules: BE-SUPABASE-QUEUES-1 … BE-SUPABASE-QUEUES-6
+  - id: be.webhooks
+    title: Provider webhooks
+    path: webhooks.yaml
+    decides: The webhooks feature kind, the signed door that verifies first and makes one domain intake call, the intake that claims the inbox and publishes the event in its transaction, the three scenarios proven on the provider fake
+    rules: BE-WEBHOOK-1 … BE-WEBHOOK-4
+  - id: be.realtime
+    title: Realtime channels
+    path: realtime.yaml
+    decides: The realtime feature kind, a read-and-push door (socket gateway or GraphQL subscription) that injects only the RealtimeHub, principal-scoped topics fed by a reactor, the three scenarios proven with a real client
+    rules: BE-REALTIME-1 … BE-REALTIME-4
+  - id: be.jobs
+    title: Fenced background jobs
+    path: jobs.yaml
+    decides: The job row with one owner and one atomic claim, the required expectedFencingToken in the type, the run key of an external effect, the processor and steps shape
+    rules: BE-JOBS-1 … BE-JOBS-5
+  - id: be.projections
+    title: Projections (read models)
+    path: projections.yaml
+    decides: Read models that replace cross-context joins, one writer per table, recompute and get, replay
+    rules: BE-PROJECTIONS-1 … BE-PROJECTIONS-5
+  - id: be.reactors
+    title: Reactors
+    path: reactors.yaml
+    decides: Features that consume events of another context and keep a local copy or trigger a projection, thin doors, no cross-kind imports
+    rules: BE-REACTORS-1 … BE-REACTORS-4
+  - id: be.messages
+    title: Messages catalog and locale
+    path: messages.yaml
+    decides: User-facing copy through the owner's vi/en catalog, InjectMessageCatalog, InjectRequestLocale, request and non-request locale resolution
+    rules: BE-MESSAGES-1, BE-MESSAGES-2
+  - id: be.temporal
+    title: The injected clock
+    path: temporal.yaml
+    decides: Clock as the only reader of the ambient clock, InjectClock, FakeClock in specs
+    rules: BE-TEMPORAL-1
+  - id: be.idempotency
+    title: Inbox dedupe
+    path: idempotency.yaml
+    decides: A webhook or consumer claims the event through InjectInbox before it acts, detected by receiver type, the inbox_claims table
+    rules: BE-IDEMPOTENCY-1, BE-IDEMPOTENCY-2
+  - id: be.services
+    title: Services of one product
+    path: services.yaml
+    decides: A service only at be/apps/<service> with its own Dockerfile and image, pinned images in a multi-service stack, the vendored event contract and consumer tables, e2e specs for every consumer and saga
+    rules: BE-SERVICES-1 … BE-SERVICES-4
+  - id: be.saga
+    title: Sagas
+    path: saga.yaml
+    decides: A saga as a declared-pattern feature folder, an orchestrator listing steps and compensations, the versioned and fenced state of a run, the events in the vendored contract, e2e specs that inject a failure per compensation path
+    rules: BE-SAGA-1 … BE-SAGA-4
+  - id: be.resilience
+    title: Retry through the shared helper
+    path: resilience.yaml
+    decides: A retried operation goes through platform/retry or a queue definition, never a hand-written loop
+    rules: BE-RESILIENCE-1

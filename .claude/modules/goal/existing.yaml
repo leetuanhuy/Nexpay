@@ -1,0 +1,192 @@
+# ============================================================================
+# modules/goal/existing.yaml — the "what do we already have" leg.
+#
+# Goal breaking is NEVER on raw input — it is input x current-state. This file
+# is the SURVEY step of the 5-step method (anatomy.yaml decomposition): before
+# any chain is proposed, the goal must identify what already exists that the
+# request touches, and the extend-vs-add decision falls out of the GAP.
+#
+# Sources:
+#   engine/db/ledger.mjs        — the .starciwork runtime.sqlite record rows
+#                                    (record state, ownership)
+#   modules/models/kinds.yaml — work.author's intake mode: the typed
+#                                    reference/conflict/new cases an intake
+#                                    reconciles authored records against decided ones
+#   scripts/work/validate/check-work-deep.mjs    — DEP_STALE: a done record whose referenced
+#                                    deps moved since baseline ("its proof was
+#                                    captured against older premises");
+#                                    normDigest excludes volatile lifecycle fields
+#   docs/ledger-db.md      — ownership model: one index.yaml per scope
+#                                    folder, only leaves author state
+#   docs/verify-proof.md — source drift vs evidence invalidation vs
+#                                    unavailable input; stale evidence re-proves,
+#                                    never asserts fresh
+#   modules/ops/ops/work.author.yaml, scope.define.yaml — the record-authoring ops
+#
+# Convention: the camelCase and CAPITALISED names in this file (goalPhase,
+# reviseGoal, designGate, cutOpFor, GOAL_SPIN_LIMIT, ...) name rules THIS
+# module owns and the kernel agent reasons with; they are not code symbols.
+# The executable surface is scripts/kernel/cli.mjs and the contracts under
+# modules/kernel/. Where a rule is also transacted there, the entry says so.
+# ============================================================================
+
+schema: starci/module-goal-existing@1
+
+about:
+  kind: survey-leg
+  businessQuestion: >-
+    "Before we plan a single operation: what already exists that this request
+    touches, who owns it, what state is it in, and does this request extend it
+    or build beside it?"
+  positionInMethod: >-
+    Step 2 (SURVEY -> S₀) of the 5-step decomposition (anatomy.yaml). Runs on
+    every feature/refactor/integration input BEFORE a chain is proposed — a
+    chain proposed against an unmeasured S₀ plans work that may already be
+    done, or misses the surface it is about to break.
+  sources:
+    - engine/db/ledger.mjs
+    - modules/kernel/driver-loop.yaml
+    - scripts/work/validate/check-work-deep.mjs
+
+# ----------------------------------------------------------------------------
+# SURVEY — measuring S₀. Two surfaces, always both.
+# ----------------------------------------------------------------------------
+survey:
+  starciwork: >-
+    Query the .starciwork tree for the records that OWN the paths this request
+    would touch: is there an impl/br/fr/sds record whose scope covers them
+    (ownership is the node's allowlist of path prefixes, and one scope folder
+    owns one index.yaml — docs/ledger-db.md). What state is each owner in —
+    todo, doing, done —
+    and what does its evidence pin.
+  source: >-
+    Scan the actual source surfaces those records name (or, where no record
+    owns the path, the source itself): does api X / module X / screen X already
+    exist, and is it extendable — does it expose the seam this request needs,
+    or is it sealed / owned by another feature's record.
+  reconciliation: >-
+    work.author's intake mode is where the survey's findings land — three
+    typed cases reconciled against decided records (modules/models/kinds.yaml):
+    `reference` what a decided record already holds
+    (cite by id), `conflict` what cannot hold together with it (a todo
+    decision record with both sides + one recommendation), `new` what no
+    decided record covers. The survey is not a memo;
+    it is typed cases the chain reads.
+  executedBy: >-
+    scripts/route/route-plan.mjs `--state <work root>` (define-goal passes it on every plan): `surveyS0` reads the flat
+    records (state, feature folder, implementation lane from the workspace repository roles) and `impactOf` matches the
+    goal text to surveyed features - the result is the plan's `impact` block {shape BUILD|EXTEND|REFERENCE, features,
+    reusedDone, open, backendRecords, frontendRecords, settledOutOfScope}. EXTEND makes every goal variable of the touched
+    features delta (never satisfied by a done record), plans backend.implement whenever those features hold backend
+    records, keeps the implement and draw prerequisites planned, and orders backend.implement behind interface.draw.
+    A family-level wildcard never settles a goal variable, and an implement variable is satisfied only by a record of
+    its own lane.
+  output: >-
+    S₀ = the existing-surface map: {record-id -> {owns: paths, state, evidence,
+    extendable: yes|no|unknown}}. Every variable in it is one a later leg can
+    flip stale.
+
+# ----------------------------------------------------------------------------
+# DECISION — extend-vs-add falls out of GAP (Δ = S* − S₀).
+# ----------------------------------------------------------------------------
+decision:
+  - when: "X exists AND extendable (the owner record exposes the seam, or the source has the extension point)"
+    shape: EXTEND
+    chain: "[scope.define(delta only), architecture.decide(extension points), backend.implement(extends X), uat.verify(A + regression on X)]"
+    records: "goal records `extends: <record-id-of-X>`"
+    why: >-
+      Δ contains only the NEW part — the done variables of X stay done. But
+      touching X can break X: X's `verified` variable goes stale the moment the
+      extension lands, so a regression/re-verification leg on the EXTENDED
+      surface is generated automatically — not optional.
+
+  - when: "X exists AND NOT extendable (sealed, or owned by another feature's record this goal may not edit)"
+    shape: ADD
+    chain: "new module beside X + integration.verify on the boundary between them"
+    records: "a `reference` reconciliation row to X (read it, don't touch it); the boundary is the new work"
+    why: >-
+      No record of another feature is edited and none is reported against.
+      The seam between old and new is where the
+      risk lives — that is what the integration leg proves.
+
+  - when: "X missing — no record owns the paths and the source has nothing"
+    shape: BUILD
+    chain: "the full chain route-plan derives for the prompt's S*"
+    records: "a `new` reconciliation row — no decided record covers this"
+
+# ----------------------------------------------------------------------------
+# RULES — survey discipline.
+# ----------------------------------------------------------------------------
+rules:
+
+  - id: existing-surface-detection
+    rule: >-
+      Every feature/refactor input gets a survey leg BEFORE the chain is
+      proposed — never decompose against an unmeasured S₀.
+    mechanism: >-
+      The .starciwork ownership lookup: which record owns the touched paths
+      (the record rows in engine/db/ledger.mjs's runtime.sqlite — ownership is
+      the node's allowlist of path prefixes, docs/ledger-db.md) + the source
+      scan those records name. The intake writes its findings as typed
+      reconciliation cases (work.author intake mode, modules/models/kinds.yaml)
+      — reference, conflict, new — not prose.
+
+  - id: extend-vs-add
+    rule: >-
+      When the target exists, the goal MUST record `extends: <record-id>` and
+      the chain MUST include a regression/verification leg on the EXTENDED
+      surface — not just the new feature — because touching X can break X.
+    mechanism: >-
+      The extended record's `verified` variable goes stale on change:
+      DEP_STALE fires on a done record whose referenced deps moved since
+      baseline (check-work-deep.mjs — "its proof was captured against older
+      premises"). The regression leg is the re-proof of that variable; it is
+      generated BY the extends link, not remembered by the agent.
+
+  - id: reuse-over-rebuild
+    rule: >-
+      If an existing impl already provides the capability, the correct chain
+      may be ZERO build legs + one wiring/integration leg — that is a legal
+      outcome, not a failure to decompose.
+    why: >-
+      Δ is what is missing, not what was asked for by name. When SURVEY finds
+      `impl.X: done` already produces the needed variable, the honest chain
+      routes the missing wire only — a `reference` reconciliation row to X,
+      plus the integration/verify leg that proves the wiring. An analyzer that
+      insists on a build leg to look complete is inventing scope.
+
+  - id: ownership-check
+    rule: >-
+      If the touched surface is owned by a record in `done` state, the chain
+      MUST include re-verification of that record — its baseline goes
+      DEP_STALE on change.
+    mechanism: >-
+      check-work-deep.mjs: a `done` record whose referenced deps' normDigest
+      moved since the deep-baseline refuses with DEP_STALE — the proof was
+      captured against older premises. normDigest excludes the volatile
+      lifecycle fields (state, change, provenBy, verificationSource,
+      blockedBy), so it is the NORMATIVE content moving that trips it — a
+      silent edit is NORM_UNRECORDED, a moved dep is DEP_STALE. Either way the
+      done variable is not done until re-proven.
+
+  - id: shared-ledger-is-not-scope-conflict
+    rule: >-
+      Two workflows registered in the same project runtime.sqlite are not in
+      conflict merely because they share ledger custody. Classify each goal's
+      semantic scope first (for example public landing delivery versus
+      .starciwork/.starcistacks canonicalization), then compare concrete owned
+      path prefixes, effects and live custody.
+    mechanism: >-
+      Workflow ids and goal identities remain separate. The revision preview
+      reports co-resident live workflows with conflictInferred:false; an actual
+      overlap is raised only from explicit owned_paths/effect ceilings or a
+      quiescence requirement, never from the common ledger filename.
+
+# ----------------------------------------------------------------------------
+# WHAT THE SURVEY MUST NEVER DO
+# ----------------------------------------------------------------------------
+never:
+  - never-skip: "never propose a chain without the survey — S₀ unmeasured is Δ uncomputable"
+  - never-edit-another-owner: "a record owned by another feature is read via a `reference` case or escalated via `conflict` — never edited in place (work.author intake discipline)"
+  - never-assert-fresh: "a stale done variable is re-PROVEN, never refreshed by assertion (CONTEXT.md work-correction policy; docs/verify-proof.md)"
+  - never-treat-absent-as-clean: "no record owning a path does not mean free rein — it means `new` scope, which scope.define still bounds"

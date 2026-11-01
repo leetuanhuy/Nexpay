@@ -1,0 +1,585 @@
+# owner-rulings.yaml — the owner's standing rulings, by stable id, so evidence can cite them.
+#
+# A drawing's rationale.json (scripts/work/draw/draw-rationale.mjs) cites an owner ruling as `owner:<id>`; the id must
+# resolve here, to a note of the ui record's
+# ui.review.feedback, to a brand.direction.learned id, or to an answer receipt. An entry is what the owner ruled, in
+# one sentence, with the date and where it is enforced; it is never a runtime opinion. Add an entry in the commit that
+# lands the ruling.
+schema: starci/owner-rulings@1
+
+rulings:
+  - id: draw-shapes-only
+    date: '2026-09-27'
+    ruling: interface.draw draws SHAPES only - one image per XBase#state; data statuses (loading, empty, error, forbidden, 401/403/404) render by recipe through SlotView and are never drawn.
+    enforcedBy: [scripts/work/ui/ui-shapes.mjs, scripts/work/draw/draw-quality.mjs]
+  - id: draw-content-region-only
+    date: '2026-09-27'
+    ruling: A drawing is the XBase content region only, never the full page with its layout chrome.
+    enforcedBy: [scripts/work/draw/draw-quality.mjs]
+  - id: draw-token-render
+    date: '2026-09-27'
+    ruling: Drawing is token-render HTML/CSS in the Grammar's tokens captured by Playwright; the brief loads all of knowledge/ui and the grammars with values resolved to numbers carrying rule ids.
+    enforcedBy: [scripts/work/draw-render.mjs, scripts/work/ui/ui-proof-brief.mjs]
+  - id: heroui-defaults-first
+    date: '2026-09-27'
+    ruling: HeroUI and Grammar defaults come first; the canvas stays the HeroUI grey and brand tweaks come later, by owner ruling only.
+    enforcedBy: [knowledge/ui/examples/brand-direction.example.yaml]
+  - id: draw-dna-only
+    date: '2026-09-27'
+    ruling: Compose only the Grammar's DNA components - a notice is Alert, a ratio is Meter; anything DNA lacks is a grammar proposal, never an inline invention.
+    enforcedBy: [scripts/work/draw/draw-dna.mjs]
+  - id: icon-tile-neutral
+    date: '2026-09-27'
+    ruling: Identity IconTiles are neutral, never accent-tinted.
+    enforcedBy: [knowledge/ui/composition/accent.yaml]
+  - id: alert-white-surface
+    date: '2026-09-27'
+    ruling: The Alert has a white surface with a small tone indicator beside a tone-coloured title - no tone-filled background, no IconTile inside; its action is the grammar's standard Button variant secondary.
+    enforcedBy: [scripts/work/draw/draw-dna.mjs]
+  - id: meter-segments-h1
+    date: '2026-09-27'
+    ruling: The segmented capability Meter is the grammar's Meter segments on a full-width h-1 (4px) track with N equal segments.
+    enforcedBy: [knowledge/grammars/starci/DNA.yaml]
+  - id: buttons-pill
+    date: '2026-09-27'
+    ruling: Buttons are pills (HeroUI rounded-3xl).
+    enforcedBy: [knowledge/grammars/starci/DNA.yaml]
+  - id: card-radius-bound
+    date: '2026-09-27'
+    ruling: A card's radius is what the HeroUI and Grammar CSS actually bind (1rem in the Nivo render).
+    enforcedBy: [scripts/work/ui/grammar-geometry.mjs]
+  - id: grammar-gaps-0.6.0
+    date: '2026-09-27'
+    ruling: "add them all - add every grammar gap the real-component prototype found: the ink artwork band with the orbit motif, the unlabelled Divider, the DescriptionList stat strip, the Alert action icon, asset-slot props on Image/MediaFrame, the SectionHeader count and source meta, the off TagGroup chip, the quiet (ghost) IconButton, the PinnedActionBar, and data-component on every grammar root (@starci/grammar 0.6.0)."
+    enforcedBy: [packages/grammar/CHANGELOG.md, knowledge/grammars/starci/DNA.yaml, knowledge/ui/examples/brand-direction.example.yaml]
+  - id: secondary-input-contrast-accepted
+    date: '2026-09-27'
+    ruling: The low contrast of a secondary input's fill is accepted (COLOR-3 case-6).
+    enforcedBy: [knowledge/ui/proof/contrast.yaml]
+  - id: status-tones-follow-heroui
+    date: '2026-09-30'
+    ruling: Status tones follow HeroUI - a solid pair and a soft pair per tone. The soft foreground on its soft tint is accepted (about 3:1, not extreme contrast) and a bare status glyph takes the soft foreground instead of a darkened solid tone; body and interactive text keep 4.5:1.
+    enforcedBy: [scripts/work/brand/brand.mjs, knowledge/ui/proof/contrast.yaml]
+  - id: nivo-main-colour-ink
+    date: '2026-09-27'
+    ruling: The Nivo main colour is ink black #040d1c, not red; red is for artwork and danger only.
+    enforcedBy: [knowledge/ui/examples/brand-direction.example.yaml]
+    confirmed: '2026-09-27 - owner answered "settled" in the desktop chat; pendingRulings main-colour is ruled'
+  - id: one-version-owner-review
+    date: '2026-09-27'
+    ruling: ONE careful version per shape reaches the owner, reviewed on Telegram; feedback redraws until golden.
+    enforcedBy: [scripts/work/draw-review.mjs, scripts/work/draw-feedback.mjs]
+  - id: draw-devin-brand-claude
+    date: '2026-09-27'
+    ruling: interface.draw is drawn by Devin (Codex the fallback) and brand.decide (brand and direction) is decided by Claude (Codex the fallback); the draw loop's independent critic is a different model from the drawer - Codex when Devin draws.
+    enforcedBy: [modules/models/runtimes.yaml, modules/models/registry.yaml, scripts/work/draw-critic.mjs]
+  - id: draw-rationale-evidence
+    date: '2026-09-27'
+    ruling: Every drawn shape ships evidence for every decision - rationale.json (element, layout, every gap, padding, type and radius with its rule id and FR/content reason) and an annotated redline render; the owner critiques from evidence, never taste.
+    enforcedBy: [scripts/work/draw/draw-rationale.mjs, scripts/work/draw-render.mjs]
+  - id: supervisor-mission
+    date: '2026-09-28'
+    ruling: "The [Supervisor] monitors, manages, messages and adjusts every workflow to the finish on autopilot ('monitor, manage, send messages to, adjust'): it acts on every stuck item itself (resolve --by supervisor, lane fixes, notices, re-plan dispositions, archive), and asks the owner nothing but the final credentials step and the handover; the owner gets only a periodic digest."
+    enforcedBy: [modules/supervisor/supervise.yaml, modules/supervisor/supervisor-prompt.md, scripts/supervisor/actions.mjs, modules/reconciler/reconciler.yaml]
+  - id: supervisor-self-learning
+    date: '2026-09-28'
+    ruling: "The Supervisor upgrades .claude by trial and error and records everything in the self-learning ledger, owner feedback included as lessons weighted above its own. Routine fixes it lands itself (bug fixes in checkers/scripts/runtime, checker calibration with a wrongly-blocked example spec, grammar additions/fixes and their npm publish (auto-approved by the owner 2026-09-28), brief/prompt improvements, throughput tuning within owner caps); only IMPORTANT upgrades (owner rulings, brand direction, knowledge rule meaning, removing or weakening a gate class, op-graph/kernel-contract architecture, budget/cap increases, anything external or irreversible) go to the owner first as a concise proposal that blocks nothing else. Never relax a check without a wrongly-blocked example; revert on measured regression; a daily cap on autonomous landings; full audit."
+    enforcedBy: [scripts/machine/lessons.mjs, modules/supervisor/supervise.yaml, modules/models/runtimes.yaml]
+  - id: supervisor-machine-log
+    date: '2026-09-28'
+    ruling: "The Supervisor writes the machine's root log: every observation, decision, action, message and experiment as a typed log row in the supervisor ledger, served read-only to the ui."
+    enforcedBy: [scripts/machine/sup-log.mjs, ui/api/routes/system.mjs, ui/CONTRACT.md]
+  - id: ram-aware-concurrency
+    date: '2026-09-28'
+    ruling: 'Parallelism follows real RAM ("Parallelism ceiling follows real RAM"): below 10% free RAM fewer ops run in parallel - no new heavy op below the top priority (resume above 15%), below 2.5% no new heavy op at all (resume above 5%), fit floor 2.5% (lowered 2026-09-28: "15→10, 10→2.5") - so the host never freezes and kills ops mid-run; maxParallelOps 20 stays the ceiling and running ops are never stopped.'
+    enforcedBy: [scripts/machine/ram-throttle.mjs, scripts/kernel/cli.mjs, scripts/supervisor/land.mjs, modules/models/runtimes.yaml]
+  - id: fe-canon-first
+    date: '2026-09-28'
+    ruling: The FE refactor workflow (nivo wf-nivo-fe-canon-mujek980) runs up to 15 parallel code.refactor slices first; the other workflows ramp up in what is left, and their heavy ops are delayed before the prioritized workflow's under the RAM throttle.
+    enforcedBy: [modules/models/runtimes.yaml, scripts/machine/ram-throttle.mjs, scripts/supervisor/ram-cap.mjs]
+  - id: autopilot-run-to-finish
+    date: '2026-09-28'
+    ruling: "Run to the finish in one go; don't stop to ask the owner - not even UX/UI review. Machine-gated drawings and directions are accepted provisionally (by autopilot, never golden), runtime/process gates and retry caps go to the Supervisor, credentials/real money/shared external systems are deferred to handover on sandbox/stub paths with ONE end-of-flow credential checklist (\"limit provision asks\"), and the owner reviews everything once at handover; ugly UX/UI is re-run in one batch."
+    enforcedBy: [scripts/kernel/autopilot-run.mjs, scripts/kernel/autopilot-budget.mjs, modules/models/runtimes.yaml, scripts/kernel/cli.mjs, scripts/work/draw-review.mjs, scripts/work/brand-direction.mjs, scripts/work/brand/brand.mjs]
+  - id: grammar-publish-auto-approve
+    date: '2026-09-28'
+    ruling: "Publishing @starci/grammar to npm needs no owner approval (\"next time do not ask for approval any more ... auto approve\"): after a grammar change lands, bump the semver (additive → minor, fix → patch), date the CHANGELOG entry, land, build and publish, then tell the owner in the digest. Credentials stay the owner's: publishing uses the npm login the owner already holds; never create, enter or rotate a token."
+    enforcedBy: [packages/grammar/package.json, packages/grammar/CHANGELOG.md, scripts/machine/lessons.mjs]
+  - id: settle-runtime-service
+    date: '2026-09-28'
+    ruling: "SETTLE is a deterministic runtime service, never a step the Kernel must remember (approved in chat 2026-09-28, \"ok\"): the runtime settler settles every done report whose declared checks re-verify green through the same starci kernel record-checks + starci kernel settle path, from each workflow watchdog loop about every minute and right after starci kernel report, and proves the worker released; it never settles a non-green outcome - those go to the Kernel as needs-kernel-decision items it decides first. Settle is a light synchronous core with an async retried tail, consumed-but-unsettled cannot persist, and the Supervisor tick asserts no reported job stays unhandled past 3 minutes."
+    enforcedBy: [scripts/kernel/settle/job-settle.mjs, scripts/kernel/kernel-watchdog.mjs, scripts/kernel/verbs/settle-tail.mjs, scripts/kernel/kernel-authority.mjs, modules/reconciler/reconciler.yaml]
+  - id: push-scan-test-secrets-encrypted
+    date: '2026-09-28'
+    ruling: "Test credentials follow the product repository's .starcistacks + sops convention and a plaintext password is never pushed (\"do not block passing tests\", \"encrypt test secrets into enc\"): a disposable credential is generated per run; one that must stay stable lives at .starcistacks/<stack>/secrets/test/<name>, plaintext git-ignored, stored with the repo's own stack-secret.mjs set so only the sops .enc twin is committed, and read with testSecret() (scripts/uat/test-secret.mjs). The push secret scan stays strict - a plaintext test password still refuses the push, naming that path and command - passes a .enc only when it is a sops envelope, and refuses any plaintext under .starcistacks/<stack>/secrets/; a literal already committed is let through once by a push-scan-allow entry pinned to its file, pattern and historical range."
+    enforcedBy: [scripts/uat/test-secret.mjs, scripts/lib/sops-envelope.mjs, scripts/api/sops/lib.mjs, scripts/lib/secret-patterns.mjs, scripts/supervisor/push-mains.mjs, modules/ops/_common.yaml]
+  - id: evidence-in-db-and-blobs
+    date: '2026-09-28'
+    ruling: "All agent and runtime metadata leaves product git: attempts, models, reports, checks, logs, evidence, captures and renders live in SQL plus the external sha256 blob store, whose rows carry file_uri and /api/blob/<sha256> links. .starciwork retains important product content only: Work records, SRS/SDS, UI specifications and brand. Start the final canonical schema fresh after verified archival of old stores; no legacy data migration or read fallback. The host machine.sqlite owns machine and worker state; no third DB is added."
+    confirmed: '2026-09-28 owner chat: "ok do it, 10 agent sol"; owner final storage principle and CLEAN-SLATE ruling in <tmp>/evidence-db'
+    enforcedBy: [modules/schemas/work-layout.yaml, engine/db/schema/runtime.sql, engine/db/ledger.mjs, engine/db/blob.mjs]
+  - id: providers-claude-codex-devin
+    date: '2026-09-29'
+    ruling: "The runtime has three providers, claude, codex and devin (owner: \"devin codex claude are enough\"); no other provider is routed to."
+    enforcedBy: [modules/models/runtimes.yaml, modules/models/registry.yaml, engine/config.mjs]
+  - id: one-pattern-no-legacy
+    date: '2026-09-30'
+    ruling: "One pattern, no exceptions, no legacy, no backward compatibility: a mechanism that is superseded or unusable is deleted with all its references, never kept as an alias, fallback or second path."
+    confirmed: '2026-09-30 owner decision on the starci link removal, task pub1'
+  - id: release-suite-ci
+    date: '2026-10-09'
+    ruling: "The owner's words: add to config.yaml a setting 'full test: none' so the full test is never applied locally and it is pushed to git, letting Codecov handle it, to save time; locally it still runs PARTIAL tests, the tests related to the commit. Recorded as release.suite (local or ci, shipped default local; the value is ci because the suite moves to CI, it does not vanish). Under ci the release cut plans no root suite and no Linux parity row, the pre-push gate accepts a release record without a local npm test row only when the record says suite ci and the checked-out config says ci, and a red CI is fixed forward with the next pre-release. The trade the owner accepts, that a release can reach GitHub and its tag before the suite has run, is stated in docs/releasing.md."
+    amendedBy: [no-runtime-specs]
+    enforcedBy: [scripts/guards/release-definition.mjs, scripts/guards/release-suite-mode.mjs, scripts/supervisor/release-ci-rows.mjs, engine/release-config.mjs]
+  - id: acceptance-trace-report-mode
+    date: '2026-10-09'
+    ruling: "The owner delegated the two open gaps of the op judge declarations to the lead (the owner's words, said in Vietnamese in chat: go with your own judgment, asking is not needed; 2026-10-09 ~23:10). Decision: the tests an implementing or verifying op writes must trace to acceptance the maker did not write - the acceptance records (ac.*) of its scope - by the measure acceptance-trace (backend.implement, interface.implement, e2e.verify, integration.verify): every acceptance record is cited by id by at least one test the attempt ran and a test that cites none is not counted toward the proof. For 1.0.0-alpha.9 the measure runs in REPORT mode, because this leg family has never run on a live host: the settle records the result as evidence on the attempt, starci kernel status --full and the debug digest show it, and a miss fails and opens nothing. It becomes enforce after one real workflow run has shown that the record shapes hold."
+    enforcedBy: [scripts/kernel/acceptance-trace.mjs, modules/kernel/op-judges.yaml]
+  - id: business-decide-critic
+    date: '2026-10-09'
+    ruling: "Same delegation (the owner's words, said in Vietnamese in chat: go with your own judgment, asking is not needed; 2026-10-09 ~23:10). business.decide is the first deciding leg after scope and everything downstream builds on it, and its answers are provisional answers to owner-class questions, so it gets the runtime-run independent Critic (single pass, another provider, the same mechanics as scope.define and architecture.decide). This ADDS a gate. test.author declares code.refactor as its next leg where the canonical-workspace chain places it; scope.finish has no owner gate in the policy and stays open; content.generate and perf.verify stay open (outside the two running workflows)."
+    enforcedBy: [modules/kernel/critic.yaml, modules/kernel/critic-rubrics.yaml, scripts/kernel/critic-settle.mjs]
+  - id: purge-deleted-terminal-idempotent
+    date: '2026-10-11'
+    ruling: >-
+      The owner reports that he deleted all Orca terminals and directs, translated from Vietnamese:
+      pruning checks whether the Orca terminal still exists and closes the existing terminals; a terminal that is absent is already deleted, not a cleanup error.
+      Workflow purge acknowledges exact handle absence only from a successful available unscoped terminal inventory, including persisted retry targets.
+      The acknowledgement remains in the public plan and its digest and issues no close or release for the absent target.
+      It proves terminal absence, not physical process exit, and releases no provider capacity by that acknowledgement.
+      Unknown process observations are advisory for deleted terminals; a positively observed process carrying the exact handle still holds destructive cleanup.
+      Existing owned terminals are closed and then verified; failed terminal reads stay unknown, and foreign Dispatch records remain untouched.
+    enforcedBy: [scripts/api/orca/terminal-list.mjs, scripts/machine/workflow-purge-orca.mjs, scripts/machine/workflow-purge-plan.mjs, scripts/machine/workflow-purge-apply.mjs]
+  - id: heroicons-family-icon-set
+    date: '2026-10-13'
+    supersedes: []
+    ruling: "The one application icon set is the heroicons family, not Phosphor: @heroicons/react is the base set and is used first, @starci/heroicons holds only the glyphs heroicons lacks (brand or domain glyphs drawn in heroicons style), never duplicates a heroicons glyph, and a missing glyph is added to @starci/heroicons; both are imported on the 24/outline and 16/solid cuts through the icon leaf."
+    enforcedBy: [knowledge/hfs/fe-stack.yaml, packages/eslint/fe/icon.mjs, scripts/work/draw/draw-source.mjs, packages/heroicons/src/package-boundary.spec.mjs]
+
+  - id: accept-language-locale-header
+    date: '2026-10-14'
+    ruling: "R50 (FE_TRANSPORT_OWNER) requires Accept-Language as the locale header in both editions; x-locale is retired. Historical CHANGELOG entries and the rule that rejects the retired header preserve its spelling."
+    staleWhen: ['\bx-locale\b']
+    retires: [x-locale]
+    retiredIn: [packages/eslint/fe/served-locale.mjs, knowledge/hfs/requirements.yaml]
+    enforcedBy: [packages/eslint/fe/served-locale.mjs]
+  # HFS decisions share stable ids and relationship records with knowledge/hfs/rulings.yaml.
+  - id: hfs-complete-standard
+    date: '2026-10-14'
+    topic: standard.coverage
+    status: live
+    ownerRuling: 1
+    source: A15-STANDARD section 0.1 item 1
+    ruling: >-
+      Alpha.15 is the complete HFS standard for lite and full; every applicable surface in each edition
+      needs its requirement, rule, enforcer, template, example, documentation and proof.
+    supersedes: []
+    enforcedBy: [R247, R274]
+
+  - id: lite-production-swarm
+    date: '2026-10-14'
+    topic: deploy.lite-production
+    status: live
+    ownerRuling: 2
+    source: A15-STANDARD section 0.1 item 2
+    ruling: >-
+      Lite production declares runtime docker-swarm in .starcistacks/application-stacks.yaml and tracks
+      the rendered stack under .starcistacks/production/infra/swarm/. The VPS runs neither Compose nor
+      a host crontab; scheduling is app-owned through the back-end scheduler, pgmq or a pg_cron tick,
+      or through a declared replicated-job.
+    supersedes:
+      - {rule: R212, case: case-1}
+      - {rule: R212, case: case-2}
+      - {rule: R212, case: case-3}
+    amendmentScope: Lite hosting, stack layout and scheduling clauses only.
+    enforcedBy: [R10, R212, R250, R266, R267, R268]
+
+  - id: single-declared-ingress
+    date: '2026-10-14'
+    topic: deploy.ingress
+    status: live
+    ownerRuling: 3
+    source: A15-STANDARD section 0.1 item 3
+    ruling: >-
+      Any single declared ingress component is accepted, including Traefik or Caddy, with its image
+      pinned by digest; the canon selects no particular ingress implementation.
+    supersedes: []
+    enforcedBy: [R266, R275]
+
+  - id: lite-backing-services
+    date: '2026-10-14'
+    topic: deploy.lite-backing-services
+    status: live
+    ownerRuling: 4
+    source: A15-STANDARD section 0.1 item 4
+    ruling: >-
+      Lite uses Supabase and has no self-hosted Postgres. A sidecar that needs a database uses SQLite
+      on a declared persistent volume; a sidecar requiring Postgres, Redis or Mongo is refused.
+    supersedes: []
+    enforcedBy: [R276]
+
+  - id: sealed-secret-custody
+    date: '2026-10-14'
+    topic: security.secret-custody
+    status: live
+    ownerRuling: 5
+    source: A15-STANDARD section 0.1 item 5
+    ruling: >-
+      Product secrets exist only as sops/age sealed .starcistacks/<env>/secrets/*.enc members.
+      Plaintext secret files are never tracked, placed in deploy/ or put in a workflow; the private age
+      identity is held only as SOPS_AGE_KEY in the owner's untracked .claude/secret.env.
+    supersedes: [platform-age-file-custody]
+    enforcedBy: [R06, R253, R277]
+
+  - id: typed-app-environment
+    date: '2026-10-14'
+    topic: code.be-environment
+    status: live
+    ownerRuling: 7
+    source: A15-STANDARD section 0.1 item 7
+    ruling: >-
+      Every back-end app has apps/<app>/src/<app>.env.ts with an interface and read<App>Env(env: EnvSource).
+      The app reads its environment through that boundary; main.ts delegates and holds no parsing of its own,
+      and app.module.ts spreads composition groups instead of holding an inline module list.
+    supersedes: [R245]
+    amendmentScope: The optional inline parsing clause of R245; the other app-role restrictions remain in force.
+    enforcedBy: [R248, R289]
+
+  - id: fe-auth-only
+    date: '2026-10-13'
+    topic: security.fe-data-door
+    status: live
+    ownerRuling: 8
+    source: A15-STANDARD section 0.1 item 8; knowledge/hfs/rules.yaml R212 cases.case-2
+    ruling: >-
+      The front end uses Supabase for Auth only and accesses application data through the back end.
+      The front-end client boundary and the database grants, policies and realtime publication boundary
+      enforce this decision; declared direct-access exceptions are explicit and listed.
+    supersedes: []
+    enforcedBy: [R217, R254]
+
+  - id: graphql-default-door
+    date: '2026-10-13'
+    topic: code.be-transport
+    status: live
+    ownerRuling: 9
+    source: A15-STANDARD section 0.1 item 9
+    ruling: >-
+      GraphQL is the default application door. REST is reserved for probes, auth handshakes, signed
+      webhooks, byte streams and the public v1 table; the reason and route evidence apply in both editions.
+    supersedes: []
+    enforcedBy: [R278, R290]
+
+  - id: owner-run-steps
+    date: '2026-10-14'
+    topic: deploy.owner-steps
+    status: live
+    ownerRuling: 10
+    source: A15-STANDARD section 0.1 item 10
+    ruling: >-
+      DNS changes, provider URIs, docker swarm init and key rotation remain owner-run steps.
+      The standard requires those steps and their evidence to be declared and never automates them.
+    supersedes: []
+    enforcedBy: [R266, R267]
+
+  - id: lite-contract-specs
+    date: '2026-10-14'
+    topic: proof.lite-contract
+    status: live
+    source: A15-STANDARD section 2.2 decision 1
+    ruling: >-
+      Lite may have tests/contract and test:contract. The owner's HFS standard relaxes the older contract
+      refusal in R212, be.tests.contract and edition.mjs; e2e, stack and browser runs remain full-only.
+    supersedes:
+      - {rule: R212, case: case-1}
+    amendmentScope: The lite contract-world prohibition only; the full-only e2e boundary remains.
+    enforcedBy: [R212]
+
+  - id: lite-webhook-after-commit
+    date: '2026-10-14'
+    topic: code.be-webhook-handoff
+    status: live
+    source: A15-STANDARD section 2.2 decision 2
+    ruling: >-
+      Lite webhook intake records its receipt and typed outbox event in the transaction. A reactor or job
+      processes the event after commit; processing never runs inside the intake transaction.
+    supersedes: []
+    enforcedBy: [R263]
+
+  - id: locale-accept-language
+    date: '2026-10-14'
+    topic: code.fe-locale-header
+    status: live
+    source: A15-STANDARD section 2.2 decision 3
+    ruling: >-
+      The single front-end locale writer sends Accept-Language, and back-end localization reads that
+      header; the previous custom locale header is retired in templates, lint and examples.
+    supersedes: []
+    enforcedBy: [R50]
+
+  - id: lite-fe-app-cardinality
+    date: '2026-10-14'
+    topic: code.fe-app-cardinality
+    status: live
+    source: A15-STANDARD section 2.2 decision 4
+    ruling: Lite may have more than one front-end app; the earlier single-app wording is removed.
+    supersedes: []
+    enforcedBy: [R212]
+
+  - id: code-function-feature-budgets
+    date: '2026-10-14'
+    topic: code.size-budgets
+    status: live
+    source: A15-STANDARD section 2.2 decision 5
+    ruling: A function is at most 80 lines in back-end and front-end code, and a feature holds at most 250 files.
+    supersedes: []
+    enforcedBy: [R291, R292]
+
+  - id: observability-required-signals
+    date: '2026-10-14'
+    topic: observability.required
+    status: live
+    source: A15-STANDARD section 0.2 observability decisions
+    ruling: The logger port, live and ready probes, and Docker HEALTHCHECK are mandatory in both editions.
+    supersedes: []
+    enforcedBy: [R40, R71, R189, R262]
+
+  - id: observability-deferred-signals
+    date: '2026-10-14'
+    topic: observability.deferred
+    status: live
+    source: A15-STANDARD section 0.2 observability decisions; section 6
+    ruling: >-
+      Request-id correlation, metrics and tracing are outside alpha.15; their mandatory status remains
+      pending an owner decision and creates no new alpha.15 failure code.
+    supersedes: []
+    enforcedBy: []
+    gap: P2 owner decision pending; no mandatory request-id, metrics or tracing enforcer is scheduled.
+
+  - id: fe-error-reporter-optional
+    date: '2026-10-14'
+    topic: observability.fe-reporter
+    status: live
+    source: A15-STANDARD section 0.2 observability decisions
+    ruling: >-
+      A front-end error reporter is documented optional and declared through hfs.json observe.reporter;
+      FE_OBSERVE_MISSING is not introduced unless the owner makes the reporter mandatory.
+    supersedes: []
+    enforcedBy: []
+    gap: Optional declaration only; no missing-reporter finding is authorized.
+
+  - id: lite-work-brand-only
+    date: '2026-10-14'
+    topic: work.lite-boundary
+    status: superseded
+    source: knowledge/hfs/rules.yaml R212 cases.case-4 quote and amended ruling
+    ruling: The initial restriction to brand records was clarified to permit .gitignore and optional workspace.yaml too.
+    supersedes: []
+    amendedBy: [R212/case-4]
+    enforcedBy: [R212]
+
+  - id: platform-age-file-custody
+    date: '2026-10-14'
+    topic: security.age-key-custody
+    status: superseded
+    source: knowledge/patterns/repo/secrets.yaml provenance.limitations and REPO-SECRETS-4; A15-STANDARD section 3 seeds
+    ruling: >-
+      The dated repository-secrets guidance retained the platform default age identity file outside Git.
+      The standard replaces that custody guidance with SOPS_AGE_KEY in .claude/secret.env.
+    supersedes: []
+    amendedBy: [sealed-secret-custody]
+    enforcedBy: [R253]
+
+  # Earlier kernel and drawing decisions cited by the specs retain stable owner ids.
+  - id: handover-owner-approval
+    date: '2026-09-23'
+    source: modules/ops/ops/handover.review.yaml proofs.owner-approval
+    ruling: A workflow finishes only after the owner's approve receipt for its latest handover review; feedback and questions do not approve it.
+    supersedes: []
+    enforcedBy: [scripts/kernel/handover.mjs]
+
+  - id: credential-build-placeholders
+    date: '2026-09-23'
+    source: modules/ops/_common.yaml Bounded finish and blockers; modules/kernel/driver-loop.yaml verdictTable[].provisionAsk
+    ruling: Missing credentials do not stop build work; builds use declared placeholders and report credentialPending, while live proof waits for the required credentials.
+    supersedes: []
+    enforcedBy: [modules/kernel/driver-loop.yaml, scripts/kernel/report-envelope.mjs]
+
+  - id: owner-language-logs
+    date: '2026-09-23'
+    source: modules/kernel/driver-loop.yaml boundary.language
+    ruling: Code and identifiers are English; kernel and op logs and owner-facing narration use the language configured in config.yaml.
+    supersedes: []
+    enforcedBy: [modules/kernel/driver-loop.yaml]
+
+  - id: drawing-owner-parts
+    date: '2026-09-24'
+    source: modules/ops/ops/interface.draw.yaml proofs.owner-sees-parts
+    ruling: The owner reviews each drawn part; composites remain implementation and audit evidence, and owner-facing images select the part even when an older record names its composite.
+    supersedes: []
+    enforcedBy: [scripts/work/direction-part.mjs, scripts/kernel/ask-images.mjs, scripts/connectors/telegram-media.mjs]
+
+  - id: drawing-light-device-matrix
+    date: '2026-09-24'
+    source: modules/ops/ops/interface.draw.yaml proofs.shell-conformance
+    ruling: Every drawing set covers desktop and mobile in the light theme for each drawn state; dark-theme drawings are optional.
+    supersedes: []
+    enforcedBy: [scripts/work/ui/shell-conformance.mjs]
+  - id: module-definition-everywhere
+    date: '2026-10-15'
+    source: knowledge/hfs/rulings.yaml module-definition-everywhere; knowledge/patterns/be/folder.yaml BE-FOLDER-3
+    ruling: Every NestJS module has a module definition (capability, sub-module, feature, transport module, cli group, integration), built with ConfigurableModuleBuilder and registered with XModule.register(...); the clause that forbade a module-definition in an api feature is superseded.
+    supersedes: []
+    enforcedBy: [packages/eslint/be/module-shape.mjs, scripts/hfs/architecture/module-per-transport.mjs]
+
+  - id: graphql-13-advisory-accepted-until-a19
+    date: '2026-10-16'
+    source: knowledge/hfs/canon-pins.yaml '@nestjs/graphql' and '@nestjs/apollo'; packages/hfs/CHANGELOG.md Unreleased (a18 pins)
+    ruling: 'npm audit (--omit=dev --audit-level=high) reports high advisories on @nestjs/graphql and the pinned @nestjs/apollo (and @graphql-tools/utils through them) whose fix is 14.0.3, a semver major. The canon keeps both packages on their current major for alpha.18 as a documented accepted advisory; the major upgrade is deferred to alpha.19. The advisories fixed by non-major bumps are taken in alpha.18: the next, axios and @nestjs/platform-express pins of knowledge/hfs/canon-pins.yaml. Owner words "Theo y tro" (delegation relayed by main, 2026-10-16).'
+    supersedes: []
+    enforcedBy: [scripts/checks/check-canon-pins.mjs]
+
+  - id: credential-guarded-rest-door
+    date: '2026-10-16'
+    source: knowledge/hfs/rulings.yaml credential-guarded-rest-door; packages/eslint/be/operations.mjs
+    ruling: A REST route that serves an external machine client (n8n, loyalty till, external API, agent tools) and is protected by a credential guard satisfies the evidence of BE_REST_DOOR_EVIDENCE and BE_REST_ROUTE_UNDECLARED through that guard, so its wire format is not forced into the defineOperations contract. The declaration is the route's or its controller's @Credential({ kind }) decorator from the domain identity capability, and the same capability declares a CredentialGuard implementing CanActivate, both resolved by TypeScript symbol. Anonymous public REST routes still need a closed PublicReason and an unguarded route still fails. Theo y tro (the owner delegated the decision to main, 2026-10-16).
+    supersedes: []
+    enforcedBy: [packages/eslint/be/operations.mjs]
+
+  - id: auth-callback-email-link
+    date: '2026-10-17'
+    source: knowledge/hfs/rulings.yaml auth-callback-email-link; packages/eslint/fe/callback-shape.mjs
+    ruling: A Supabase auth callback route owned by the auth module may perform exactly one exchangeAuthCode(code) and, for an email confirmation or recovery link, one awaited verifyOtp({ token_hash, type }) built from the query values token_hash and type. Nothing else is added to the callback. Owner words "Theo y tro" (the owner delegated the decision to main, 2026-10-17).
+    supersedes: []
+    enforcedBy: [packages/eslint/fe/callback-shape.mjs]
+
+  - id: auth-callback-pure-helpers
+    date: '2026-10-17'
+    source: knowledge/hfs/rulings.yaml auth-callback-pure-helpers; packages/eslint/fe/callback-shape.mjs
+    ruling: The auth callback may call pure helpers (synchronous, text-returning, no await and no I/O, found by symbol resolution) imported from the app's modules/routes or modules/auth to compute the redirect target and validate next, may use static route tables of modules/routes, and may branch on the exchange outcome's success or ok flag. A helper that does I/O, awaits or imports outside those owners is refused. Owner words "Theo y tro" (the owner delegated the decision to main, 2026-10-17).
+    supersedes: []
+    enforcedBy: [packages/eslint/fe/callback-shape.mjs]
+
+  - id: oauth-redirect-not-webhook
+    date: '2026-10-17'
+    source: knowledge/hfs/rulings.yaml oauth-redirect-not-webhook; packages/eslint/be/webhooks.mjs
+    ruling: 'A third-party OAuth redirect into the API, a GET route with @Public({ reason: PublicReason.AuthHandshake }) on a path that is not a webhook or events path, is not judged as a webhook door by BE_WEBHOOK_SCOPE. A POST, a webhook or events path, another reason and every SignedWebhook route stay judged. Owner words "Theo y tro" (the owner delegated the decision to main, 2026-10-17).'
+    supersedes: []
+    enforcedBy: [packages/eslint/be/webhooks.mjs]
+
+  - id: webhook-receipt-port
+    date: '2026-10-17'
+    source: knowledge/hfs/rulings.yaml webhook-receipt-port; packages/eslint/be/lib/webhook-handoff-intake.mjs
+    ruling: A call on a domain receipt port inside the receipt transaction of a webhook intake is the inbox record and not processing. A receipt port is a domain class with no base class whose constructor takes only platform ports and TypeORM, one of them the platform Inbox. A call on another domain service, a bus or a process callback inside the transaction is still processing, and BE_WEBHOOK_SCOPE now says so in its own finding. Owner words "Theo y tro" (the owner delegated the decision to main, 2026-10-17).
+    supersedes: []
+    enforcedBy: [packages/eslint/be/lib/webhook-handoff-intake.mjs]
+  - id: no-runtime-specs
+    date: '2026-10-17'
+    source: "the owner (thay) in chat, relayed by the main coordinator to the a19 drop-runtime-specs lead"
+    ruling: "The owner's words: \"Tests in packages/ and examples/ stay; the .claude runtime's own specs are removed entirely; delete codecov. Real tests (package clean-test + scaffold e2e) decide.\" Amended the same day: codecov stays for packages/ and examples/ (the example flags, the hfs template codecov.yml, the example uploads); only the runtime coverage goes (the runtime flag and the runtime lcov chain). Added the same day: no runtime tests in .claude contributions - a spec that exercises the runtime's own code (scripts/, modules/, the kernel, supervisor and work graph, checks, gates, CLI internals) outside packages/ and examples/ is refused; the scaffold e2e (e2e/) is the one exception. Recorded as: tests/ deleted; starci runtime verify, git land, runtime deploy, the release cut and release check prove a commit by the runtime check, the package clean-test and the scaffold e2e; a rule judged only inside the runtime (enforcer kinds runtime and work-validate, RUNTIME_ONLY_ENFORCERS) needs no package spec and no example app, and a rule whose checker is a library bundled in a package is proven by a package spec (amended 2026-10-22 by loosening-always-red: the per-rule specNa and exampleNa markers are gone); RT_SPEC_PLACEMENT refuses a runtime test."
+    supersedes: []
+    enforcedBy: [scripts/hfs/runtime-rules/test-layout.mjs, scripts/reconciler/runtime-verify.mjs, scripts/gates/runtime-tests.mjs, scripts/gates/scaffold-e2e.mjs, scripts/checks/lib/coverage-rules.mjs, scripts/guards/release-definition.mjs]
+  - id: alpha20-secrets-by-consumer
+    date: '2026-10-17'
+    source: "the owner (thay) in chat to the main coordinator, relayed to the a20 lead"
+    ruling: "Owner words: \"Ok chot update .claude alpha.20 va examples va nivo lun\". The five consumer classes are app secrets in sealed .enc members, app public config in the manifest, CI secrets in GitHub secrets, CI public config in GitHub vars, and Dependabot secrets in its own store. The services block renders Sonar, Codecov, Dependabot and audit configuration. Runtime examples use SonarCloud and Codecov cloud; private apps use their own Sonar host (NIVO: sonar.starci.org). CI quality includes audit in the release gate, skipping Codecov without coverage, parallel fast/test/build jobs with a dependent Sonar job, lockfile caches, immutable SHA pins, and cut/app gate refusal on red main CI with an owner-only override recording who and why. Remove the alpha.19 bootstrap and add encrypted outside-repository DB dump plus explicitly armed linked reset with backup and auth/storage choices."
+    supersedes: []
+    enforcedBy: [scripts/hfs/ci-declaration.mjs, scripts/hfs/rules/ci-custody.mjs, packages/hfs/ci/cli.mjs, packages/hfs/sync/quality-services.mjs, packages/hfs/sync/ci-commands.mjs, packages/hfs/release/gate.mjs, scripts/supervisor/release-cut-plan.mjs, scripts/supervisor/verify-receipt.mjs, packages/hfs/db/dump.mjs, packages/hfs/db/reset.mjs]
+
+  - id: candidate-ci
+    date: '2026-10-18'
+    source: "the owner in chat to main, relayed to the a22 lead"
+    ruling: >-
+      Fix the root cause, and never again have main receive a release whose CI is red, with the owner confirming afterwards. `release cut` (canon) and
+      `app release push` (apps) first push the exact release sha to a candidate ref (refs/heads/release/candidate-<version>, allowed by the pre-push policy),
+      wait for the full GitHub CI on THAT sha to be green (polling via gh, with a timeout), and only then move main and the tag atomically to the same sha.
+      Red or timeout means nothing reaches main; report the failing jobs. The "latest main CI red" refusal becomes: is the candidate CI for this sha green.
+      There is no override of a red candidate (amended by loosening-always-red, 2026-10-22: the emergency ci-override verb and its record are removed). The rendered
+      app ci.yml triggers on the candidate branch pattern. alpha.22 itself is released through the candidate flow. Main's rulings (2026-10-18): the alpha.21
+      ci-override step is dropped (the alpha.22 cut is judged by its own candidate CI); the app gate's default-branch CI refusal is dropped; a red candidate
+      keeps its ref for diagnosis, a re-cut of the same version force-moves only the candidate ref, never main; after a cut the candidate ref is left, documented.
+    supersedes: []
+    enforcedBy: [scripts/supervisor/release-candidate.mjs, scripts/supervisor/release-cut.mjs, scripts/supervisor/release-cut-plan.mjs, scripts/guards/release-push-gate.mjs, scripts/hfs/runtime-rules/git-triggers.mjs, packages/hfs/release/candidate-ci.mjs, packages/hfs/release/push.mjs, packages/hfs/templates/app/hooks/husky/pre-push]
+
+  - id: ci-standard
+    date: '2026-10-18'
+    source: "the owner in chat to main, relayed to the a22 lead"
+    ruling: >-
+      .claude defines ONE standard CI ruleset, its own CI and the examples follow it, and apps (NIVO) inherit it. The standard is written as canon rules in one
+      place (knowledge and the rule catalog): the job shape fast/test/build/sonar, full history with STARCI_BASE_REF, a heap per heavy step, the per-fe-app build env,
+      optional providers with probe and skip, timeouts, sha-pinned actions, prettier-stable renders, R299 context validity and the candidate-branch trigger.
+      The runtime's own workflows satisfy the same rules (rendered from the same source or checked by the same rule set); the examples are the reference and
+      each example's rendered CI runs green on GitHub through the candidate flow as part of the release proof; apps get it only via starci app sync, and app
+      check refuses drift.
+    supersedes: []
+    enforcedBy: [knowledge/hfs/ci-standard.yaml, scripts/hfs/runtime-rules/runtime-ci-standard.mjs]
+
+  - id: owner-path-1e9a6d1ce
+    date: '2026-10-18'
+    source: "the owner in chat to the main coordinator (\"Ok\"), relayed to the a22 lead with the instruction to record the approval"
+    ruling: "The owner approved the a22 owner-path commit 1e9a6d1ce (.github/workflows/examples.yml, the owner's protected zone): each example side lints in its own step with its own Sonar report and NODE_OPTIONS --max-old-space-size=6144, and an inline step merges the reports into the one reports/lint.sonar.json the Sonar scan imports, as the CI standard (ruling ci-standard) requires. It tightens a gate and loosens none; recorded after the commit, in the same a22 cut."
+    supersedes: []
+    enforcedBy: [.github/workflows/examples.yml, scripts/hfs/runtime-rules/runtime-ci-standard.mjs]
+
+  - id: graphql-tools-utils-override
+    date: '2026-10-18'
+    source: "the owner via the main coordinator, relayed to the a22 lead (NIVO v0.2.1 6a1d8e80 precedent)"
+    ruling: "npm audit --omit=dev --audit-level=high reports GHSA-7mx3-vvmw-hjmv (@graphql-tools/utils <=12.0.0, pulled by @nestjs/graphql 13.x). Without the breaking @nestjs/graphql 14, every scaffolded app root and every example that serves GraphQL carries the npm override of @graphql-tools/utils at its canon pin (knowledge/hfs/canon-pins.yaml), a fixed release on the same major that every declared range accepts (NIVO overrides 12.0.4, below the range @graphql-tools/schema and /merge declare). Narrow: this one package, this one advisory; drop the pin and the override when @nestjs/graphql 14 is adopted. It supersedes the alpha.18 acceptance of that advisory (graphql-13-advisory-accepted-until-a19)."
+    supersedes: [graphql-13-advisory-accepted-until-a19]
+    enforcedBy: [knowledge/hfs/canon-pins.yaml, packages/hfs/scaffold/app.mjs]
+
+  - id: owner-path-1e9a6d1ce-followup
+    date: '2026-10-18'
+    source: "the main coordinator, relaying the owner's approval of the owner-path change's intent (ruling owner-path-1e9a6d1ce)"
+    ruling: "The second alpha.22 candidate run (39102060047) was red on examples.yml's per-side starci app lint in every example (node_modules tracked, the canon outside the app root). The cause predates the split: the alpha.21 examples run 39070205551 failed the same way with the single combined step. The sealed example copy (scripts/hfs/example-secrets.mjs) links node_modules, git on Linux tracks that symlink as a file, and app lint resolved the linked canon outside the copy. The follow-up keeps the owner-path steps of 1e9a6d1ce unchanged and fixes the copy (its git exclude names node_modules) and the lint's own-install check (the app's linked node_modules counts as its install); a new L4 row, linux-examples-lint, runs the examples workflow's steps up to its lint in Linux before every cut."
+    supersedes: []
+    enforcedBy: [scripts/hfs/example-secrets.mjs, packages/hfs/lint/run.mjs, scripts/supervisor/release-examples-lint.mjs]
+
+  - id: mcp-tools-snapshot-no-example
+    date: '2026-10-21'
+    source: "the lead, under the owner's delegation of code decisions to the lead (2026-10-20), relayed to the smells3 lane; owner to ratify"
+    ruling: "The opt-in slot be.contract.mcp-tools and rule R302 HFS_MCP_TOOLS_SNAPSHOT carry no example app evidence: no example app serves an MCP server, and adding a catalog to one would commit an interface it does not have. The package spec packages/hfs/src/mcp-tools-snapshot.spec.mjs judges a passing and each violating catalog shape in both editions instead."
+    supersedes: []
+    enforcedBy: [scripts/hfs/rules/mcp-tools.mjs, packages/hfs/src/mcp-tools-snapshot.spec.mjs]
+
+  - id: release-plan-identical-bundler
+    date: '2026-10-21'
+    source: "the lead, under the owner's delegation of code decisions to the lead (2026-10-20), relayed to the smells3 lane; owner to ratify"
+    ruling: "starci release publish does not block an already-published bundling canon whose registry integrity equals the integrity of its local pack when another package of the set publishes: identical bytes already carry the final canon-pins copy, so the publish cannot change them. A published bundler whose bytes differ is blocked exactly as before, and an unpublished one is unchanged. This corrects a false positive; it loosens no check of differing content."
+    supersedes: []
+    enforcedBy: [scripts/gates/release-plan.mjs]
+
+  - id: lite-chat-full-op
+    date: '2026-10-21'
+    source: "the owner in chat, relayed by the lead to the smells3 lane (the owner's words in Vietnamese: lite apps are coded directly in Claude or Codex, not through an op, but a full app still goes through ops)"
+    ruling: "An HFS app of edition lite (hfs.json `edition: lite`) is coded directly by a chat agent (Claude or Codex), not through a Kernel op or workflow: no starci kernel dispatch, op ledger or op settle. The agent still runs the app's own gates: starci gate read before editing, the specs written with the code, starci gate run, starci app lint and starci app check before the commit, and the managed pre-commit hook; these are app gates, not ops. An app of edition full is changed only through Kernel ops, with the op loop of knowledge/op-gate.yaml inside the op; an agent does not hand-code a full app outside an op."
+    supersedes: []
+    enforcedBy: [knowledge/op-gate.yaml, skills/starci/references/code-delegation.md]
+
+  - id: release-require-ci-per-project
+    date: '2026-10-21'
+    source: "the owner in chat, relayed by the lead (the owner's words in Vietnamese: leave CI, check locally and push; add a require-CI option per project; make require CI false by default and false for NIVO and starci-next; the StarCi runtime itself has no require-CI setting)"
+    ruling: "An app's application-stacks.yaml release.requireCi (true or false, default false) decides whether starci app release push waits for the candidate CI of the release sha. With false the push still needs the annotated release tag and the green L4 record of the local release gate, still runs git push --dry-run --atomic first through the pre-push hook, then pushes the default branch and the tag atomically; the L4 record and the push output state that CI was not required by release.requireCi=false. With true the candidate CI path keeps its meaning. NIVO, starci-next, the example apps and the scaffold inherit false. The StarCi runtime release (starci release cut and its candidate CI) is not affected and has no such setting."
+    supersedes: []
+    enforcedBy: [packages/hfs/release/gate.mjs, packages/hfs/release/push.mjs]
+
+  - id: orca-terminal-create-official
+    date: '2026-10-22'
+    source: "the owner in the lead chat (the owner allowed it, in Vietnamese), relayed by the lead to the alpha.26 lane with feat/orca-terminal-open 611f27653"
+    ruling: "The runtime may create a plain Orca shell: `terminal create` is an official host verb (modules/host/orca/calls.yaml terminal-create) and leaves api.yaml forbiddenForStarciOrchestration; check-host-boundary no longer bans it. The shell launches no agent: an agent is still launched only by orchestration worker-start, and a task is never dispatched into a terminal the runtime made. This is a feature ruling, not a loosening: the gate-loosening table (modules/kernel/gate-loosening.yaml) does not watch check scripts or the Orca forbidden list, so this entry, not a gate-loosening fingerprint, is the owner's record of the removed ban."
+    supersedes: []
+    enforcedBy: [scripts/checks/check-host-boundary.mjs, modules/host/orca/api.yaml, modules/host/orca/calls.yaml, scripts/kernel/orca-relay.mjs]
+  - id: loosening-always-red
+    date: '2026-10-22'
+    ruling: "The owner's words are \"Go han cua duyet loosening va 12 entry cu trong alpha.27; loosening la luon do\" (remove the loosening approval route and the 12 old entries in alpha.27; a loosening is always red), relayed by the alpha.27 lead. A change that loosens a gate or check is always refused by the land gate and flagged by the gate-loosening self-check; no approval lets one through, the owner's included, and the fix is to restore the gate. The 12 gate-loosening-<fingerprint> approval entries are removed with the route. An entry that only moves with a git rename of the paths it names is no loosening."
+    supersedes: []
+    enforcedBy: [scripts/lib/gate-loosening.mjs, scripts/supervisor/land-gate-loosening.mjs, scripts/checks/check-gate-loosening.mjs, modules/kernel/roles.yaml]
+
+supersedes:
+  'ruling:R212/case-2': ['ruling:R212/case-1']
+  'ruling:R212/case-4': ['ruling:R212/case-1', 'ruling:R212/case-2']
+  'ruling:R289':
+    - id: 'ruling:R245'
+      clause: 'parses inline or imports'
+      ownerRuling: 7
+      date: '2026-10-14'

@@ -1,0 +1,73 @@
+schema: starci/agent-card@1
+agent: codex
+kind: native-managed-agent
+start:
+  api: orchestration.worker-start
+  agentArgument: codex
+  # The agent's own approval-bypass mode. Orca applies it from settings.agentDefaultArgs; the host preflight refuses a launch
+  # when that setting lacks it (the agent would stop at an approval prompt no one answers).
+  bypassFlag: '--dangerously-bypass-approvals-and-sandbox'
+  # A launch that names no model starts the provider pool's default, never the model of the user's
+  # ~/.codex/config.toml (a dead default there answers 400 and the worker never reaches a prompt: live smoke
+  # 2026-10-02). `pool` resolves to modules/models/registry.yaml pools.<provider pool>.defaultModel.
+  defaultModel: pool
+readiness: worker-start-receipt
+# Content is a file; what travels is the reference (scripts/agent/prompt-file.mjs): a follow-up prompt above allocation.promptFile.maxChars is written to a
+# file and the terminal is given one line that names it, so no TUI paste heuristic (a folded "[Pasted Content N chars]" chip, a swallowed Enter) is involved.
+delivery:
+  mode: file-reference-above-inline-limit
+  prompt: 'Read <file> completely. It is your dispatched prompt. Follow it exactly.'
+roles:
+  - workflow-kernel
+  - operation-agent
+name:
+  api: terminal.rename
+release:
+  api: orchestration.worker-release
+  # worker-release alone does not end every agent (a released cursor worker kept its cursor-agent process running): the runtime then closes the
+  # worker's terminal and proves that no process of that terminal's shell tree remains (scripts/machine/worker-close.mjs, allocation.workerClose).
+  closeTerminal: true
+  verify: terminal-process-tree
+launchTrust: >-
+  Requires the current installation's explicit launchTrust automatic profile and an exact approved repository root. Before an authorized launch
+  scripts/agent/trust.mjs appends [projects."<path>"] trust_level = "trusted" for the cwd and its git root to
+  the active managed CODEX_HOME config.toml; explicit provider declines and unresolved launch directories are refused. A consent screen alone cannot prove scope.
+gateAutoAnswer:
+  delayMs: 500
+  settleMs: 6000
+  gates:
+    codex-directory-trust:
+      requiresLaunchTrust: true
+      select: 'Yes, continue'
+    codex-update-prompt:
+      select: 'Skip until next version'
+    # owner, 2026-09-24: always keep the current model; never 'Switch'
+    codex-rate-limit-model-nudge:
+      select: 'Keep current model (never show again)'
+verifiedAt: 2026-09-20
+verifiedAgainst: 'codex v0.155.1'
+forbidden:
+  - shell-only-role
+  - unsupervised-dispatch-inject-as-success
+capabilities:
+  schema: starci/codex-capabilities@1
+  # Evidence, nivo ledger 2026-09-23: image_gen.imagegen — interface.draw settled pass with ImageGen
+  # provenance on codex (AUTH a2 gpt-5.6-sol; WSPV a2 luna, a3/a10-a14 sol; public-web a3 luna).
+  # browser-dom — public-web uat.verify a5 (luna) settled pass driving the served build in a browser
+  # (33 screenshots, 7 WebM, per-route H1 and overflow DOM checks). WSPV interface.audit a6 blocked
+  # CAPTURE_OR_MEASUREMENT_UNAVAILABLE on a PNG-only handoff without trying to serve, not on a missing tool.
+  # image_gen.imagegen is the built-in image tool the headless imagegen call (starci work imagegen) runs; no op route requires it of its agent.
+  hostTools: [image_gen.imagegen, browser-dom]
+  orca:
+    nativeManagedAgent: supported
+    agentId: codex
+    roles:
+      - workflow-kernel
+      - operation-agent
+quota:
+  probe: orca-account
+  window: weekly
+# No text or screen pattern: nothing in Codex output opens a quota circuit. The probe clears an open one
+# once the Orca account's weekly window reads under 100% (scripts/agent/credential-probe.mjs orcaAccountQuota).
+quotaExhausted:
+  probe: {kind: orca-account}

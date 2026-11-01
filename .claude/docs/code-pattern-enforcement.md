@@ -1,0 +1,303 @@
+Owner: modules/models/code-patterns.yaml
+# Code pattern enforcement
+
+## Backend event bus rules
+
+Both editions use typed event contracts and transactional outbox writes.
+`BE_EVENT_CLASS_CONTRACT` requires each event class under
+`be/src/modules/events/<service>/` to match its vendored
+`be/contracts/<service>/events.json` name and version; every contract entry also
+needs its class, and the filename replaces event-name dots with dashes.
+
+`BE_OUTBOX_WRITE_TX` requires a domain service to publish events or call typed
+queue producers with its own transaction manager. A transaction callback manager
+or a typed transaction parameter is accepted; an injected shared manager, a
+missing manager or an outbox write from a feature is refused.
+
+`BE_EVENT_CONSUMER_SHAPE` requires an `EventConsumer` in
+`transport/message/<event>.consumer.ts`, with its filename derived from the
+typed event's literal name. Its handler reads `delivery.eventId` so the command
+can preserve the deduplication key. `BE_QUEUE_PRODUCER_SHAPE` requires every
+queue producer that writes `QueueOutbox` to declare an `EntityManager` parameter
+and pass that same parameter to the outbox write.
+
+## R203 thin features
+
+`BE_FEATURE_THIN` reports business decisions, computation or extra delegation in a thin
+feature role in both lite and full. A handler maps input and delegates once to its
+module service; move branches, loops and calculations into the covered modules.
+The edition-specific RuleTester witnesses accept a direct service delegation and
+reject a handler that branches and makes a second delegation.
+
+`modules/models/code-patterns.yaml` is the executable inventory for the fixed StarCi NestJS and Next.js code profiles. The authored manifest, not every rule exported by an installed lint package, decides which code obligations apply. The runtime reads this authored manifest directly.
+
+## Command and operation
+
+The lint of a repository is `starci app lint` (the ESLint canon plus `starci app check`, one `starci/lint@1` report); code runs it over its changed
+files through `starci gate run --root <app> --changed <files...>` (ops name it `starci-gate`). Who runs it follows the app's edition (owner ruling
+`lite-chat-full-op`): a full app is changed only by a Kernel op, with the gate inside the op loop of `knowledge/op-gate.yaml`; a lite app is coded
+directly by a chat agent, which runs the same gate, `starci app lint`, `starci app check` and the managed pre-commit hook as standalone app gates, with
+no op. The brief template of both is [code delegation](../skills/starci/references/code-delegation.md). The layout and public owners come from `hfs.json` and the slot manifest. The gate prints one
+`starci/gate@1` JSON report: exit `0` clean, `1` findings new against the base, `2` a tool could not run.
+`review.verify` in `lint` mode runs the whole-repository `starci app lint --format json` plus the selected Work/stack checks and
+any additional project checks. The manifest `modules/models/code-patterns.yaml` is the rule inventory the check-hfs-rules
+parity gate and canon-scan read. Finding an issue
+settles only a measurement; repairing source and completing delivery retain their
+own authority and evidence.
+
+## Result contract
+
+Each obligation has a stable ID, source knowledge rule IDs, path applicability, a mechanical requirement, its exact machine, and any remaining semantic review. `status` has only three values:
+
+- `implemented`: the named machine exists. A pass still requires the exact target files, config and source revision to be checked cleanly.
+- `missing`: the requirement is mechanical but its named checker is not implemented. Code-pattern conformance must fail.
+- `conflict`: an available checker implements a different or obsolete rule. Code-pattern conformance must fail until the rule and manifest are repaired coherently.
+
+`semanticOnly` is reserved for decisions that cannot be answered from syntax, resolved dependencies or repository metadata. It names the reason and guidance. A rule with any mechanically decidable clause remains in `obligations`; moving it to `semanticOnly` is not a waiver.
+
+## Machine kinds
+
+### ESLint
+
+The checker loads the target-local canon package, verifies the exact package name, version and deterministic content digest, then resolves each manifest rule ID. The digest sorts included files by POSIX-relative path and hashes each UTF-8 path, a null byte, raw file bytes and another null byte in sequence; the manifest declares its include/exclude globs and expected file count. HFS checks the exact managed config render and rejects extra local tool configuration or flags; the pinned canon factories own required levels, options and inline-config policy. The actual lint report must cover the selected production files without warning or error. This is not a separate effective-config audit of every possible file. A repository-private rule cannot satisfy a canon ID.
+
+The manifest may select a subset of a package's exported toolbox. An extra export is not automatically law. Conversely, an obligation does not disappear because the package recommendation omits or disables its rule.
+
+### Architecture
+
+Architecture obligations bind a `starci/architecture-check@1` result from `starci runtime architecture <app>/<side>` (`starci app check` runs it over `be/` and `fe/`). The direct architecture result exposes checked-rule coverage. `starci app check` runs the machine in process and records its status, files, kinds and sides; the lint aggregate retains its findings count. Those aggregates do not themselves bind a separate architecture-report digest or all required rule IDs. Record the actual direct result and applicable coverage before claiming those obligations are proved; missing, invalid or non-clean required coverage is not conformance. Static dependency checks do not prove dependency-injection lifetime, authorization or behavior; the obligation's semantic companion states the remaining review.
+
+There is no third machine kind: every obligation is judged by a canon rule or the architecture machine, or is not part
+of the locked convention; `require-public-member-jsdoc` (R109), `replacement-throw-carries-cause` (R108) and
+`props-fields-readonly` (R110) are canon rules at error.
+
+## Coverage and remaining work
+
+The manifest is the current implementation inventory; inspect each obligation's
+status and actual result instead of treating this prose as a frozen count.
+Installed rules that contradict the adopted standard must be off while their
+replacement obligations remain required. That update does not waive an
+unimplemented replacement. Private Academy rules do not become shared canon
+merely because their names occur in a local config. This inventory does not
+authorize product rewrites or lint-package publication.
+
+The architecture adapters keep their guides beside this file:
+[Nest contract and readonly boundary](nest-contract-check.md) and
+[Next data lifecycle](next-data-lifecycle-check.md). The direct architecture result records
+`frontendDataLifecycle` coverage independently of its rule IDs. A proven absence
+of SWR is not applicable; selecting SWR without a supported contract is
+unavailable.
+
+<a id="r49"></a>
+## Frontend environment owner (R49)
+
+`FE_ENV_OWNER` keeps environment reads in `modules/config`. Other frontend modules receive
+validated configuration from that owner instead of reading the environment themselves.
+An endpoint or secret must not fall back to localhost, a hardcoded address or a default value;
+missing configuration must remain visible.
+
+<a id="r50"></a>
+## Frontend transport and data lifecycle (R50)
+
+`FE_TRANSPORT_OWNER` requires one owned GraphQL transport and its auth/no-auth client link
+chains, plus the owned REST client for uploads, presigned URLs and auth endpoints. Several
+frontend apps share the API package when they share that transport. Tokens and locale belong
+to the request and session owners, rather than module state. `FE_EFFECT_FETCH` refuses data
+fetching in component effects; components read through their SWR hooks.
+
+`FE_SWR_KEY_IDENTITY` requires each SWR key to carry every input that identifies its result;
+a gated request uses a null key until its inputs are ready. `FE_SWR_MUTATION_RESOURCE_IDENTITY`
+requires a mutation hook to retain the identity of the resource it changes. See the
+[Next data lifecycle guide](next-data-lifecycle-check.md) for the checked SWR contract.
+
+<a id="r51"></a>
+## Frontend response outcomes (R51)
+
+`FE_HTTP_STATUS_COLLAPSE` requires the frontend's one `GraphQLResponse<T>` envelope with
+`success`, `message`, `error` and `data`. A failed request keeps its failure reason instead of
+becoming empty successful data. An UNAUTHENTICATED or FORBIDDEN answer, including HTTP 401
+or 403, becomes `refused`; the error link refreshes once before the session sends the user
+to sign-in. `FE_OUTCOME_KIND_UNHANDLED` requires consumers to handle every outcome kind
+explicitly when the outcome union changes.
+
+<a id="r52"></a>
+## Frontend generated wire types (R52)
+
+`FE_WIRE_GENERATED` requires graphql-codegen to read `be/contracts/<app>/schema.graphql`
+in place and generate the wire types in the frontend API owner's GraphQL `__generated__`
+directory. Operation request and response types re-export those generated types instead of
+declaring wire shapes or response type assertions by hand. Keep the codegen script and the
+generated directory's `.schema-sha256` stamp current with the schema.
+
+<a id="r53"></a>
+## Frontend error and pending boundaries (R53)
+
+`FE_ERROR_BOUNDARY_MISSING` requires each Next.js frontend's global error boundary and its
+locale error, not-found and loading boundaries. `FE_SUSPENSE_NULL_FALLBACK` requires a
+visible pending state for Suspense: a missing fallback, `null` or `undefined` leaves the
+pending interface blank and is refused.
+
+## Comment and executable verification obligations
+
+**REF-COMMENT-1 — Caller contracts and decision rationale.** Public APIs carry non-empty English
+JSDoc describing responsibility and caller-visible constraints, results and effects. Non-obvious
+helper contracts document constraints that signatures and code do not reveal. Inline comments
+above important decisions explain the invariant, reason and consequence. TypeScript keeps types
+in signatures; parameter and return descriptions add constraints rather than repeat names or
+types. JavaScript JSDoc may express API types. Apply R89, R91 and R109 without relaxing them.
+Empty blocks, restated names, misleading or stale claims, and missing important rationale fail
+review. Straightforward code needs no per-line, every-helper or comment-density quota.
+
+`scripts/checks/check-runtime-public-docs.mjs` checks adjacent descriptions at runtime API calls
+and explicit CLI callable bindings. The product canon owns export and public-member checks.
+These machines establish description presence only. Review accuracy and important rationale
+against source, callers and relevant tests, and record mechanical and semantic proof separately.
+
+**REF-VERIFY-1 — Complete applicable executable coverage.** Run checks for every applicable
+code-pattern rule and selected production file. Missing checkers, unavailable tools, ignored
+files, disabled required rules or unsupported required syntax block conformance; agent review
+cannot replace a missing machine. Review design and edge cases using the applicable Markdown
+guide and real behavior evidence. Record coverage, design findings and limitations separately
+in existing evidence, including disabled rules, directives and structural omissions.
+
+**REF-VERIFY-2 — No bypass.** Do not manufacture conformance with lint or TypeScript suppressions,
+lower rule severity, wider ignores, source moved to test or generated lanes, any or casts,
+forbidden-dependency aliases, or renamed forbidden facades. Verify the exact production files
+were included in real checks. Existing suppressions and tool blind spots grant no bypass. A
+legitimate tool defect needs a narrow reviewed correction and regression coverage; product
+conformance remains unproved until the underlying convention is independently verified.
+
+## Backend jobs and projections rules
+
+Both editions keep the job row under `modules/platform/jobs`. `BE_JOB_WRITE_OUTSIDE_OWNER`
+refuses direct writes from another owner; use the `JobClaims` port. `BE_JOB_FENCE_REQUIRED`
+requires a non-optional numeric `expectedFencingToken` on guarded writes, refuses casts
+around that token and requires a catch around a guarded write to rethrow. A stale worker
+must stop when it loses its claim. `BE_JOB_RUN_KEY` requires every integration call from
+a job step to carry a `RunKey` produced by `JobClaims.runKey(job, step)`, without a cast.
+`BE_JOB_SHAPE` places `<job>.processor.ts` in that job's `transport/queue/` directory,
+extends `FencedProcessor`, and keeps `JobStep` implementations in the job's `steps/` directory.
+
+`BE_PROJECTION_WRITE_OWNER` allows writes to a projection entity only from its own
+`*.projection.ts` file; other owners read it or request a recompute. `BE_PROJECTION_SHAPE`
+limits public projection methods to `recompute*` and `get*`, keeps entity exports inside
+the projection and refuses an API feature calling `recompute*`. A reactor, job or CLI
+command triggers recomputation; API features call `get*`. These laws apply in lite and full.
+
+## Evidence limits
+
+A complete code-pattern result proves only the declared mechanical obligations over the recorded files and tool identities. Agents still review responsibility, cohesion, state/effect ownership and edge cases using `docs/architecture.md`. Applicable typecheck, boot, contract, concurrency, recovery and rendered behavior evidence remains separate.
+
+## Coding evidence chain
+
+This trace joins the existing operation, tool and settlement owners. It does not
+add writer authority or turn a selected check into whole-product completion.
+Follow the supported owning profile: application checks use the actual app
+install; runtime and other source use their declared checks. An unavailable
+applicable tool leaves the criterion unjudged, as REF-VERIFY-1 requires.
+
+```mermaid
+flowchart LR
+  A[Approved goal and context] --> B[Dispatch authority and READ]
+  B --> C[CODE within owned paths]
+  C --> D[Canon, HFS, lint, typecheck and asked tests]
+  D --> E[Merge guard and semantic review]
+  E --> F[REPORT and immutable proofs]
+  F --> G[Independent checks and settle]
+  G --> H[Scoped checkpoint]
+  H --> I[Integrated L3 and release L4]
+```
+
+| Boundary | Owning source | Evidence and refusal |
+| --- | --- | --- |
+| Goal and reviewed context | `scripts/goal/define-goal.mjs`; `scripts/context/pack.mjs`; `scripts/kernel/op-prompt.mjs` | The entry skill presents the assessed op chain for the owner's exact approval before persistence. The filed goal, op parameters, current SRS/SDS and selected knowledge define authority and inputs; code or a green tool cannot redefine product intent. A changed goal needs the existing revision approval. The prompt/context packet carries the selected operation, not every possible quality leg. |
+| Write admission | `scripts/kernel/verbs/dispatch.mjs`; `scripts/kernel/target-repo.mjs`; `scripts/kernel/workflow-worktree.mjs`; `scripts/kernel/cli.mjs#opGuardLaunch` | Dispatch rechecks the op, workflow phase, repository, grants and registered placement before launch. Path leases and the filed attempt bind its write set, base and dispatch identity. CODE stays within that set. A queued instruction or a passing checker cannot widen it. |
+| Admitted inputs and READ | `scripts/kernel/input-digests.mjs#opInputPaths`/`recordInputs`; `scripts/kernel/dispatch-admission.mjs`; `scripts/gates/gate-input.mjs#gateInputSnapshot`; `scripts/gates/read-digest.mjs`; `scripts/kernel/gate-settle.mjs#judgeLoop` | Input identities include declared top-level and selected mode reads. READ records topic/example identities, not proof that a human understood them. Missing required READ coverage refuses. `inputDrift` distinguishes Source advisory drift from committed Work changes owing follow-up; it is not a universal current-byte freshness gate. New legs qualified by the recorded policy identity capture their owned target baseline before launch; a missing required baseline refuses. CHECK binds that owned range and required READ inputs, not an unrelated clean slice. |
+| Installed canon and static code laws | `scripts/gates/gate.mjs#installedCanonFindings`; `packages/hfs/lint/run.mjs`; `packages/hfs/sync/managed.mjs`; `scripts/hfs/check.mjs` | The exact installed canon version/content identity, managed config render, selected file coverage and actual linter results matter. ESLint/stylelint and HFS measure separate laws; a tool failure is not a clean measurement. Runtime layout/layer laws are measured by its own HFS runtime check. The obligation inventory above remains authoritative. |
+| Owning TypeScript programs | `scripts/gates/gate.mjs#headTsc`/`baseTsc`/`newTscFindings`; `scripts/machine/ladder-typecheck.mjs` | Record the actual owning tsconfig and bounded target-local install. Compiler diagnostics compare the same declared base and current program; existing base errors are reported as debt. An absent install or unreadable required program is unavailable. Syntax checking runtime JavaScript is distinct from app TypeScript conformance. |
+| Codegen and build | `scripts/gates/gate.mjs#prepareTypes`; the owning app/package manifest scripts | Gate preparation runs declared root codegen and dist-exposing workspace prerequisite builds. It does not run every app build or prove boot/readiness. The operation separately declares and records its applicable actual app build; the build output and its input identity must be current. |
+| Required tests and layer proofs | `scripts/gates/gate.mjs#runTests`; `scripts/gates/unit-run.mjs`; `scripts/gates/test-world-run.mjs`; `scripts/kernel/gate-settle.mjs#judgeUnitRun`/`judgeTestWorld` | Preserve real process status, the selected scope, counters and failed assertions/suites. A required zero, skipped, pending/todo, interrupted, malformed or inconsistent run is not a pass. Omitting optional `--tests` does not manufacture test evidence. Unit coverage/kit and integration/e2e/contract test-world ownership are additional criteria. The accepted goal and op select these layers; ordinary code edits do not automatically run all of them or UAT. |
+| Applicable Sonar judgment | `knowledge/sonar-gate.yaml`; `scripts/gates/sonar-local.mjs`; `scripts/gates/sonar-gate.mjs#judgeSummary`; `scripts/kernel/sonar-settle.mjs#judgeJob`/`recordSonarJudgment` | Only the gate's enforced operations owe this summary. Settle judges it under current owner settings rather than trusting a summary's claimed mode. Red or missing proof blocks done; unavailable scanning records an explicit non-pass and runtime incident. Coverage debt and owner-selected modes retain their own declared limits. |
+| Merge preservation | `scripts/gates/gate.mjs#mergeGuard`/`droppedMainChanges` | Recompute qualifying two-parent merges in `base..HEAD` using the actual main-side parent. Dropping main's changes is always a new finding. A range with no qualifying merge, or no main tip to compare, is not a general proof of merge or product correctness. |
+| Architecture and comment meaning | `docs/architecture.md`; `docs/code-pattern-enforcement.md#comment-and-executable-verification-obligations`; `modules/ops/ops/review.verify.yaml`; `scripts/kernel/gate-settle.mjs#judgeReviewDefects` | Review responsibility, dependencies, state/effect ownership, caller constraints and important rationale against source, callers and behavior tests. REF-COMMENT-1 requires useful contracts, not comment quotas. `runtime-public-docs` measures adjacent descriptions on runtime API/explicit CLI boundaries only; product R89/R91/R109 retain their own canon scope. A failing or unjudged required semantic criterion cannot receive a passing review. The runtime checks defect classification, not the truth of an agent's judgment. |
+| REPORT, integrity and independent checks | `scripts/kernel/verbs/report.mjs`; `scripts/kernel/verbs/shared/report-evidence.mjs`; `scripts/kernel/verbs/record-checks.mjs`; `scripts/kernel/settle/job-settle.mjs#verifyDeclared`; `scripts/kernel/proof-integrity.mjs#verifyProofs` | A report must bind the real dispatched attempt, owned paths and current delivery inputs. Scratch attachments enter content-addressed storage; immutable filing and hash/chain verification protect retained evidence. Re-verifiable checks run again; an unreproducible green claim stays declared and cannot supply independent green checks. Content integrity does not itself prove scope, freshness or behavior. |
+| Verdict and checkpoint | `scripts/kernel/verbs/settle.mjs`; `workflow-checkpoint.mjs`; `workflow-checkpoint-state.mjs`; `workflow-rebase.mjs` | Pass requires the filed outcome and independent green checks plus applicable READ/gate, mechanism, cut and owner gates. The same workflow lock protects acceptance and scoped effects. A changed owned delta creates its checkpoint; no-change reuses the SHA. Prepared effects retain dispatch attribution for recovery, with conflicting newer bytes held visibly. Tested HEAD, checkpoint SHA and later landed HEAD are separate identities. |
+
+The detailed proof policy remains in [verify-proof](verify-proof.md). Head-green
+checks alone do not prove that a test discriminates the change. The
+`runAtBase` path reports a base-green, failed-to-build or timed-out contrast as
+`weak`, which its existing policy accepts with a finding; that is not a proven
+fail-before result. The sealed protected-oracle path has its own stricter
+applicability and verdicts. Report the actual path and verdict rather than
+promoting one into the other.
+
+New mandatory evidence fields follow their owning contract change and recorded
+admission snapshot, including any withheld or released changes; a newer Source
+revision alone does not assign them to every in-flight leg. The input-binding
+owner freezes that contract context before launch. Existing well-formed receipts
+with the same ABI may be rejudged for actual errors, but an older receipt is not
+promised acceptance: missing, skipped, inconsistent or stale applicable proof
+remains non-pass. Do not infer an exemption or a qualification from a date label.
+
+## Runtime qualification scope
+
+[Source process](source-process.md) owns the ladder. The runtime has no specs of its
+own (owner ruling `no-runtime-specs`): a runtime change is qualified by `starci runtime verify`
+(the full runtime check, the clean-test of the packages it touches and the scaffold e2e on one
+commit). App gate baseline debt remains reported: a clean delta is
+not a claim that the complete existing app has no findings.
+
+L2/L3 retain an initial red run and one serial retry as separate evidence. A
+retry-green flake is recorded as a flake; its retry counters describe that subset,
+not the entire original selection. Native test concurrency may be selected from
+CPU/RAM, but scope and acceptance criteria do not change with concurrency.
+
+`scripts/supervisor/release-l4.mjs` owns the release-wide suite, example installs,
+builds and required proofs; `release-linux-parity.mjs` owns the corresponding
+Linux light jobs and host-skipped test leg. Missing steps or tooling refuse the
+release. A skipped test needs the actual alternate passing leg, subject only to
+the existing named browser-conditional policy. L3 does not establish L4, Linux,
+publication, live integration, rendered UI or final delivery completion.
+
+Use the actual retained receipt's Source/tool identity, scope, raw exits, counts,
+base/current input identities and limitation fields. A diagram, declared command,
+source inspection, selected spec count or an old green receipt is not execution
+evidence for the current cut.
+
+For example, a clean JSON test report followed by an unexplained exit 7 is a tool
+failure; a required pending scenario is not executed coverage. A changed package,
+tsconfig, generated prerequisite or source deletion must refresh the impacted
+compiler programs even when Git's dirty status has not changed. A valid report
+hash proves retained bytes, while a changed input still owes fresh applicable
+judgment. Independent operation verification, supervisor land, release and final
+delivery reconciliation each retain their separate authorities and receipts.
+
+## Front-end server boundary {#r243}
+
+R243 applies to every front-end app and package in both editions.
+`FE_SERVER_ACTION_FORBIDDEN` rejects a `"use server"` directive in a module or
+function prologue. `FE_ROUTE_HANDLER_FORBIDDEN` rejects handlers under an app's
+route tree except `health/live/route.ts` and the `fe.route.callback` auth callback
+slot. Move API, webhook and scheduled work to a back-end feature; the front end
+calls its operations through `modules/api` and the SWR hooks.
+
+## Canonical front-end dependencies {#r244}
+
+R244 uses `knowledge/hfs/fe-stack.yaml` in both editions.
+`FE_STACK_FORBIDDEN` rejects a forbidden alternative in a front-end manifest or
+source import, including package subpaths and type-only imports. Replace it with
+the concern's canonical library and remove the dependency. The mixed app-root
+manifest excludes libraries owned by the back end; front-end workspace manifests
+remain subject to the full forbidden list. The lint rule also confines Supabase
+imports to the `modules/auth` boundary.
+
+
+### R156 kind isolation
+
+BE_KIND_ISOLATION rejects imports between backend features whose owner slots name different trigger kinds. Static imports, dynamic imports, re-exports and type-only imports all count. Imports within one owner and imports into shared modules pass in both editions.
+
+## R93 vendor and Grammar ownership
+
+`FE_VENDOR_BOUNDARY` keeps vendor icons in the Icon leaf, uses the heroicons family at the declared glyph sizes, excludes decorative icons from metric cells, and requires a named owner for vendor primitives. These boundaries apply in lite and full.
+
+`ARCH_GRAMMAR_EXPORT_BYPASS` rejects imports outside the selected Grammar code and style entries. Source import findings belong to the `grammar-entry` ESLint rule. `ARCH_GRAMMAR_CONTRACT_INVALID` reports invalid installed package exports, peers, consumer dependencies or style contracts on a package manifest. The architecture machine retains these package findings in app check; they are never TSX lint reports. A valid installed contract and imports through the selected entries are clean in both editions.

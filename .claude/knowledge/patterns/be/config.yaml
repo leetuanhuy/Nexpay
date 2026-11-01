@@ -1,0 +1,172 @@
+schema: starci/knowledge-source@1
+id: be.config
+title: Backend configuration and secrets
+purpose: |-
+  Given a value a backend needs from its environment, who reads it, who parses it and how does it reach the code that
+  uses it? One `EnvSource`, a typed `<App>Env` interface and `read<App>Env` reader in `<app>.env.ts`, one typed parse per
+  capability, options through the `Inject<Cap>Options()` injector, and no default for a secret, a credential or an address.
+appliesTo:
+  - backend
+family: be
+# The slot ids this topic teaches (knowledge/hfs/slots.yaml); scripts/gates/read-digest.mjs inverts these
+# into the READ-step slot -> pattern-topic map (knowledge/op-gate.yaml kinds), each slot's topics in index.yaml order.
+slots: [be.app, be.app.api, be.app.worker, be.app.cli, be.platform]
+provenance:
+  reviewedAt: 2026-09-30
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/slots.yaml
+    - knowledge/hfs/rules.yaml
+    - knowledge/application-stacks.yaml
+    - owner-locked BE convention 2026-09-30
+    - https://docs.nestjs.com/fundamentals/dynamic-modules
+  limitations: |-
+    Static checks prove where the environment is read and that a secret, url or host reader has no default. They do not
+    prove that a deployed environment provides the value, that a secret is sealed correctly or that a URL is right;
+    readiness and deployment evidence prove those separately. Agents never read, print or commit a secret value.
+rules:
+  - id: BE-CONFIG-1
+    title: One reader of the environment
+    kind: mandatory
+    hfsRules: [R43, R26, R90, R289]
+    requirement: |-
+      `platform/config` owns `EnvSource`, the standard reader of `process.env`. Secrets use `env.secret("<NAME>")`:
+      `EnvSource.fromProcess()` resolves `<NAME>_FILE` first for the `.starcistacks` custody; its exact file contents take
+      priority over `<NAME>`, and an empty or unreadable path stops boot without falling back or trimming the contents.
+      When `<NAME>_FILE` is absent, it reads plain `<NAME>`. It offers the typed readers `env.string`, `env.int`, `env.bool`,
+      `env.url`, `env.secret`, `env.enum`, `env.duration`, `optional(...)` and `anyDeclared(keys)`.
+      `be/apps/<app>/src/<app>.env.ts` exports an explicit typed `<App>Env` interface and
+      `read<App>Env(env: EnvSource): <App>Env` (for example `ApiEnv` and `readApiEnv`); the interface declares its own
+      readonly parsed members, typed from the capability parsers and structurally compatible with the app's options.
+      The file stays at most 150 lines and holds fail-fast environment parsing only, through the typed
+      readers and capability parse helpers, with no localhost or default host fallback, logic, module composition,
+      business code or feature imports. The role name stays `<app>.env.ts`, never `env.ts`.
+      `main.ts` (at most 80 lines) builds `EnvSource` once, imports and calls the reader, then builds `AppOptions` and boots.
+      These are the only app files that may read `process.env` or `EnvSource`; scaffolds and examples use the reader above.
+      `<app>.options.ts` holds env-derived values and port bindings, with no parsing; `main.ts` builds `AppOptions` from them.
+      A module factory, `compose/<area>.ts` and `<app>.options.ts` never read `process.env` or `EnvSource`. `envConfig()`, `ConfigService`,
+      `@nestjs/config`, dotenv or preload files and module-level config reads do not exist, and `platform/config` imports no
+      domain or integration type.
+    rationale: |-
+      A single reader makes every dependency on the environment visible and keeps platform independent of domain.
+    cases:
+      - id: case-1
+        when: Bootstrap
+        write: 'const env = EnvSource.fromProcess(); const options = createApiAppOptions(readApiEnv(env)); const app = await NestFactory.create(AppModule.register(options))'
+      - id: case-2
+        when: An api app needs environment values
+        write: |-
+          // be/apps/api/src/api.env.ts
+          import type { EnvSource } from "@modules/platform/config"
+          import { parseServerConfig } from "@modules/platform/config"
+          import { parsePrimaryDatabaseConfig } from "@modules/platform/database"
+          import { parseHttpSecurityConfig } from "@modules/platform/http-security"
+
+          export interface ApiEnv {
+              readonly server: ReturnType<typeof parseServerConfig>
+              readonly database: ReturnType<typeof parsePrimaryDatabaseConfig>
+              readonly httpSecurity: ReturnType<typeof parseHttpSecurityConfig>
+          }
+
+          export const readApiEnv = (env: EnvSource): ApiEnv => ({
+              server: parseServerConfig(env),
+              database: parsePrimaryDatabaseConfig(env),
+              httpSecurity: parseHttpSecurityConfig(env),
+          })
+
+          // main.ts calls readApiEnv once, builds AppOptions from these values and port bindings, and boots within 80 lines.
+    verification:
+      automated:
+        - BE_CONFIG_OWNER
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+        - BE_INFRA_OWNER
+        - BE_APP_ENV_REQUIRED
+        - BE_APP_MODULE_LIST_INLINE
+      manual: []
+    relatedExamples: []
+  - id: BE-CONFIG-2
+    title: Config per capability, options through the injector
+    kind: mandatory
+    hfsRules: [R43, R85, R45]
+    requirement: |-
+      Each capability or provider that needs configuration has `<c>.config.ts` exporting
+      `parse<C>Config(env: EnvSource): <C>Options` (or `<C>Options | null` for an optional integration) built from the typed
+      readers, and `<c>.options.ts` exporting the options type. These capability roles and parser names stay unchanged;
+      the app's `read<App>Env` calls their parsers. The module receives its options through `register()` and
+      the classes read them with `Inject<C>Options()` from `<c>.decorators.ts`. There is no central config file that knows
+      every provider, and no second config path. There is no schema library: the typed readers are the one parser and they
+      already name the missing key.
+    rationale: |-
+      A central config file imports every domain and integration type and becomes the cause of cycles, and it grows without
+      an owner.
+    cases:
+      - id: case-1
+        when: A parser
+        write: 'export const parsePurchaseConfig = (env: EnvSource): PurchaseOptions => ({ holdSeconds: env.int("PURCHASE_HOLD_SECONDS", 900) })'
+      - id: case-2
+        when: A module and its consumer
+        write: 'the app''s be/apps/<app>/src/app.module.ts registers PurchaseModule.register({ isGlobal: true, ...options.purchase }); a service takes @InjectPurchaseOptions() private readonly options: PurchaseOptions.'
+    verification:
+      automated:
+        - BE_CONFIG_OWNER
+        - BE_RAW_INJECT
+        - BE_MODULE_SHAPE
+        - BE_MODULE_HANDLER_REGISTRATION
+        - BE_MODULE_PROVIDER_REREGISTRATION
+      manual: []
+    relatedExamples: []
+  - id: BE-CONFIG-3
+    title: No default for a secret, a credential or an address; an optional integration is all-or-nothing
+    kind: mandatory
+    hfsRules: [R44, R43]
+    requirement: |-
+      A secret, credential, token, key, host, URL, port of a remote, bucket or database name has no default of any kind (no
+      `""`, no `"localhost"`, no `"127.0.0.1"`, no `?? "http://..."`). Secrets are typed `Secret` by `env.secret`, using
+      `<NAME>_FILE` first and plain `<NAME>` only when the file key is absent. Tunables
+      (timeouts, concurrency, TTLs, page sizes) may have literal defaults inside `<c>.config.ts` only. An optional integration
+      is all-or-nothing: none of its keys set gives `null` and the app composes the capability's disabled variant (or does
+      not compose it); some set stops boot with an error that names the missing keys, never the values. Local values live in
+      `.starcistacks/local/runtime/env`, never in code. No `process.cwd()` is joined with `src` or `.starcistacks`.
+    rationale: |-
+      A default secret ships to production silently, and a default address points a process at the wrong system.
+    cases:
+      - id: case-1
+        when: A missing database password
+        write: 'boot fails with `Missing environment key ORDER_DB_PASSWORD` and no fallback string exists in the source.'
+      - id: case-2
+        when: An optional provider with two of three keys set
+        write: 'the parser throws naming the third key; with none set it returns null and the app composes no client.'
+    verification:
+      automated:
+        - BE_SECRET_DEFAULT
+        - BE_CONFIG_OWNER
+      manual:
+        - Confirm the deployed environment provides every key the parsers require.
+    relatedExamples: []
+  - id: BE-CONFIG-4
+    title: Secrets live only sealed in .starcistacks
+    kind: mandatory
+    hfsRules: [R06, R09, R10]
+    requirement: |-
+      Secrets exist only as sops `*.enc` at `.starcistacks/<env>/secrets/<slug>.enc`. A decrypted value never enters the
+      app tree, ignored or not, and is passed at runtime by `*_FILE` from `%LOCALAPPDATA%/StarCi/secrets/<project>/<env>/`
+      or memory. `runtime/env/KEYS.md` lists slug names only. An identity or provider record points at its slug and holds no
+      value. Agents never read, print, generate or rotate a secret.
+    rationale: |-
+      One sealed location makes custody auditable and keeps plaintext out of history, caches and agent context.
+    cases:
+      - id: case-1
+        when: A database password
+        write: 'sealed at .starcistacks/dev/secrets/orders-db-password.enc and read by EnvSource from ORDERS_DB_PASSWORD_FILE.'
+    verification:
+      automated:
+        - HFS_PLAINTEXT_SECRET
+        - HFS_IDENTITY_CUSTODY
+        - SEALED_CUSTODY_LOCATION
+        - SEALED_FILE_IN_WORK
+        - HFS_STACKS_SHAPE
+      manual:
+        - Owner authorizes key operations; run starci app secret init before the first secret and verify the project-owned recipient in .sops.yaml.
+    relatedExamples: []

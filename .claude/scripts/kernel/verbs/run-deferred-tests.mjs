@@ -1,0 +1,20 @@
+// starci kernel run-deferred-tests: split from cli.mjs.
+import { verbWorkflow, workflowVerb } from './shared/rows.mjs';
+import { DEFERRAL_KINDS, deferredTestsOf, ownerSpecs, requeueDeferredTests } from '../../route/spec-deferral.mjs';
+
+export default workflowVerb('run-deferred-tests', ({ ledger, args, emit, internals }) => {
+    const { db, workflowId, workflow: wf } = verbWorkflow(ledger, args);
+    if (args.kind != null && !DEFERRAL_KINDS.includes(args.kind)) throw Object.assign(new Error(`--kind must be ${DEFERRAL_KINDS.join('|')}, got '${args.kind}'`), { code: 'deferred-tests-bad-kind' });
+    if (wf.phase === 'finished' || wf.archived_at) throw Object.assign(new Error(`workflow ${workflowId} is ${wf.archived_at ? 'archived' : 'finished'}; its deferred tests run in a new workflow`), { code: 'workflow-finished' });
+    const kind = args.kind ?? null;
+    const pending = deferredTestsOf(db, workflowId, { kind });
+    const requeued = args['dry-run'] ? [] : requeueDeferredTests(ledger, { workflowId, kind, by: args.by ?? 'owner' });
+    const out = { ok: true, workflowId, kind, dryRun: Boolean(args['dry-run']), deferred: pending, requeued, specs: ownerSpecs(internals.skillRoot) };
+    const kindArg = kind ? ` --kind ${kind}` : '';
+    const action = args['dry-run'] ? `would re-queue ${pending.length}` : `re-queued ${requeued.length}`;
+    emit(out, [
+      `run-deferred-tests ${workflowId}${kindArg}: ${action} deferred test leg(s)`,
+      ...(args['dry-run'] ? pending : requeued).map((item) => `  ${item.jobId} ${item.op} a${item.attempt} (${item.reason})`),
+      ...(requeued.length ? ['  next: starci kernel status, then route and dispatch each (they run even while the switch is still off)'] : []),
+    ].join('\n'), args.json);
+});

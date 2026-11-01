@@ -1,0 +1,58 @@
+{
+  "name": "@starci/hfs",
+  "version": "4.7.30",
+  "description": "The StarCi app command implementation for scaffolding, linting, checking and synchronizing one product repository.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "exports": {
+    ".": "./src/main.mjs",
+    "./package.json": "./package.json",
+    "./runtime/*": "./runtime/*"
+  },
+  "dependencies": {
+    "libpg-query": "18.1.5",
+    "smol-toml": "1.9.0"
+  },
+  "devDependencies": {
+    "@nestjs/common": "11.2.5",
+    "@nestjs/core": "11.2.5",
+    "@nestjs/testing": "11.2.5",
+    "prettier": "3.9.6",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2",
+    "typescript": "5.9.3"
+  },
+  "files": [
+    "LICENSE",
+    "src/main.mjs",
+    "emit/**",
+    "stack/**",
+    "release/**",
+    "db/**",
+    "ci/**",
+    "coverage/**",
+    "lint/**",
+    "scaffold/**",
+    "report/**",
+    "runtime/**",
+    "sync/**",
+    "upgrade/**",
+    "templates/**",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "sync": "node ../../scripts/hfs/sync-runtime.mjs",
+    "sync:check": "node ../../scripts/hfs/sync-runtime.mjs --check",
+    "prepack": "node prep-runtime.mjs",
+    "pretest": "node prep-runtime.mjs",
+    "test": "node --test \"src/*.spec.mjs\""
+  }
+}

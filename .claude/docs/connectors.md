@@ -1,0 +1,259 @@
+Owner: modules/kernel/api.yaml
+# Connectors: public owner asks over Cloudflare + Telegram
+
+An owner ask is a `serve-ask` form (`scripts/kernel/ask-server.mjs`) on a random loopback port
+`6969..7069` behind a bearer nonce path `/a-<hex>`. The connectors tell the owner the question exists
+and, **only when the owner asks for it**, serve its form and make it reachable from the owner's phone
+(owner, 2026-09-24: "1 link response.starci.org that points only at the questions, and only serve the
+url when requested! for the tele notices, tele has a generate-url button and only then serve. delete after answered"). Telegram carries owner asks, plus the media a settled
+design or UAT op produced (drawings, UAT videos; the Media row below): no op progress, no
+incidents, no finish messages. The one two-way path is the command bridge (below), where the owner
+talks to a supervisor chat and it answers. They are configured by `config.yaml`
+`connectors` (documented in `config.example.yaml`, validated fail-closed by `engine/config.mjs`) and
+are all off by default.
+
+```
+kernel: starci kernel serve-ask -> serve-ask.mjs parkAsk -> telegram.mjs notifyAsk -> Telegram: question + [Generate URL]
+                                                   (ledger: ask-notified; no form, no link)
+owner presses [Generate URL] -> telegram-bridge.mjs (getUpdates callback_query ask:<key>)
+     -> spawns serve-ask.mjs --on-demand telegram (ledger: ask-serving onDemand) -> waits for the bind
+     -> tunnel.mjs ensureAskConnectors -> edits the SAME message: https://<public host>/a-<nonce>
+                                          (credential ask: the localhost link, answer on the machine)
+owner answers -> serve-ask.mjs: ask-answered, deletes the ask's messages (ask-message-closed), exits
+
+     https://<public host>/a-<nonce>
+Cloudflare edge -> cloudflared (tunnel.mjs) -> 127.0.0.1:<gateway.port> ask-gateway.mjs
+                                                   -> 127.0.0.1:69xx/a-<nonce>  serve-ask form
+```
+
+| Piece | File | What it does |
+| --- | --- | --- |
+| Gateway | `scripts/connectors/ask-gateway.mjs` | One fixed local port. Proxies `/a-<nonce>` and `/a-<nonce>/...` (GET, HEAD, POST, redirects rewritten to paths) to the loopback form whose latest open `ask-serving` event carries that nonce and whose serve-ask process is alive, in the configured repos' ledgers plus every repo a Telegram notice named. Everything else is 404 and never forwarded (so the public host serves question forms and nothing else, and only while one is served); dot segments are refused; a non-loopback form URL is never a target. Adds `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `X-Robots-Tag: noindex`. |
+| Tunnel | `scripts/connectors/tunnel.mjs` | Runs cloudflared at the gateway and restarts it when it dies (1 s doubling to 60 s). Always passes its own `--config` (`<runtime root>/.runtime/cloudflared/cloudflared.yml`), so `~/.cloudflared/config.yml` is never read. Records the public base URL in its `tunnel` connectors row. `status` carries `health` (below). |
+| Notifier | `scripts/connectors/telegram.mjs` | Called by the kernel's `starci kernel serve-ask` (`serve-ask.mjs parkAsk`): one message with the workflow, the question and its numbered options, in config `language`, and one inline button **Generate URL** (the Vietnamese label for "Generate reply link" when `language` is vi; `callback_data` `ask:<16 hex>`), with NO link. Deduped per ask while its notice is in the chat. `markAskClosed` deletes every message of an ask once it is answered, auto-accepted, retired or superseded (edited to "answered" only where Telegram refuses a delete, e.g. older than 48 h); `sweepAskMessages` is the bridge's reconciler. A missing token or chat id is a no-op with one stderr line; it never throws into its caller. Also `sweep`, `discover-chat` and `test`. |
+| Media | `scripts/connectors/telegram-media.mjs` | Queued by the kernel's `starci kernel settle` (`cmdSettle` calls `queueSettleMedia`, which launches this file detached, so Telegram never slows or fails a settle; its output goes to `machine_logs`). An `interface.draw` / `interface.asset` settled pass sends its drawings as albums of up to 10 (the `draws[]` of the draws.yaml the report names, else the report's final images, else the ui record's `directionAsset`s) - always each drawing's part (page content, overlay panel, layout drawing), never the composite placed into the layout capture (`scripts/work/direction-part.mjs`) with one caption: what was drawn, screens, variants, states, the summary, "review at handover". A `uat.verify` / `uat.assisted.*` / `e2e.verify` settle sends every recorded video (any verdict) captioned with the verdict (PASS / FAIL, in Vietnamese) and the flow's steps from its uat record; a pass with no video sends its screenshots. Images over 10 MB and videos over 50 MB are named by local path instead. Deduped per workflow, job and attempt. |
+
+Repositories read: `connectors.repos`, or by default the source root plus every
+`.workspaces/projects/*/work.json` Work owner registered in `machine.ledgers`. The connectors open
+ledgers read-only and never write one.
+
+All connector state lives in `machine.sqlite` ([storage](ledger-db.md) §4), written through
+`engine/db/machine.mjs`; there is no connector state file and no connector log file:
+
+| Fact | Where |
+| --- | --- |
+| Each manager's state (`gateway`, `tunnel`, `telegram-bridge`, `telegram-route`, `supervisor-channel:<id>`): pid, port, public URL, config, cursor | `connectors` rows |
+| The single-instance lock of each manager, and a launch still starting | `host_locks` rows (state `held` or `starting`) |
+| Ask notices and settled-media sends, deduped per ask or per workflow/job/attempt | `notifications` rows (kind `ask` or `media`) |
+| Supervisor channel messages in and out | `sup_messages` rows |
+| Manager output (cloudflared's notable lines, the bridge log, media sends) | `machine_logs` rows (actor `connector`) |
+
+The only file is the cloudflared configuration the tunnel starts with,
+`<runtime root>/.runtime/cloudflared/cloudflared.yml`, rewritten on every start so
+`~/.cloudflared/config.yml` is never read.
+
+The gateway, the tunnel manager and the Telegram bridge are single-instance per host (18 tunnel managers
+once ran at once, all started by code from before the lock). Each `run` first takes its `host_locks`
+row and refuses (exit 1, at once) while another live manager holds it. A running tunnel manager renews
+its lock every 30 s (`STARCI_TUNNEL_OWNER_CHECK_MS`): when another live process holds it, it stops its
+cloudflared and exits; when the lock was released, it takes it back. A starter (`start`,
+`ensureAskConnectors`, or the reconciler Host controller) never launches while a manager is alive, and
+records the lock in state `starting` so a launch that has not claimed it yet counts as alive for 30 s.
+A stale lock can be replaced when its holder is gone or from an earlier boot. An unresolved tunnel
+child remains held in its original connector row even after the manager dies: `start`, automatic ensure
+and manager claims refuse replacement until that original child has exact closure evidence.
+
+Connector stop requests use the process birth and executable captured by the launching owner. On Windows,
+one verified process handle binds identity, termination and completed exit; the tunnel child also carries a
+fresh launch nonce verified on that handle. The exact manager is closed before its latest owned child is read.
+Missing custody, an unsupported platform, identity conflict or an incomplete call refuses stop and
+retains the recorded custody. A concurrent new owner is never overwritten. These receipts prove the named
+processes only, not descendants. Native calls are owned by `scripts/api/process/owned-process.mjs`.
+Verified manager closure is retained in the same connector row before child closure is attempted. A retry
+uses that receipt rather than stopping a recycled manager PID. Exact child closure is retained before the
+final stopped-state write, so a refused publication can be retried without another process stop. Whole-row
+custody comparisons prevent a concurrent owner from being overwritten; ordinary config writes cannot
+discard an unresolved child identity, launch nonce, capture or retained manager receipt.
+
+The existing `scripts/machine/worker-close.mjs` owner also uses this native API. It captures each measured
+worker process's birth, executable and terminal handle environment before release, stops surviving objects
+individually through their original native identities, and repeats the process/environment census. Missing
+creation or executable evidence, foreign identity, incomplete native receipts, an unreadable census or a
+new uncaptured terminal process leaves closure unverified. These measurements cover captured objects and
+the later visible terminal census; they do not prove universal descendant closure.
+
+## Owner asks on demand
+
+Two kinds of ask, never mixed in one list or one message (owner, 2026-09-25;
+`scripts/kernel/ask-server.mjs askClassOf`):
+
+- **approval**: a decision only the owner makes (handover, draw review, any ask with options or picks,
+  any declared non-credential kind). Urgent: pushed at once, one message each, listed by `/asks`.
+- **credential**: a request for secret values (kind credential, account, access or consent, or
+  credential fields with no options). It holds only the live-proof legs (integration.verify, e2e.verify,
+  uat.verify, uat.assisted.*), never the main line: never pushed, listed by `/creds` in one message, and
+  counted in one line of the `/status` report and the owner digest.
+
+1. **Park.** The kernel's `starci kernel serve-ask --workflow <id> --dispatch <id>` runs `parkAsk`: earlier asks
+   it replaces are superseded and their messages deleted. An approval ask is then sent to the owner
+   with the **Generate URL** button; a credential ask is only listed. The ledger gets `ask-notified
+   {dispatchId, onDemand:true, via:telegram|creds, askClass, messageId, key, fresh, fields}`. No form
+   runs. `starci kernel status` reads such an ask as `awaiting-owner` (`frontier.askOnDemandDispatches`), not
+   `ask-reserve`; credential asks (`frontier.credentialAskDispatches`) park the frontier only when every
+   approved leg still owed is a live proof, else it reads `next-ready` (a plan is recorded and
+   `nextActions` names the next leg) and the runtime enqueues that leg with placeholders when the plan declares its write set (else the Kernel's menu holds it). The supervisor digest tags an on-demand ask `on-demand`.
+   With Telegram off (or a failed send, `ask-notify-failed`) `starci kernel serve-ask` serves the form at once,
+   as before; `--now` does that on purpose while still sending the notice.
+2. **Generate URL.** The bridge answers the callback, launches `serve-ask.mjs --repo <r> --workflow <w>
+   --dispatch <d> --on-demand telegram` detached (it hides its children's windows) unless the ask's form
+   already serves, waits for the bind (`ask-serving` with `onDemand:true, requestedBy:telegram`), runs
+   `ensureAskConnectors` and waits for the tunnel's public base, then edits the pressed message to carry
+   `https://<hostname>/a-<nonce>` and its expiry. A credential ask gets the localhost link and "answer
+   on the machine" instead and never touches the tunnel (`exposeCredentialAsks` opts in). The button
+   stays: after the form expires (4 h) or its process dies, pressing it serves a new one.
+3. **/asks** lists every open approval ask of the ask repos (the connector repos, config.yaml
+   `supervisor.repos` and every repo a notice named), one message each with its own button; a form that
+   already serves shows its link. Those messages are deleted with the ask too. **/creds** lists every
+   open credential ask of the same repos in ONE message, one button each (`cred:<key>`); a press opens
+   that ask in a new message (the list stays) and serves its form as above.
+4. **Answer.** serve-ask records `ask-answered`, deletes the ask's messages (`ask-message-closed`) and
+   exits, so the gateway stops routing the nonce. `starci kernel retire-ask`, auto-accept and a superseding ask
+   delete them the same way. Every poll round (at most once a minute) the bridge sweeps the store: the
+   messages of an ask that closed by any path are
+   deleted, and a message still linking to a form that ended goes back to the button notice.
+
+## Health and restart
+
+`starci connect tunnel status` prints `health`: `manager {pid, alive, lockPid}`,
+`cloudflared {pid, alive, connected, restarts, lastExit}`, `gateway {pid, alive, port, reachable,
+status}` (a GET of `/` on the gateway port; nothing answering there is why the public host returns 502),
+`managers` (every `tunnel.mjs run` process on the host; `--fast` skips the process listing),
+`healthy` and `problems[]`. To restart: `tunnel.mjs stop` and `ask-gateway.mjs stop` (kill any extra
+manager `managers` lists), then `ask-gateway.mjs start` and `tunnel.mjs start`, and check `status`
+again.
+
+## Commands
+
+```
+starci connect ask-gateway start        # detached; status | stop | run (foreground)
+starci connect tunnel dry-run           # print the cloudflared argv + generated config
+starci connect tunnel start             # detached manager; status | stop | run
+starci connect telegram discover-chat   # after sending the bot /start: chat ids
+starci connect telegram test            # one test message to connectors.telegram.chatId
+starci connect telegram notify --ledger <runtime root>/.runtime/projects/<ledger_id>/runtime.sqlite --workflow <id> --dispatch <id> [--repo <repo>]
+                                                     # (re-)send one open ask's notice (deduped while it is in the chat)
+starci connect telegram sweep           # delete the messages of closed asks, drop dead links
+starci connect telegram-media settle --ledger <file> --repo <repo> --workflow <id> --job <id> --attempt <n> --op <op> --verdict <v> [--dispatch <id>]
+                                                     # send one settled op's media (deduped; what settle launches)
+```
+
+## Command bridge: the owner talks to a supervisor over Telegram
+
+`scripts/supervisor/telegram-bridge.mjs` lets the owner command a supervisor chat by messaging the
+bot. Several supervisors may be registered at once; buttons pick which one the owner talks to.
+
+```
+owner (Telegram) -> getUpdates long poll -> telegram-bridge.mjs -> machine.sqlite sup_messages (to <id>)
+                                                                        |
+supervisor chat  <- channel.mjs wait / inbox  <-------------------------+
+supervisor chat  -> channel.mjs reply -> sendMessage "[<label>] ..." -> owner (Telegram)
+```
+
+- **One poller per host.** The bridge takes the `telegram-bridge` host lock (the same single-manager lock as
+  the gateway and tunnel) and keeps `{pid, startedAt, offset}` in its `connectors` row. It long-polls
+  `getUpdates` (`POLL_TIMEOUT_S`, `message` + `callback_query`) and stores the next offset *before* handling an
+  update, so a restart never delivers a message twice. A `409 Conflict` exits when another bridge holds
+  the lock, else backs off; network and 5xx errors back off 1 s doubling to 60 s; a refused token
+  (401/403/404) or Telegram turning off stops it. Between rounds it reloads itself when the runtime changes
+  (`scripts/machine/self-reload.mjs`): the replacement takes the lock over and resumes from the stored offset.
+  Its log is `machine_logs` (kind `telegram-bridge.log`), numeric ids only.
+- **Hard auth.** An update is accepted only when its chat id AND its sender id both equal
+  `connectors.telegram.chatId` (the owner's private chat). Anything else is dropped unanswered and
+  logged by numeric id; message text is never logged.
+- **Commands** (English): `/start` and `/choose` show one button per registered supervisor, 🟢 online
+  (heartbeat younger than `ONLINE_MS` in `telegram-bridge.mjs`) or ⚪ offline, ✓ on the current one; `/status` sends the progress report
+  (`progress-report.mjs` builder) from the bridge itself, so it works with no supervisor; `/asks` lists
+  the open approval asks, each with its Generate URL button, and `/creds` the credential asks in one
+  message ("Owner asks on demand" above); `/help`. The
+  bot's replies follow config.yaml `language` (vi, else en).
+- **Routing.** A pick is stored per chat in the `telegram-route` connectors row. Plain text goes to the routed
+  supervisor's inbox as one `sup_messages` row (direction `in`, unread) and is acknowledged as a reply
+  (a Vietnamese "forwarded to <label>" notice, plus an offline note when its heartbeat is stale). With no route, a
+  lone registered supervisor is picked automatically; otherwise the message is held (up to 20) and
+  the chooser shown, and the held messages are delivered once the owner picks.
+- **Registry.** The `supervisor-channel:<id>` connectors row: `{id, label, repos, registeredAt, heartbeatAt}`.
+- **Lifecycle.** `channel.mjs register` / `heartbeat` can start the bridge when none
+  runs. The reconciler Host controller also probes and restores the Telegram
+  bridge, ask gateway and tunnel after reboot; `StarCi-Reconciler` starts that
+  controller through `scripts/reconciler/boot.mjs ensure`. Telegram off or a
+  spec run is a no-op.
+- **Workflow findings.** The Workflow controller reads
+  `scripts/supervisor/stall.mjs` findings, opens one durable Kernel Decision
+  Item per actionable stall or stale wait, and escalates overdue items to the
+  Supervisor. `scripts/machine/decisions.mjs` supplies the doorbell; a busy
+  Kernel keeps the item in its queue. See `modules/reconciler/workflow.yaml`.
+- **Owner notification.** The Workers controller is the owner-bound sender. It
+  invokes `scripts/reconciler/notifier.mjs` for the periodic digest and urgent
+  invariant alerts; `scripts/connectors/telegram.mjs` sends the message. Owner
+  asks retain their immediate notice and `/asks` or `/creds` handling above.
+  Digest and urgent dedupe are `notifications` rows in machine.sqlite, as defined by
+  `modules/reconciler/workers.yaml` and `scripts/reconciler/notifier.mjs`.
+
+```
+starci supervisor channel register --id <id> --label <text> [--repos <csv>]
+starci supervisor channel heartbeat --id <id>
+starci supervisor channel inbox --id <id> [--json] [--peek]     # unread; marks read unless --peek
+starci supervisor channel reply --id <id> (--text <t> | --text-file <f>) [--to <inboxMessageId>]
+starci supervisor channel wait --id <id> [--timeout-ms <n>]     # "TELEGRAM <inboxId>: <text>", exit 0; 124 on timeout
+starci supervisor telegram-bridge start | run | status | stop
+```
+
+What a supervisor may do on a chat message is `modules/supervisor/supervise.yaml` `channel`: the
+owner's request within the supervisor's delegated scope; anything irreversible, outward,
+credential-bearing or a handover approval still needs the owner at the machine. Security: the chat is a
+Telegram cloud chat (not end-to-end encrypted) and anyone holding the owner's Telegram account can
+command the supervisors, within that same scope.
+
+## Where secrets live
+
+- Never in `config.yaml`. `tokenEnv` / `botTokenEnv` must be an UPPER_SNAKE env var **name**; a pasted
+  token, or a `token`/`botToken`/`secret` key, is refused by validation.
+- [Host credentials](host-secrets.md) owns the canonical runtime root `secret.env` and environment
+  precedence. Connector fields name the required variable; its `<NAME>_FILE` environment value
+  may point at a custody file. The configuration carries no alternate secrets-file field.
+- A named tunnel with `tunnel` + `credentialsFile` uses the credentials JSON `cloudflared tunnel create`
+  wrote (`~/.cloudflared/<uuid>.json`); a remotely managed tunnel token is handed to cloudflared as
+  `TUNNEL_TOKEN` in the child environment, never on argv.
+- `connectorsConfig()` reports only `tokenPresent` / `botTokenPresent` / `credentialsPresent`
+  booleans. The notifier scrubs the token from every error it records or prints.
+
+## Security critique
+
+- **The link is a bearer credential posted to Telegram.** Anyone holding `https://<host>/a-<nonce>` can
+  open the form and answer it. Telegram cloud chats are not end-to-end encrypted: Telegram's servers,
+  anyone with access to the owner's Telegram account or its linked devices, and anyone the message is
+  forwarded to hold the link — and the question text itself, which may name business decisions. The
+  nonce is 72 random bits, so it cannot be guessed, but it can be read.
+  Mitigations here: a link exists only after the owner pressed Generate URL (nothing is served before),
+  link previews are disabled (Telegram does not fetch the URL), the gateway sets
+  `no-referrer`/`no-store`, the form is one-shot (serve-ask exits after one answer; a second POST is 409)
+  and expires with its ttl (4 h by default), and the message carrying the link is deleted once answered.
+- **Quick tunnels are unauthenticated and ephemeral.** A `trycloudflare.com` host has no account, no
+  access control and no SLA, and changes on every restart, which kills every link already sent. Use it
+  for yes/no decisions only; the named tunnel's fixed hostname does not have this problem.
+- **Recommend a named tunnel + Cloudflare Access** for anything beyond decisions: put an Access
+  application (e.g. one-time PIN to the owner's email) in front of the hostname so the nonce is no
+  longer the only credential, then set `cloudflare.access: true`. Without it, a warning is printed.
+- **Credential asks stay local by default.** An ask whose form requests custody files or env values is
+  not linked publicly (the message carries the localhost link and says to answer on the machine), and
+  the gateway answers 403 for it even if someone has the nonce. `telegram.exposeCredentialAsks: true`
+  opts in; it is warned about, because the secret would then cross Cloudflare's edge (TLS-terminated
+  there) as well as the public link.
+- **What the gateway exposes.** Only paths under a currently open nonce; the form's evidence images
+  are served under that nonce, so an approval ask about screenshots makes those screenshots public to
+  the link holder. The form accepts an `answered_by` field for delegation; a link holder could claim a
+  delegate identity while a delegation is active, which is one more reason to front the hostname with
+  Access.
+- **The machine side.** The gateway binds 127.0.0.1 only; cloudflared makes outbound connections
+  only. The Telegram bot token can send messages as the bot and read its updates; keep it in the
+  gitignored secrets file or the environment, and revoke it with BotFather if it leaks.

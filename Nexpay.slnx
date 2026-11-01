@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/BuildingBlocks/">
+    <Project Path="src/BuildingBlocks/BuildingBlocks/BuildingBlocks.csproj" />
+  </Folder>
+  <Folder Name="/src/Services/" />
+  <Folder Name="/src/Services/Wallet/">
+    <Project Path="src/Services/Wallet/Wallet.API/Wallet.API.csproj" />
+    <Project Path="src/Services/Wallet/Wallet.Application/Wallet.Application.csproj" />
+    <Project Path="src/Services/Wallet/Wallet.Domain/Wallet.Domain.csproj" />
+    <Project Path="src/Services/Wallet/Wallet.Infrastructure/Wallet.Infrastructure.csproj" />
+  </Folder>
+</Solution>

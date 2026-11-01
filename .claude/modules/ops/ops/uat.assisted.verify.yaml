@@ -1,0 +1,384 @@
+schema: starci/op@1
+id: uat.assisted.verify
+goal:
+  en: Independently verify one controlled human-assisted browser run from exact immutable receipts by
+    reproducing its bindings, machine postconditions, evidence integrity, redaction and cleanup
+    without treating a human completion signal as acceptance.
+nodeKinds: [uat.ux]
+completionProfile: uat.ux
+sideEffects:
+  - read-only build, environment, database, API and provider probes declared by the prepared request
+  - write only the selected verification evidence and standard operation handoff
+graphPolicy:
+  mode: read-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+reads:
+  - id: target
+    path: .starciwork/features/<feature>/uat/<flow>/index.yaml
+    purpose:
+      en: Read the current selected work/uat-flow@1 records and their accepted assertions/refs without
+        changing them. State todo is expected. A passed assisted verification is execution evidence
+        for final reconciliation; it is not authority to write state done, completion, evidence
+        pointers or blockers.
+  - id: request
+    path: selected uat.assisted.prepare evidence/assisted-uat/request.yaml
+    purpose:
+      en: Read the exact explicitly selected starci/assisted-uat-request@1 path. Do not search for latest,
+        newest, successful or convenient preparation. Verify its schema, finite ordered flows, human
+        gates, effect ceiling, receipt template and input/build/environment/flow bindings.
+  - id: session
+    path: selected uat.assisted.prepare evidence/assisted-uat/session-manifest.yaml
+    purpose:
+      en: Read the exact starci/assisted-uat-session-manifest@1 path selected with the request. Recompute
+        the request sha256, script hashes/digest, cleanupPlanDigest, redactionPolicyDigest and
+        browser/launch bindings. A changed script, policy, request or manifest makes the run
+        unverifiable rather than repairable here.
+  - id: scripts
+    path: selected uat.assisted.prepare evidence/assisted-uat/playwright/<flow-id>.spec.ts
+    purpose:
+      en: Recompute every ordered script hash and inspect that receipt events map to the exact scripted
+        flow/step and declared gate IDs.
+  - id: policies
+    path: selected uat.assisted.prepare evidence/assisted-uat/redaction.yaml + evidence/assisted-uat/cleanup.yaml
+    purpose:
+      en: Recompute exact policy digests and read the declared prohibited content, artifact inspections,
+        owned cleanup actions and absence/restoration probes.
+  - id: receipt
+    path: selected uat.assisted.prepare evidence/assisted-uat/receipts/<run-id>.yaml
+    purpose:
+      en: Read one explicitly selected immutable starci/assisted-uat-receipt@1. The receipt contains no
+        accepted pass verdict and cannot supply one by prose.
+  - id: runArtifacts
+    path: selected uat.assisted.prepare evidence/assisted-uat/runs/<run-id>/**
+    purpose:
+      en: Recompute sha256, media type/signature, size and required playability/decodability; verify
+        flow/step/gate linkage, timestamps and finalized state. Unlisted nearby files, generated
+        stills labelled as video and media from another run cannot satisfy evidence.
+  - id: build
+    path: <app>/<bound-paths> + selected served-build identity
+    purpose:
+      en: Independently resolve the current exact build/served identity by the prepared method and
+        recompute buildDigest. A current mismatch makes the receipt stale even if the recorded run
+        was once valid.
+  - id: environment
+    path: .starciwork/_resources/environments/<environment>/resource.yaml + prepared live identity probes
+    purpose:
+      en: Independently resolve the selected environment resource/revision/origins and recompute
+        environmentDigest.
+  - id: postconditions
+    path: prepared request flows[].steps[].postconditions + their authorized read-only
+      application/API/SQL probes
+    purpose:
+      en: Re-run every declared machine-verifiable postcondition against the exact current
+        build/environment and compare it with receipt observations. Human gate response and
+        screenshot appearance cannot replace persistence, authorization, negative, asynchronous
+        completion or external-resource read-back.
+  - id: cleanup
+    path: prepared cleanup verification probes + receipt cleanup actions and exact run-owned IDs
+    purpose:
+      en: Re-run read-only absence/restoration probes through each effect's real owner. Confirm every
+        run-owned object selected for deletion is absent, authorized reused mutations are restored
+        and retained resources have an explicit ownership reason. Local metadata absence alone does
+        not prove remote/provider cleanup.
+  - id: workflow
+    path: selected workflow request + modules/kernel/verdict-contract.yaml + this op authority.json
+    purpose:
+      en: Read the exact current operation/job binding and starci/op-report@1 contract.
+  - id: profile
+    path: modules/models/registry.yaml + selected runtime execution profile + actual host tools/model
+    purpose:
+      en: Resolve available read-only verification tools.
+writes:
+  - id: verification
+    path: evidence/assisted-uat/verification.yaml
+    fields: [schema, request, sessionManifest, receipt, bindings, checks, derived, disposition, verifiedAt]
+    content:
+      en: Write one schema-valid starci/assisted-uat-verification@1 document from current machine
+        observations. Each selected input path carries its actual sha256; bindings repeat the exact
+        immutable digests. checks records every replayable command/probe, exit and linked evidence.
+        Detailed ordered flow/gate, artifact, postcondition, cleanup and redaction results live in
+        the declared evidence files and are linked from checks. derived contains only the six closed
+        booleans the schema names; completionSignal ok contributes to none of them. disposition is
+        pass only when every derived boolean is true; otherwise fail or blocked, with exact findings
+        in evidence. verifiedAt records the independent observation time.
+  - id: evidence
+    path: evidence/**
+    fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+    artifacts:
+      - manifest.yaml
+      - assisted-uat/bindings.json
+      - assisted-uat/artifacts.json
+      - assisted-uat/postconditions.json
+      - assisted-uat/cleanup-readback.json
+      - assisted-uat/redaction-readback.json
+      - assisted-uat/result.md
+    content:
+      en: Retain exact selected paths/hashes, current binding observations, all machine commands/probes
+        and exits, artifact byte/playability checks, expected-versus-observed postconditions,
+        cleanup owner read-back and redaction inspection. Preserve original receipt and run
+        artifacts unchanged. The result explicitly states that a pass is the assisted verification
+        operation's evidence result while canonical Work remains todo until final full-chain
+        reconciliation.
+steps:
+  - reads:
+      - environment
+    writes: [evidence]
+    action:
+      en: "Environment pre-step, before any setup or walk. starci kernel dispatch already ran node
+        scripts/uat/env-health.mjs check --restart on the environments this flow's records reference and
+        put the result in the packet (context.environment). Re-run it yourself - node
+        scripts/uat/env-health.mjs check --repo <ledger repo> --paths <owned paths as JSON> --json - and
+        record it in report.checks as name env-health with its exit code (0 ready, 3 not ready). A service
+        that is down is started ONLY through starci gate env-health serve --repo <ledger repo>
+        --env <id> --service <name> --cwd <checkout> --url <probe> -- <start command>, which registers it so
+        the next pre-step restarts it itself; never kill a process env-health reports as port-conflict. A
+        probe-drift row means the declared probe path is stale while the service is up: walk, and name the
+        discovered endpoint in the report for workspace.manage. When the stack is still not ready, file
+        outcome blocked with blocker kind environment (never failed): a walk on a dead stack proves nothing
+        about the product and must not be charged to it."
+  - reads:
+      - target
+      - request
+      - session
+      - scripts
+      - policies
+      - receipt
+    writes: [verification, evidence]
+    action:
+      en: Select exact paths supplied by the operation request and refuse any latest-run discovery. Parse
+        the closed schemas, check one run ID and append-only receipt path, recompute
+        request/session/script/policy hashes and compare requestDigest and every other repeated
+        digest. Confirm receipt was finalized after its enumerated artifacts and that its run
+        ID/path were not reused. Any mutation, ambiguity or digest mismatch fails closed. Never
+        execute the product action again to make a missing receipt look complete. Verification may
+        execute only their read-only probes. It must bind exact request and session paths/sha256
+        plus requestDigest, inputDigest, buildDigest, environmentDigest, flowsDigest, scriptsDigest,
+        cleanupPlanDigest and redactionPolicyDigest; name runner/browser identity and run times;
+        preserve ordered flow/step statuses, gate responses, executed checks, artifacts,
+        postconditions, cleanup and redaction. A completionSignal value ok means only that the human
+        declared the controlled run finished. Tool availability never authorizes replaying product
+        actions, editing the receipt or using a human response as a pass.
+  - reads:
+      - request
+      - session
+      - receipt
+      - runArtifacts
+    writes: [verification, evidence]
+    action:
+      en: Reconcile every accepted flow, step and declared human gate in order. Validate structured gate
+        responses and linked evidence; keep failed/not-run/declined checkpoints honest. Record
+        completionSignal ok as a completion-only event and exclude it from every pass predicate.
+        Refuse undeclared gates or a third-party call relabelled human-gated after preparation. Read
+        only artifacts enumerated in the receipt.
+  - reads:
+      - build
+      - environment
+      - target
+      - request
+      - receipt
+    writes: [verification, evidence]
+    action:
+      en: Independently recompute current Work input, build, environment and flow bindings using prepared
+        identity methods. Require exact equality to the receipt and session. A moved deployment,
+        changed request or revised flow makes evidence stale; do not replay actions or edit hashes
+        to refresh it. Run no write probe and never infer equivalence from hostname or a human
+        statement.
+  - reads:
+      - runArtifacts
+      - policies
+      - receipt
+    writes: [verification, evidence]
+    action:
+      en: Recompute every declared artifact hash and validate nonempty bytes, media signature and
+        playable/finalized media where required. Verify linkage to the correct run/flow/step and
+        apply the prepared redaction inspection. Credentials, tokens, cookies, secret-entry values,
+        unrelated personal data, corrupt media or an unredacted required artifact fail evidence even
+        if the flow status says completed.
+  - reads:
+      - postconditions
+      - request
+      - receipt
+      - build
+      - environment
+    writes: [verification, evidence]
+    action:
+      en: Execute each declared read-only postcondition probe independently and compare exact observed
+        state with the frozen expectation and receipt. Verify persistence/reload, denial, negative,
+        asynchronous and external outcomes where declared. Process exit, screenshot, gate response
+        or request acceptance alone is not the business postcondition.
+  - reads:
+      - cleanup
+      - policies
+      - receipt
+      - environment
+    writes: [verification, evidence]
+    action:
+      en: Re-run every prepared read-only cleanup verification through the real owning
+        API/database/provider. Confirm exact run-owned absence/restoration and explain explicit
+        retained objects. Do not execute cleanup, delete metadata or broaden identifiers here.
+        Unresolved or unverifiable cleanup fails overall even when every business postcondition is
+        green.
+  - reads:
+      - workflow
+    writes: [verification, evidence]
+    action:
+      en: Derive the operation outcome from current immutable bindings, complete ordered execution,
+        required gate records, machine checks, genuine sanitized evidence, postconditions and
+        cleanup. Pass requires all of them; human ok contributes nothing to the predicate. Run
+        validators, file the standard op report and stop. Keep canonical Work todo and unchanged for
+        the later full-chain final reconciliation; do not call automatic uat.verify, self-dispatch a
+        repair or write ledger SQL. The operation files its evidence through starci kernel report and signals
+        second; it never writes runtime.sqlite or accepts runner/human output as the kernel verdict.
+  - reads: [environment, scripts]
+    writes: [evidence]
+    action:
+      en: "The walk runs against the app's real dev stack - the services the app-root .starcistacks/<env> declares, brought up by the environment's own start commands and checked by env-health - never a test world, a fake of our own service or a shared production target. Where the op runs automated checks (seed, delete and resource scripts, automation specs), they follow the test-world conventions: people through the app's declared identity doors (sign-in and registration helpers, never a hand-made token), state awaited by polling with a deadline (waitFor-style), never a sleep, no process.env read in a spec, a third-party provider reached only through its declared integration and test credentials through testSecret(<name>, {repo}). Evidence is gathered as the evidence write declares."
+      vi: "Lần đi chạy trên stack dev thật của app - các dịch vụ mà .starcistacks/<env> ở gốc app khai báo, khởi động bằng lệnh start riêng của môi trường và được env-health kiểm tra - không bao giờ trên test world, fake của dịch vụ của chính ta hay đích production dùng chung. Khi op chạy kiểm tra tự động (script seed, xóa và tài nguyên, spec tự động), chúng theo quy ước của test world: người dùng qua các cửa identity đã khai báo của app (helper đăng nhập và đăng ký, không bao giờ token tự chế), trạng thái được chờ bằng thăm dò có hạn (kiểu waitFor), không bao giờ sleep, không đọc process.env trong spec, nhà cung cấp bên thứ ba chỉ được chạm qua tích hợp đã khai báo và credential test lấy qua testSecret(<name>, {repo}). Bằng chứng được thu như mục ghi evidence đã khai báo."
+proofs:
+  - id: selected-immutable-run
+    requirement:
+      en: Exact request, session and receipt paths were supplied; all bytes/hashes/digests agree; one
+        unreused run ID owns all enumerated finalized artifacts; no latest-run discovery or receipt
+        rewrite occurred.
+  - id: current-bindings
+    requirement:
+      en: Independently recomputed current Work input, build, environment and ordered flows exactly equal
+        the prepared and receipted digests. Historical validity cannot substitute for current
+        equality.
+  - id: controlled-sequence
+    requirement:
+      en: Every accepted flow/step and declared gate retains order and an honest completed/failed/not-run
+        status; gate responses satisfy their schemas and undeclared human gates are absent.
+  - id: completion-is-not-pass
+    requirement:
+      en: Human completionSignal ok is recorded only as execution finished and is excluded from
+        derivedOutcome; no owner statement, receipt prose, screenshot or runner exit directly
+        supplies pass.
+  - id: evidence-integrity
+    requirement:
+      en: Every required artifact is enumerated, current-hash exact, nonempty, type-correct,
+        finalized/playable, linked to this run/flow/step and compliant with the prepared redaction
+        policy; the report names at least one screenshot and the session video the runner recorded,
+        or settle refuses the pass (PROOF_MEDIA_MISSING).
+    check: scripts/kernel/job-artifacts.mjs
+  - id: postconditions
+    requirement:
+      en: Every required business/technical postcondition passes an independent current read-only probe
+        against the bound build/environment, including declared persistence, negative, denial and
+        asynchronous checks.
+  - id: cleanup
+    requirement:
+      en: Every selected run-owned effect is independently confirmed absent or restored by its real owner
+        and every retained object has an explicit authorized reason; no unresolved/unknown cleanup
+        can earn pass.
+  - id: work-lifecycle
+    requirement:
+      en: The operation produces evidence only. Canonical Work remains state todo without completion edits
+        until a separate final reconciliation binds current SRS, SDS, code, test/E2E and UAT to one
+        delivery revision.
+judge:
+  - by: machine
+    measures: [declared-checks, proof-media, contract-script]
+    proofs: [evidence-integrity]
+    why: "the evidence files are read from the filed report and a pass without a screenshot and the session video is refused; the bindings are recomputed independently from the immutable receipts"
+blockers:
+  - code: ENVIRONMENT_NOT_READY
+    condition:
+      en: The env-health pre-step still reports a declared service down, hung, restart-failed or held by a
+        foreign process after the permitted bring-up. File blocked with blocker kind environment and the
+        env-health result; the walk is not run and nothing is charged to the product.
+  - code: PRODUCT_DEFECT_OWNER
+    condition:
+      en: "The walk ran on a ready stack and a step is red. File failed with failureClass product and a
+        rootCause naming the owner of the fix - node: the Work record (impl.<feature>.<repo>.<name>) or
+        op whose output is wrong, op: the build op that repairs it (backend.implement,
+        interface.implement), files: the source paths it touches, plus claim, evidence, counterCheck,
+        expectedFix and recheck. The kernel routes a repair leg to that owner and runs this op again
+        behind it; it never re-runs the same walk at an unchanged HEAD. Use failureClass transient only
+        for a genuine flake a plain re-run may clear, with the evidence for it."
+  - code: PREPARED_REQUEST_INVALID
+    condition:
+      en: Exact request/session/scripts/policies are missing, malformed, inconsistent or no longer match
+        hashes.
+  - code: RECEIPT_MISSING
+    condition:
+      en: The explicitly selected receipt/run path does not exist or lacks a finalized controlled-run
+        record.
+  - code: RECEIPT_TAMPERED
+    condition:
+      en: Receipt identity, schema, request/session hash, repeated binding, run ID/times or enumerated
+        artifact bytes are inconsistent, overwritten or ambiguous.
+  - code: BINDING_STALE
+    condition:
+      en: Current Work input, build, environment or ordered-flow digest differs from the
+        prepared/receipted value.
+  - code: HUMAN_GATE_INVALID
+    condition:
+      en: A required gate is undeclared, reordered, unanswered, response-invalid or lacks its required
+        evidence.
+  - code: EVIDENCE_INVALID
+    condition:
+      en: Required evidence is missing, corrupt, unplayable, hash/type mismatched, from another run or not
+        linked to its flow/step/gate.
+  - code: REDACTION_INCOMPLETE
+    condition:
+      en: Evidence/logs expose prohibited secrets or unrelated personal data, or required inspection is
+        incomplete.
+  - code: POSTCONDITION_FAILED
+    condition:
+      en: An independent machine postcondition fails, is not-run, cannot identify the exact target or
+        disagrees with the frozen expectation.
+  - code: CLEANUP_INCOMPLETE
+    condition:
+      en: A run-owned effect remains, restoration/absence is unknown or verification does not reach its
+        real owner.
+  - code: VERIFICATION_EFFECT_FORBIDDEN
+    condition:
+      en: Verification would need to replay a product action, execute cleanup, mutate target state or
+        exceed the read-only probe authority; report the needed owner rather than widening this
+        operation.
+  - code: DECLARED_DEPENDENCY_UNMET
+    condition:
+      en: A declared prerequisite is not effectively done or a required selected input is missing; never
+        weaken the graph, invent acceptance or run a predecessor to proceed.
+placeholders:
+  feature: shared
+  flow: shared
+  flow-id: shared
+  run-id: Exact immutable controlled-run ID supplied to verification
+  app: shared
+  bound-paths: shared
+  environment: Resolved environment resource slug
+layoutPolicy:
+  checks: [starci-validate]
+policy:
+  proofMedia: {images: 1, video: required}
+  canonicalWorkPolicy:
+    targetState: todo
+    nodeWrites: forbidden
+    completion: final-reconciliation-only
+    runtimeSqliteWrites: forbidden
+  assistedUatVerifyPolicy:
+    inputSelection: explicit-paths-only
+    latestRunDiscovery: forbidden
+    receiptSchema: starci/assisted-uat-receipt@1
+    completionSignal: execution-finished-only
+    passDerivedFrom:
+      - immutable-current-bindings
+      - complete-controlled-sequence
+      - machine-checks
+      - genuine-redacted-evidence
+      - independent-postconditions
+      - verified-cleanup
+    productEffects: forbidden
+    workState: todo-until-final-reconciliation
+    automaticUatVerify: distinct-operation-never-invoked
+    reportIngestion: starci-op-report-via-kernel-api
+route:
+  nodeKinds: [uat.ux]
+  phase: [verify, post-implementation]
+  intent: [uat-assisted, verify, browser, human-gated, receipt]
+  prerequisites: [uat.assisted.prepare passed for the exact request/session, immutable controlled-run receipt]
+  riskHints: [browser-required, human-checkpoint, evidence-sensitive]

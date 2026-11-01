@@ -1,0 +1,122 @@
+// The workflow checkpoint's serialization and durable, attempt-bound effect receipts.
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+export { withLock, withWorkflowLock } from '../goal/workflow-lock.mjs';
+import { pathKey } from '../lib/path-key.mjs';
+import { add as gitAdd } from '../api/git/add.mjs';
+import { readTree } from '../api/git/read-tree.mjs';
+import { writeTree } from '../api/git/write-tree.mjs';
+import { lsTree } from '../api/git/ls-tree.mjs';
+import { lsFiles } from '../api/git/ls-files.mjs';
+import { eventPayloadOf } from '../../engine/db/event-payload.mjs';
+import { jsonClone } from '../lib/json-clone.mjs';
+import { tempPath } from '../api/fs/temp-path.mjs';
+
+const SHA = /^[0-9a-f]{40,64}$/;
+const fail = ({ code }, message) => Object.assign(new Error(message), { code });
+export const literalPaths = (files) => files.map((file) => `:(literal)${file}`);
+
+export const receiptPayload = eventPayloadOf;
+export const appendEffectEvent = (ctx, args) => ctx.ledger.appendEvent(args); // a receipt over the inline bound goes to the blob store inside appendEvent (engine/db/event-compact.mjs)
+/** The event kind that withdraws a prepared preserve receipt the runtime found void (scripts/kernel/settle/prepared-recovery.mjs). */
+export const PREPARED_WITHDRAWN = 'workflow-op-preserved-withdrawn';
+// A prepared receipt counts only while no withdrawal of its attempt is newer than it.
+const NOT_WITHDRAWN = `AND seq>COALESCE((SELECT MAX(w.seq) FROM events w WHERE w.workflow_id=events.workflow_id AND w.entity_id=events.entity_id AND w.attempt_id IS events.attempt_id AND w.kind='${PREPARED_WITHDRAWN}'),0)`;
+export const preparedSettlementOf = (ctx, { workflowId, opId, attemptId }) => receiptPayload(ctx.db.prepare(`SELECT payload_json,payload_sha FROM events WHERE workflow_id=? AND entity_type='job' AND entity_id=? AND attempt_id IS ? AND kind IN ('workflow-checkpoint-prepared','workflow-op-preserved-prepared') ${NOT_WITHDRAWN} ORDER BY seq DESC LIMIT 1`).get(workflowId, opId, attemptId))?.settlement ?? null;
+
+/** Read the prepared/applied receipt for the same job dispatch attempt. */
+export function receiptState(ctx, { workflowId, opId }, kind) {
+  if (!ctx?.ledger) return null;
+  const acceptedAttempt = ctx.settlement?.state?.settledAttemptId;
+  const attempt = acceptedAttempt == null
+    ? ctx.db.prepare('SELECT attempt_id, dispatch_id FROM op_attempts WHERE workflow_id=? AND job_id=? ORDER BY attempt_id DESC LIMIT 1').get(workflowId, opId)
+    : ctx.db.prepare('SELECT attempt_id, dispatch_id FROM op_attempts WHERE workflow_id=? AND job_id=? AND attempt_id=?').get(workflowId, opId, acceptedAttempt);
+  const identity = { workflowId, opId, attemptId: attempt?.attempt_id ?? null, dispatchId: attempt?.dispatch_id ?? null };
+  const other = ctx.db.prepare(`SELECT kind FROM events WHERE workflow_id=? AND entity_type='job' AND entity_id=? AND attempt_id IS ? AND kind IN ('workflow-checkpoint-prepared','workflow-op-preserved-prepared') AND kind<>? ${NOT_WITHDRAWN} LIMIT 1`).get(workflowId, opId, identity.attemptId, `${kind}-prepared`);
+  if (other) throw fail({ code: 'workflow-checkpoint-recovery-conflict' }, `dispatch ${identity.dispatchId ?? opId} must recover its ${other.kind} effect before changing its verdict`);
+  const read = (phase) => receiptPayload(ctx.db.prepare(`SELECT payload_json,payload_sha FROM events WHERE workflow_id=? AND entity_type='job' AND entity_id=? AND attempt_id IS ? AND kind=? ${phase === 'prepared' ? NOT_WITHDRAWN : ''} ORDER BY seq DESC LIMIT 1`).get(workflowId, opId, identity.attemptId, `${kind}-${phase}`));
+  return { identity, prepared: read('prepared'), applied: read('applied') };
+}
+export function saveReceipt(ctx, kind, phase, receipt) {
+  if (ctx?.ledger) appendEffectEvent(ctx, { workflowId: receipt.workflowId, entityType: 'job', entityId: receipt.opId,
+    attemptId: receipt.attemptId, kind: `${kind}-${phase}`, payload: receipt });
+  phaseOf(ctx, phase, receipt);
+}
+export const phaseOf = (ctx, phase, receipt) => ctx?.checkpointPhase?.(phase, receipt);
+export const publicReceipt = ({ settlement: _settlement, ...receipt }) => receipt;
+export const acceptedDecision = (ctx) => ctx?.settlement ? { settlement: jsonClone(ctx.settlement) } : {};
+
+/** A private index observes exact worktree bytes without changing the real index or creating another commit. */
+export function snapshotTree(dir, parent, files, git) {
+  const index = tempPath(`starci-wf-${process.pid}-${crypto.randomBytes(4).toString('hex')}.index`);
+  const env = { GIT_INDEX_FILE: index };
+  try {
+    const seeded = git(readTree, dir, [parent], { env });
+    if (!seeded.ok) throw fail({ code: 'workflow-snapshot-failed' }, `git read-tree in ${dir}: ${seeded.stderr.slice(0, 200)}`);
+    const listed = git(lsFiles, dir, ['--cached', '-z'], { env });
+    if (!listed.ok) throw fail({ code: 'workflow-snapshot-failed' }, `git ls-files in ${dir}: ${listed.stderr.slice(0, 200)}`);
+    const tracked = new Set(listed.stdout.split('\0').filter(Boolean));
+    const stage = files.filter((file) => {
+      if (tracked.has(file)) return true;
+      try { return Boolean(fs.lstatSync(path.join(dir, file), { throwIfNoEntry: false })); }
+      catch (error) {
+        if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
+        throw error;
+      }
+    });
+    if (stage.length) {
+      const result = git(gitAdd, dir, ['-A', '--', ...literalPaths(stage)], { env });
+      if (!result.ok) throw fail({ code: 'workflow-snapshot-failed' }, `git add -A in ${dir}: ${result.stderr.slice(0, 200)}`);
+    }
+    const tree = git(writeTree, dir, [], { env }).stdout;
+    if (!SHA.test(tree)) throw fail({ code: 'workflow-snapshot-failed' }, `git write-tree in ${dir} printed no tree`);
+    return tree;
+  } finally { try { fs.rmSync(index, { force: true }); } catch { /* temp */ } }
+}
+/** A partial preserve can contain either saved bytes or already reset bytes; newer edits are held visibly. */
+export function requireReceiptBytes(rec, receipt, bases, git) {
+  if (receipt.path && (pathKey(receipt.path) !== pathKey(rec.path) || receipt.branch !== rec.branch)) throw fail({ code: 'workflow-checkpoint-recovery-conflict' }, `the registered tree of ${receipt.opId} no longer matches its prepared effect`);
+  if (!receipt.files.length) return;
+  const tree = snapshotTree(rec.path, bases[0], receipt.files, git);
+  const entries = (ref) => new Map(String(git(lsTree, rec.path, ['-r', '-z', ref, '--', ...literalPaths(receipt.files)]).stdout).split('\0').filter(Boolean).map((row) => [row.slice(row.indexOf('\t') + 1), row]));
+  const current = entries(tree), allowed = bases.map(entries);
+  const changed = receipt.files.filter((file) => !allowed.some((map) => map.get(file) === current.get(file)));
+  if (changed.length) throw Object.assign(fail({ code: 'workflow-checkpoint-recovery-conflict' }, `newer edits conflict with the prepared effect of ${receipt.opId}: ${changed.slice(0, 3).join(', ')}`), { files: changed });
+}
+
+/** A sibling may not step through another dispatch's unfinished cross-store effect. */
+export function requireCompletedEffects(ctx, { workflowId, opId }) {
+  if (!ctx?.ledger) return;
+  const prepared = ctx.db.prepare("SELECT entity_id, attempt_id, kind, payload_json,payload_sha FROM events WHERE workflow_id=? AND entity_type='job' AND kind IN ('workflow-checkpoint-prepared','workflow-op-preserved-prepared') ORDER BY seq").all(workflowId);
+  for (const row of prepared) {
+    const receipt = receiptPayload(row);
+    if (row.entity_id === opId && (!receipt?.settlement || ctx?.settlement?.job?.job_id === opId)) continue;
+    const kind = row.kind.slice(0, -'-prepared'.length);
+    const completion = receipt?.settlement ? kind : `${kind}-applied`;
+    const complete = ctx.db.prepare("SELECT 1 FROM events WHERE workflow_id=? AND entity_type='job' AND entity_id=? AND attempt_id IS ? AND kind=? LIMIT 1").get(workflowId, row.entity_id, row.attempt_id, completion);
+    if (!complete) throw fail({ code: 'workflow-checkpoint-recovery-required' }, `workflow ${workflowId} must recover the prepared effect of ${row.entity_id} before ${opId}`);
+  }
+  const rebase = pendingRebaseOf(ctx, workflowId);
+  if (rebase && rebase.opId !== opId) throw fail({ code: 'workflow-checkpoint-recovery-required' }, `workflow ${workflowId} must recover the rebase of ${rebase.opId ?? 'finish'} first`);
+}
+
+/** The latest unfinished workflow rebase has one exact proposal, even after the process loses its acknowledgement. */
+export function pendingRebaseOf(ctx, workflowId) {
+  if (!ctx?.ledger) return null;
+  const row = ctx.db.prepare("SELECT seq,payload_json,payload_sha FROM events WHERE workflow_id=? AND entity_type='workflow' AND entity_id=? AND kind='workflow-rebase-prepared' ORDER BY seq DESC LIMIT 1").get(workflowId, workflowId);
+  if (!row) return null;
+  const applied = ctx.db.prepare("SELECT 1 FROM events WHERE workflow_id=? AND entity_type='workflow' AND entity_id=? AND kind='workflow-rebase-applied' AND seq>? LIMIT 1").get(workflowId, workflowId, row.seq);
+  return applied ? null : receiptPayload(row);
+}
+export function saveRebase(ctx, phase, receipt) {
+  if (ctx?.ledger) appendEffectEvent(ctx, { workflowId: receipt.workflowId, entityType: 'workflow', entityId: receipt.workflowId,
+    attemptId: receipt.attemptId, kind: `workflow-rebase-${phase}`, payload: receipt });
+  phaseOf(ctx, `rebase-${phase}`, receipt);
+}
+export function completedRebaseOf(ctx, { workflowId, opId }) {
+  if (!ctx?.ledger || !opId) return null;
+  const attemptId = ctx.settlement?.state?.settledAttemptId ?? ctx.db.prepare('SELECT attempt_id FROM op_attempts WHERE workflow_id=? AND job_id=? ORDER BY attempt_id DESC LIMIT 1').get(workflowId, opId)?.attempt_id ?? null;
+  const row = ctx.db.prepare("SELECT payload_json,payload_sha FROM events WHERE workflow_id=? AND entity_type='workflow' AND entity_id=? AND attempt_id IS ? AND kind='workflow-rebase-applied' AND json_extract(payload_json,'$.opId')=? ORDER BY seq DESC LIMIT 1").get(workflowId, workflowId, attemptId, opId);
+  return receiptPayload(row);
+}

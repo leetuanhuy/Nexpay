@@ -1,0 +1,74 @@
+schema: starci/schema@1
+id: starci/canon-pins@1
+title: Canon dependency pins
+description: >-
+  The exact version of every dependency a product repository must pin, one version per dependency for the whole
+  StarCi family (HFS decision 10 and K18). A pin is an exact semver, never a range: `^`, `~`, `>=`, `x` and
+  dist-tags are refused. A `@starci/*` pin names its `source`, the package.json inside this runtime whose version
+  it must equal, so a package cannot be bumped without the pin moving in the same change. The document is data
+  read by scripts/checks/check-canon-pins.mjs; every pin, `@starci/*` included, is installed from the npm registry at exactly its version. It grants no authority to edit a
+  product repository.
+type: object
+additionalProperties: false
+required: [schema, pins]
+properties:
+  schema:
+    const: starci/canon-pins@1
+  purpose:
+    type: string
+    minLength: 1
+  pins:
+    type: object
+    minProperties: 1
+    additionalProperties: {$ref: '#/$defs/pin'}
+    required:
+      - '@starci/grammar'
+      - '@starci/eslint-canon-be'
+      - '@starci/eslint-canon-fe'
+      - '@starci/stylelint-canon'
+      - '@starci/tsconfig'
+      - '@starci/prettier-config'
+      - '@starci/jest-preset'
+      - '@starci/cli'
+      - typescript
+      - stylelint
+      - prettier
+      - jest
+      - ts-jest
+      - next
+      - react
+      - react-dom
+      - '@nestjs/core'
+      - '@heroui/react'
+      - '@xyflow/react'
+$defs:
+  exactVersion:
+    type: string
+    pattern: ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$
+    description: An exact semantic version. A range, a tag or a wildcard is not a pin.
+  pin:
+    type: object
+    additionalProperties: false
+    required: [version, group, side]
+    properties:
+      version: {$ref: '#/$defs/exactVersion'}
+      group:
+        enum: [starci, tooling, test, framework, ui]
+        description: What the dependency is for. Every group is installed from the npm registry at the exact version; `starci` packages are published from this runtime.
+      side:
+        enum: [be, fe, both]
+        description: Which side of an app uses it (be/ or fe/; `both` for both). The app root package.json carries every pin; a package.json of a side folder (fe/packages/*) carries only its side's.
+      source:
+        type: string
+        pattern: ^packages/[a-z0-9/-]+/package\.json$
+        description: >-
+          For a `starci` pin only - the package.json in this runtime whose `version` the pin must equal.
+      install:
+        enum: [registry]
+        description: >-
+          Required on a `starci` pin - `registry`: the package is published to the npm registry at exactly this
+          version and a product repository installs it from there (`"<version>"`, never `file:`).
+      why:
+        type: string
+        minLength: 1
+        description: One sentence naming the repositories that disagreed and which value won.

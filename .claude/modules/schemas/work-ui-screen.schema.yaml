@@ -1,0 +1,1212 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:work:ui-screen:1
+type: object
+additionalProperties: false
+description: "One screen the person actually sees, and every state it can be in. The state list is the point
+  of the record: a screen specified only in its happy state gets built only in its happy state, and the
+  empty, refused and working states are discovered by a person hitting them in production. Because the
+  screen binds the brand by revision, a brand change is a visible input change here rather than a silent
+  divergence between what was captured and what now renders. A screen reaches done only once at least one
+  of its assets carries a real `generation` record from interface.draw and its coverage map names every
+  state it lists - never by authored claim."
+required:
+  - brand
+  - refs
+  - ui
+properties:
+  schema:
+    const: work/ui-screen@1
+    $ref: "urn:work:common:1#/$defs/familyDiscriminator"
+  id:
+    type: string
+    pattern: ^ui(?:\.[a-z0-9]+(?:-[a-z0-9]+)*){2,}$
+    description: "The screen's stable id, a lowercase dot-path under the ui family: ui.<feature>.<name>;
+      example ui.task.list. The prefix is enforced so that an implementation naming ui.x is visibly claiming
+      to build a screen rather than to enforce a rule."
+  title:
+    $ref: "urn:work:common:1#/$defs/prose"
+    description: What the screen is, in the words a person would use for it. It is the name the journey and
+      the UAT flow will use, so it is settled here once.
+  state:
+    $ref: "urn:work:common:1#/$defs/state"
+  activity:
+    $ref: "urn:work:common:1#/$defs/activity"
+  brand:
+    type: object
+    additionalProperties: false
+    required:
+      - rev
+    description: The brand revision this screen is designed against. It is a binding, not a decoration - the
+      brand record owns the tokens, and naming its revision here is what makes a brand bump suspend this
+      screen's captures instead of leaving them quietly wrong.
+    properties:
+      rev:
+        type: integer
+        minimum: 1
+        description: The revision of the brand record this screen was designed and captured against. A
+          number rather than a copy of the tokens, because a copy is a second source of truth that drifts.
+  shell:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required:
+          - ref
+          - rev
+        properties:
+          ref:
+            const: shell
+            description: The shell record's id - there is one per tree, at shell/index.yaml.
+          rev:
+            type: integer
+            minimum: 1
+            description: The shell record's `rev` this screen was drawn inside. A shell bump makes the
+              binding stale, and scripts/work/ui/shell-conformance.mjs reports SHELL_REV_STALE until the
+              screen is redrawn against the current chrome.
+          activeNav:
+            type: string
+            pattern: ^[a-z0-9]+(?:[-_][a-z0-9]+)*$
+            description: The navigation key this screen shows selected, as a layout above its route spells it.
+          layouts:
+            type: array
+            uniqueItems: true
+            description: "Every visible layout above this screen's route, bound by its own revision - {node:
+              /[locale]/(console), rev: 2}. A re-captured or changed layout bumps its rev and stales only the
+              screens drawn under it (LAYOUT_REV_STALE); when this list is present the tree-wide `rev` is not
+              compared."
+            items:
+              type: object
+              additionalProperties: false
+              required:
+                - node
+                - rev
+              properties:
+                node:
+                  $ref: "#/$defs/layoutNodeId"
+                rev:
+                  type: integer
+                  minimum: 1
+                destination:
+                  type: string
+                  pattern: ^[a-z0-9]+(?:-[a-z0-9]+)*$
+                  description: The key of this layout's `destinations` entry the screen is drawn in, when its
+                    route alone does not decide it; otherwise the route's destination is taken.
+      - type: object
+        additionalProperties: false
+        required:
+          - chromeless
+          - because
+        properties:
+          chromeless:
+            const: true
+          because:
+            $ref: "urn:work:common:1#/$defs/prose"
+            description: Why this screen sits outside the app shell - a pre-auth route, a public page.
+    description: "The application shell this screen is drawn inside, bound by revision the way `brand` is -
+      `{ref: shell, rev, layouts}` naming the layout tree (work/layout-tree@1), or `{chromeless: true, because}` for a
+      route the product draws without its persistent chrome. `ui.shell` below is the direction's prose about
+      that chrome; this is the edge. It is optional on the schema so ui records drawn before the shell
+      record existed stay valid - `starci runtime validate` lists each of them as SHELL_BINDING_MISSING for a
+      redraw - and interface.draw's shell-conformance proof is what requires it on every record the op
+      writes from now on (scripts/work/ui/shell-conformance.mjs)."
+  app:
+    type: string
+    pattern: ^[a-z0-9]+(?:-[a-z0-9]+)*$
+    description: "The fe app the route belongs to - a name in the layout tree's apps[] (hfs.json
+      sides.fe.apps[].name). Required when the tree declares several apps and the route alone does not
+      say (a route that exists in one app only is that app); a tree of one app needs none. A route is resolved in
+      this app: the same route in another app is another screen (UI_APP_UNKNOWN, UI_APP_MISSING)."
+  route:
+    $ref: "#/$defs/layoutNodeId"
+    description: "The App Router route this screen is, as the layout tree names the segment - groups, slots and
+      dynamic segments kept: /[locale]/(console)/agentos/[id]/accounting. It places the screen under its
+      layouts (drawn inside their real captures) and is where interface.implement creates its files. Optional on
+      the schema so records drawn before the layout tree stay valid; interface.draw's shell-conformance proof
+      requires it, and `starci runtime validate` lists a record without it as UI_ROUTE_MISSING."
+  routeParent:
+    $ref: "#/$defs/layoutNodeId"
+    description: For a route the layout tree does not hold yet (a page, layout or intercept this feature adds),
+      the nearest existing node it will sit under. Its ancestors are what the drawing is composited into and
+      what must be settled first.
+  surface:
+    description: "What this record is in the App Router - layout, page, modal, drawer, loading, error or
+      not-found - or, for an overlay only, one per breakpoint ({desktop: drawer, mobile: modal}). A popover,
+      dropdown, toast or tooltip is not a surface: it is a state in ui.flow of the page it opens on. There is no
+      sheet: a bottom sheet is a drawer with direction bottom."
+    oneOf:
+      - $ref: "#/$defs/surface"
+      - type: object
+        minProperties: 1
+        propertyNames:
+          pattern: ^[a-z0-9]+(?:[-_][a-z0-9]+)*$
+        additionalProperties:
+          enum:
+            - modal
+            - drawer
+  direction:
+    description: "The edge a drawer is anchored to - left, right, top or bottom - or one per breakpoint
+      ({desktop: right, mobile: bottom}), as the Drawer component's `direction` takes it. Required wherever the
+      surface is a drawer and forbidden elsewhere (scripts/work/ui/shell-conformance.mjs); the compositor anchors
+      the panel to that edge over the dimmed host."
+    oneOf:
+      - $ref: "#/$defs/drawerDirection"
+      - type: object
+        minProperties: 1
+        propertyNames:
+          pattern: ^[a-z0-9]+(?:[-_][a-z0-9]+)*$
+        additionalProperties:
+          $ref: "#/$defs/drawerDirection"
+  routed:
+    type: boolean
+    description: "For a modal or drawer only. true - a Next.js intercepting route (@modal/(.)x) presents it over
+      its host AND x/page.tsx renders it as a full page, so it is drawn in both presentations; false - component
+      state with no URL, drawn only over its host."
+  host:
+    type: string
+    pattern: ^(?:/\S*|ui(?:\.[a-z0-9]+(?:-[a-z0-9]+)*){2,})$
+    description: For a modal or drawer only - the ui record id, or the route, it opens over. Its page composite at
+      the same breakpoint and theme is the dimmed background the overlay is composited onto.
+  persona:
+    type: string
+    pattern: ^[a-z0-9]+(?:[-_][a-z0-9]+)*$
+    description: The layout tree persona role this screen's data is shown for, where the flow is for one role.
+  ui:
+    type: object
+    additionalProperties: false
+    required:
+      - intent
+      - surfaces
+      - coverage
+      - accessibility
+      - responsive
+      - observations
+      - gaps
+    anyOf:
+      - required:
+          - states
+        properties:
+          states: true
+      - required:
+          - shapes
+        properties:
+          shapes: true
+    description: "The direction itself - what interface.draw designed and what it recorded about designing
+      it. The nine fields work-layout.yaml names are required; the rest are the op's own record of the
+      inputs it accepted and the review it performed, kept beside the direction rather than in a separate
+      file that could be lost from it."
+    properties:
+      intent:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: What this screen is for, composed rather than listed - the sentence a reader checks
+          every state and surface below against.
+      archetype:
+        type: string
+        pattern: ^[a-z][a-zA-Z0-9-]*$
+        description: "The brand.direction archetype this surface is drawn under - dashboard, list, detail, form,
+          wizard, emptyFirstRun, or layout for a surface-layout record (brand.decide's chrome). interface.draw
+          reads the direction's `archetypes.<archetype>` block and, behind runtimes.yaml
+          allocation.drawLoop.directionPrerequisite, refuses to dispatch until that archetype's status is
+          accepted (scripts/kernel/prerequisites.mjs direction-unaccepted). Absent, scripts/work/ui-archetype.mjs
+          derives it from the record: layout, a modal/drawer or editing intent is form, a stepped task wizard, a
+          dynamic last route segment detail, an overview dashboard, else list."
+      status:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: How far the direction has got - a generated proposal, an agent-reviewed one, one an
+          owner has accepted. It is written because a proposal and an accepted direction look identical as
+          images and mean different things to whoever implements them.
+      surfaces:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        description: The addressable surfaces this screen covers, each with the route that reaches it and
+          the actors who may. One record can own more than one surface when they are the same screen seen by
+          different people.
+        items:
+          type: object
+          additionalProperties: false
+          required:
+            - name
+            - route
+            - purpose
+            - actors
+          properties:
+            name:
+              $ref: "urn:work:common:1#/$defs/slug"
+            route:
+              $ref: "urn:work:common:1#/$defs/prose"
+              description: The path a person reaches this surface at.
+            purpose:
+              $ref: "urn:work:common:1#/$defs/prose"
+              description: What the person came here to do.
+            actors:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items:
+                $ref: "urn:work:common:1#/$defs/slug"
+              description: Who may see this surface, by role.
+      states:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        description: The states this screen can be in, each with what puts it there and what the person
+          sees. Listing them is what turns "design the screen" into a countable piece of work and what the
+          coverage map is checked against. Beside `shapes` it lists the shapes only; a slot's data statuses
+          are in `dataStatus`.
+        items:
+          type: object
+          additionalProperties: false
+          required:
+            - name
+            - trigger
+            - behavior
+          properties:
+            name:
+              $ref: "urn:work:common:1#/$defs/slug"
+              description: The state's name, which the coverage map must name back.
+            trigger:
+              $ref: "urn:work:common:1#/$defs/prose"
+              description: What puts the screen into this state.
+            behavior:
+              $ref: "urn:work:common:1#/$defs/prose"
+              description: What the person sees and can do while it holds.
+      shapes:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        description: "Every layout this screen draws. A shape is one value of a pure component's `XState`
+          and gets exactly one drawing, at the viewports it names. A slot's data status (`$defs/dataStatus`)
+          is not a shape: it renders by recipe (SlotView) and is listed under `dataStatus`. A shape whose
+          state is a data status stands only with `nonDerivable`; scripts/work/ui/ui-shapes.mjs refuses any
+          other shape or drawing of a data status as DATA_STATUS_DRAWN, and `states` beside this list keeps
+          the trigger and behaviour of each shape."
+        items:
+          type: object
+          additionalProperties: false
+          required:
+            - base
+            - state
+            - viewports
+          properties:
+            base:
+              type: string
+              pattern: ^[A-Z][A-Za-z0-9]*Base$
+              description: The pure component (`XBase`) this shape is a state of.
+            state:
+              $ref: "urn:work:common:1#/$defs/slug"
+              description: The shape's name, which its drawings, `states` and the coverage map name back.
+            viewports:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items:
+                $ref: "urn:work:common:1#/$defs/slug"
+              description: The named breakpoints the shape is drawn at.
+            nonDerivable:
+              $ref: "urn:work:common:1#/$defs/prose"
+              description: Why this data-status state cannot be rendered by recipe and is drawn as its own
+                layout - a first-run onboarding empty screen with its own call to action, a domain recovery
+                flow.
+      dataStatus:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        description: The data statuses each slot supports, as data. A slot is one API a block reads; its
+          statuses render through SlotView from the block's default shape and are never drawn or reviewed.
+        items:
+          type: object
+          additionalProperties: false
+          required:
+            - base
+            - slot
+            - statuses
+          properties:
+            base:
+              type: string
+              pattern: ^[A-Z][A-Za-z0-9]*Base$
+              description: The pure component whose slot this is.
+            slot:
+              $ref: "urn:work:common:1#/$defs/slug"
+              description: The slot, named for the data it holds.
+            statuses:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items:
+                $ref: "#/$defs/dataStatus"
+      coverage:
+        type: object
+        additionalProperties: false
+        required:
+          - scale
+          - representativeScreens
+          - map
+        description: "Which of the states, viewports and themes the direction actually covers. It exists
+          because a draw is bounded: the honest record is not every combination but a named subset plus the
+          rule for deriving the rest, and the gate refuses a done screen whose map does not name every state
+          the list above declares."
+        properties:
+          scale:
+            $ref: "urn:work:common:1#/$defs/slug"
+            description: How wide the draw went - bounded, exhaustive - so a reader knows whether an absent
+              combination is undrawn or deliberately derived.
+          representativeScreens:
+            type: array
+            minItems: 1
+            uniqueItems: true
+            items:
+              $ref: "urn:work:common:1#/$defs/slug"
+            description: The surfaces that were drawn in full and from which the rest derive.
+          breakpoints:
+            type: array
+            minItems: 1
+            uniqueItems: true
+            items:
+              $ref: "urn:work:common:1#/$defs/slug"
+            description: The named breakpoints this screen claims to cover. Declaring them is what lets a
+              checker compare what was claimed against what the map and the shots actually carry, instead of
+              reading a pixel width and guessing which breakpoint somebody meant.
+          themes:
+            type: array
+            minItems: 1
+            uniqueItems: true
+            items:
+              $ref: "#/$defs/theme"
+            description: The themes this screen claims to cover. Light is required of every drawing set
+              (owner ruling 2026-09-24, beside desktop and mobile); dark is optional, and a claimed theme
+              with no shot bound to it is only visible as an absence if the claim is written down.
+          map:
+            type: array
+            minItems: 1
+            uniqueItems: true
+            description: One entry per combination the direction covers, binding a state to the shot that
+              shows it. It is the executable half of the coverage claim - the gate reads it against the
+              state list, and a checker reads each entry's asset against what is on disk.
+            items:
+              type: object
+              additionalProperties: false
+              required:
+                - screen
+                - state
+                - viewport
+              properties:
+                screen:
+                  $ref: "urn:work:common:1#/$defs/slug"
+                  description: Which surface this entry is of.
+                state:
+                  $ref: "urn:work:common:1#/$defs/slug"
+                  description: Which state it shows, by the name the state list gives it.
+                viewport:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                  description: The viewport it was drawn at, named with its size so two entries at the same
+                    breakpoint and different widths are distinguishable.
+                breakpoint:
+                  $ref: "urn:work:common:1#/$defs/slug"
+                  description: The named breakpoint that viewport belongs to. It is separate from the
+                    viewport because the viewport is a measurement and the breakpoint is the design
+                    decision, and a check for "is every breakpoint covered" cannot be answered by widths.
+                theme:
+                  $ref: "#/$defs/theme"
+                  description: Which theme this entry shows. It is omitted where the screen has only one,
+                    and stated wherever more than one is claimed, because a theme nobody bound to a shot is
+                    a theme nobody drew.
+                components:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items:
+                    $ref: "urn:work:common:1#/$defs/prose"
+                  description: The grammar components the entry composes, each named as it is exported so
+                    an implementer builds from the same vocabulary the direction drew from.
+                derivation:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                  description: How this entry derives from a representative screen where it was not drawn in
+                    full - which is what makes a bounded coverage claim honest rather than merely short.
+                directionAsset:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                  description: The asset this entry is shown by, relative to the record's own directory.
+      accessibility:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "urn:work:common:1#/$defs/prose"
+        description: What the direction commits to for people who do not use it the way it was drawn -
+          focus order, contrast, labelling, keyboard reach. It is on the design record because retrofitting
+          it to a built screen means rebuilding the screen.
+      responsive:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "urn:work:common:1#/$defs/prose"
+        description: How the composition changes with the viewport, stated as rules rather than as one more
+          drawing, so that a width nobody drew still has an answer.
+      artworkSlots:
+        type: array
+        uniqueItems: true
+        description: Where brand artwork may sit on this screen, and what each slot is for. A slot is a
+          place, not an image - the bytes belong to the brand record, and a screen naming a slot is saying
+          where they go rather than copying them.
+        items:
+          type: object
+          additionalProperties: false
+          properties:
+            id:
+              $ref: "urn:work:common:1#/$defs/slug"
+            kind:
+              $ref: "urn:work:common:1#/$defs/prose"
+            screen:
+              $ref: "urn:work:common:1#/$defs/slug"
+            placement:
+              $ref: "urn:work:common:1#/$defs/prose"
+            decorative:
+              type: boolean
+              description: Whether the artwork carries meaning or only atmosphere. A decorative slot is one
+                an assistive reader may skip, which is a decision and not an oversight.
+            states:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items:
+                $ref: "urn:work:common:1#/$defs/slug"
+            status:
+              $ref: "urn:work:common:1#/$defs/prose"
+            master:
+              oneOf:
+                - $ref: "urn:work:common:1#/$defs/prose"
+                - type: object
+                  additionalProperties: false
+                  properties:
+                    path:
+                      $ref: "urn:work:common:1#/$defs/prose"
+                    artifact:
+                      type: integer
+                      minimum: 1
+                    name:
+                      $ref: "urn:work:common:1#/$defs/prose"
+                      description: A blob citation of the master (with sha256), instead of a path.
+                    sha256:
+                      $ref: "urn:work:common:1#/$defs/sha256"
+                    record:
+                      type: string
+                      pattern: ^(?:[a-z0-9]+(?:-[a-z0-9]+)*)(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)*$
+                      description: The record that owns the bytes, by id - usually the brand, whose id
+                        carries no family prefix because there is one of it per tree.
+              description: The owning artwork, either by path or as an edge into the record that owns the
+                bytes. Consumers refer to the one owner rather than duplicating the file.
+      mascotPolicy:
+        $ref: "urn:work:common:1#/$defs/prose"
+        description: Whether the mascot appears on this screen and where. It is stated even when the answer
+          is no, because an absent mascot and an undecided one look the same on a drawing.
+      assets:
+        $ref: "#/$defs/uiAssets"
+        description: Every file this direction produced or consumed, each with the role it plays and, for a
+          generated one, the provenance of its generation. It is the ui block's own copy of the record's
+          top-level `assets`, kept here because the draw op writes the block as one document.
+      observations:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "urn:work:common:1#/$defs/prose"
+        description: What the draw noticed that the direction does not itself claim - a component that did
+          not exist, a limit of the reference it worked from. It is kept apart from `gaps` because a
+          observation is a fact and a gap is a demand.
+      gaps:
+        type: array
+        uniqueItems: true
+        description: What this direction cannot answer and who must. Each entry carries a code so that the
+          same absence across several screens is one countable thing rather than several sentences.
+        items:
+          oneOf:
+            - $ref: "urn:work:common:1#/$defs/prose"
+            - type: object
+              additionalProperties: false
+              required:
+                - code
+                - detail
+              properties:
+                code:
+                  type: string
+                  pattern: ^[A-Z][A-Z0-9_]*$
+                  description: The absence's own name, in the screaming form the render and brand checks
+                    already report, so a gap here and a finding there are matchable by string equality.
+                detail:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                  description: What exactly is missing and what closing it would take.
+      interactions:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "urn:work:common:1#/$defs/prose"
+        description: What the person can do on this screen beyond reading it, where the states list does not
+          already carry it.
+      flow:
+        type: object
+        additionalProperties: false
+        required:
+          - transitions
+        description: "The durable interaction-flow map interface.draw derives from the accepted journeys and
+          SDS - every transition with its trigger and landing state, and the explicitly named edge cases
+          (refresh mid-flow, external redirect return, double-submit, tab close, failure/retry, dead ends).
+          It is the machine half of `interactions`: that list says in prose what a person can do, this map
+          says where each action lands, so an implementation and a UAT walk read the same edges instead of
+          re-deriving them. It is optional on the schema because screens drawn before the op demanded it
+          stay valid; interface.draw's coverage proof is what requires it, and an unaccounted edge is a
+          typed gap rather than an invented one."
+        properties:
+          route:
+            $ref: "urn:work:common:1#/$defs/prose"
+            description: The one route the flow runs on, when the screen has a single address.
+          routes:
+            type: array
+            minItems: 1
+            uniqueItems: true
+            items:
+              $ref: "urn:work:common:1#/$defs/prose"
+            description: Every route the flow runs on, when the screen is reached at more than one address.
+          scope:
+            $ref: "urn:work:common:1#/$defs/prose"
+            description: What the map covers, in words - the surfaces or the slice of the journey it is of.
+          states:
+            type: array
+            minItems: 1
+            uniqueItems: true
+            items:
+              $ref: "urn:work:common:1#/$defs/slug"
+            description: The states the flow moves between, when the map names them apart from the state
+              list above - an entry or external state such as a redirect origin is a flow state without
+              being a drawn screen state.
+          transitions:
+            type: array
+            minItems: 1
+            uniqueItems: true
+            description: Every accepted transition, each naming where it starts, what triggers it and where
+              it lands. A transition with no landing state is a hole in the map, and holes are gaps.
+            items:
+              type: object
+              additionalProperties: false
+              required:
+                - from
+                - trigger
+                - to
+              properties:
+                id:
+                  $ref: "urn:work:common:1#/$defs/slug"
+                  description: The transition's own name, when the map addresses transitions individually.
+                from:
+                  oneOf:
+                    - $ref: "urn:work:common:1#/$defs/slug"
+                    - type: array
+                      minItems: 1
+                      uniqueItems: true
+                      items:
+                        $ref: "urn:work:common:1#/$defs/slug"
+                  description: The state or states the transition leaves - a list when the same trigger lands
+                    the same way from several states.
+                trigger:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                  description: What the person or the system does that moves the screen.
+                to:
+                  $ref: "urn:work:common:1#/$defs/slug"
+                  description: The landing state.
+                guard:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                  description: The condition that must hold for the transition to fire.
+                rule:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                  description: The accepted rule the landing honours - what is withheld, kept or shown.
+                effect:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                  description: What the transition changes beyond the state it lands in.
+          edgeCases:
+            type: array
+            minItems: 1
+            uniqueItems: true
+            description: The reachable edge cases named explicitly, each with how the screen handles it -
+              either a sentence, or a name and its handling so the same edge across screens is countable.
+            items:
+              oneOf:
+                - $ref: "urn:work:common:1#/$defs/prose"
+                - type: object
+                  additionalProperties: false
+                  required:
+                    - name
+                    - handling
+                  properties:
+                    name:
+                      $ref: "urn:work:common:1#/$defs/slug"
+                    handling:
+                      $ref: "urn:work:common:1#/$defs/prose"
+      links:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        description: Destinations the direction draws, each with whether the route behind it exists. A drawn
+          link to a route nobody built is a promise the screen makes and the product does not keep, and the
+          status is where that is admitted.
+        items:
+          type: object
+          additionalProperties: false
+          required:
+            - label
+            - href
+            - status
+          properties:
+            label:
+              $ref: "urn:work:common:1#/$defs/prose"
+            href:
+              $ref: "urn:work:common:1#/$defs/prose"
+            status:
+              $ref: "urn:work:common:1#/$defs/prose"
+      controls:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        description: The controls the direction draws and where each one leads, with the same honesty about
+          whether the behaviour behind it exists.
+        items:
+          type: object
+          additionalProperties: false
+          required:
+            - label
+            - status
+          properties:
+            label:
+              $ref: "urn:work:common:1#/$defs/prose"
+            destination:
+              $ref: "urn:work:common:1#/$defs/prose"
+            status:
+              $ref: "urn:work:common:1#/$defs/prose"
+      shell:
+        $ref: "#/$defs/openBlock"
+        description: The application shell this screen sits inside - header, navigation, footer, and which
+          component owns each. Its keys vary with the shell the product actually has, so they are
+          constrained rather than listed.
+      appOwnedRegions:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        description: The parts of the composition the application owns rather than the grammar, each with
+          the anatomy it is built from. Naming them is what stops an implementer reaching for a component
+          that was never meant to carry this region.
+        items:
+          type: object
+          additionalProperties: false
+          required:
+            - anatomy
+          properties:
+            id:
+              $ref: "urn:work:common:1#/$defs/slug"
+            name:
+              $ref: "urn:work:common:1#/$defs/slug"
+            owner:
+              $ref: "urn:work:common:1#/$defs/slug"
+            anatomy:
+              $ref: "urn:work:common:1#/$defs/prose"
+            reference:
+              $ref: "urn:work:common:1#/$defs/prose"
+      acceptedInputs:
+        $ref: "#/$defs/openBlock"
+        description: What the draw read and the digest of each thing it read - the brand at a revision, the
+          business records, the grammar it inspected, the knowledge rules. It is the op's record of its own
+          inputs, so its keys follow what that op accepted rather than a shape fixed here.
+      provenance:
+        $ref: "#/$defs/openBlock"
+        description: Where the direction came from - the commit, the grammar version, the references it was
+          composed against. It is the same kind of op-owned record as acceptedInputs and is constrained the
+          same way.
+      anatomyReview:
+        $ref: "#/$defs/openBlock"
+        description: The before-and-after of a review pass over the drawn anatomy, with who performed it and
+          when. It is kept because a regenerated direction that does not say what it changed is a file
+          somebody has to diff by eye.
+      review:
+        $ref: "#/$defs/openBlock"
+        description: The review this direction has actually had - its method, what it passed, what it could
+          not establish. An agent-reviewed proposal is not owner acceptance and the block says which it is.
+      supersededDirection:
+        type: object
+        additionalProperties: false
+        required:
+          - reason
+        oneOf:
+          - required: [path]
+            properties: {path: true}
+          - required: [name, sha256]
+            properties: {name: true, sha256: true}
+        description: The direction this one replaced, kept by path (or blob citation) and digest rather than deleted. A
+          replaced drawing is history, and history that is removed cannot answer why the current one looks
+          the way it does.
+        properties:
+          path:
+            $ref: "urn:work:common:1#/$defs/prose"
+          artifact:
+            type: integer
+            minimum: 1
+          name:
+            $ref: "urn:work:common:1#/$defs/prose"
+            description: The artifact name of the blob the replaced direction is cited by.
+          sha256:
+            $ref: "urn:work:common:1#/$defs/sha256"
+          revision:
+            type: string
+            pattern: ^[a-f0-9]{7,64}$
+          reason:
+            $ref: "urn:work:common:1#/$defs/prose"
+  assets:
+    $ref: "#/$defs/uiAssets"
+    description: "Every file this record owns under its own assets/, each with the role it plays. A
+      generation-bearing asset is ui-owned only: it is what tells a designed direction apart from a real
+      running-page capture regardless of prose provenance, and the gate refuses one on any other family."
+  refs:
+    $ref: "urn:work:common:1#/$defs/refs"
+  dependsOn:
+    $ref: "urn:work:common:1#/$defs/dependsOn"
+  proves:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "urn:work:common:1#/$defs/recordId"
+    description: The records this screen itself demonstrates, by id, where it is the thing that demonstrates
+      them. It is the same authored forward edge an implementation carries, and it is optional because most
+      screens only serve requirements through `refs` and are themselves demonstrated by an implementation or
+      a walk.
+  requiresProof:
+    $ref: "urn:work:common:1#/$defs/requiresProof"
+  provenBy:
+    $ref: "urn:work:common:1#/$defs/provenBy"
+  evidence:
+    $ref: "urn:work:common:1#/$defs/slug"
+    description: The single evidence directory under this record's evidence/ folder that carries the proof
+      this screen was seen in the states it declares. At most one, because a screen has one current answer to
+      whether its captures are real.
+  subscribes:
+    $ref: "urn:work:common:1#/$defs/subscribes"
+  blockedBy:
+    $ref: "urn:work:common:1#/$defs/blockedBy"
+  conflictsWith:
+    $ref: "urn:work:common:1#/$defs/conflictsWith"
+  blockers:
+    $ref: "urn:work:common:1#/$defs/blockers"
+  verificationSource:
+    $ref: "urn:work:common:1#/$defs/verificationSource"
+  because:
+    $ref: "urn:work:common:1#/$defs/because"
+  change:
+    $ref: "urn:work:common:1#/$defs/change"
+  extensions:
+    $ref: "urn:work:common:1#/$defs/extensions"
+allOf:
+  - $ref: "urn:work:common:1#/$defs/leafIdentity"
+  - $ref: "urn:work:common:1#/$defs/authoredClaimMustSayWhy"
+$defs:
+  dataStatus:
+    enum:
+      - loading
+      - skeleton
+      - empty
+      - error
+      - forbidden
+      - unauthorized
+      - not-found
+    description: A slot's data status - loading, skeleton, empty, error, 403, 401, 404. It is rendered by
+      recipe (SlotView) and is never a drawn shape.
+  dataStatusAlias:
+    description: The other state-name spellings of a data status, each mapped to the status it names.
+      scripts/work/ui/ui-shapes.mjs reads a state as a data status when its name is, or ends with `-` and,
+      a status or one of these spellings, and as `empty` when it is `no-<thing>` or ends with `-no-<thing>`
+      (no-runtime). A slot retrying, pending, uncertain, stale (last-known), unverified or limited is a
+      banner or badge over the same layout - a status the slot renders through SlotView, never a shape
+      (owner ruling 2026-09-27, nivo module-ledger).
+    const:
+      denied: forbidden
+      access-denied: forbidden
+      "403": forbidden
+      "401": unauthorized
+      unauthenticated: unauthorized
+      sign-in-required: unauthorized
+      "404": not-found
+      errored: error
+      load-error: error
+      read-error: error
+      retry: error
+      retrying: error
+      uncertain: error
+      stale: error
+      last-known: error
+      pending: loading
+      unverified: forbidden
+      limited: empty
+  theme:
+    enum:
+      - light
+      - dark
+      - system
+    description: Which colour scheme a drawing or a shot is in. It is a closed set because a product either
+      has a second theme or it does not, and a free-form word here would let one screen claim a theme no
+      other screen knows about.
+  layoutNodeId:
+    type: string
+    pattern: ^/(?:[^/\s]+(?:/[^/\s]+)*)?$
+    description: A layout tree node id - the segment's path under app/, rooted at /.
+  surface:
+    enum:
+      - layout
+      - page
+      - modal
+      - drawer
+      - loading
+      - error
+      - not-found
+  drawerDirection:
+    enum:
+      - left
+      - right
+      - top
+      - bottom
+  rect:
+    type: object
+    additionalProperties: false
+    required:
+      - x
+      - y
+      - width
+      - height
+    properties:
+      x:
+        type: integer
+        minimum: 0
+      y:
+        type: integer
+        minimum: 0
+      width:
+        type: integer
+        minimum: 1
+      height:
+        type: integer
+        minimum: 1
+  composite:
+    type: object
+    additionalProperties: false
+    required:
+      - route
+      - surface
+      - presentation
+      - breakpoint
+      - theme
+      - flowState
+      - content
+      - rect
+      - pixelSha256
+      - compositor
+    description: "How a direction image was composed, every input by path and digest, so the check can
+      re-derive its pixels. `layout` names the layout capture (shell/<path>) or planned layout drawing
+      (<ui-id>:<path>) a page presentation sits in, null for a route no visible layout wraps (`canvas`);
+      `host` names the host page composite an overlay presentation sits over."
+    properties:
+      route:
+        $ref: "#/$defs/layoutNodeId"
+      surface:
+        $ref: "#/$defs/surface"
+      presentation:
+        enum:
+          - page
+          - overlay
+      breakpoint:
+        $ref: "urn:work:common:1#/$defs/slug"
+      theme:
+        enum:
+          - light
+          - dark
+      flowState:
+        $ref: "urn:work:common:1#/$defs/prose"
+      direction:
+        $ref: "#/$defs/drawerDirection"
+      layout:
+        oneOf:
+          - type: "null"
+          - type: object
+            additionalProperties: false
+            required:
+              - node
+              - capture
+              - sha256
+            properties:
+              node:
+                $ref: "#/$defs/layoutNodeId"
+              capture:
+                $ref: "urn:work:common:1#/$defs/prose"
+              sha256:
+                $ref: "urn:work:common:1#/$defs/sha256"
+              destination:
+                type: string
+                pattern: ^[a-z0-9]+(?:-[a-z0-9]+)*$
+                description: The key of this layout's `destinations` entry the capture renders active, as the
+                  compositor selected it from the screen's route, bound destination or `activeNav`; absent when
+                  the capture is the layout's default render.
+      canvas:
+        type: object
+        additionalProperties: false
+        required:
+          - width
+          - height
+          - theme
+        properties:
+          width:
+            type: integer
+            minimum: 1
+          height:
+            type: integer
+            minimum: 1
+          theme:
+            enum:
+              - light
+              - dark
+      host:
+        type: object
+        additionalProperties: false
+        required:
+          - ui
+          - asset
+          - sha256
+        properties:
+          ui:
+            $ref: "urn:work:common:1#/$defs/prose"
+          asset:
+            $ref: "urn:work:common:1#/$defs/prose"
+          sha256:
+            $ref: "urn:work:common:1#/$defs/sha256"
+          flowState:
+            $ref: "urn:work:common:1#/$defs/prose"
+      content:
+        type: object
+        additionalProperties: false
+        required:
+          - path
+          - sha256
+        properties:
+          path:
+            $ref: "urn:work:common:1#/$defs/prose"
+          sha256:
+            $ref: "urn:work:common:1#/$defs/sha256"
+      rect:
+        $ref: "#/$defs/rect"
+      childSlot:
+        $ref: "#/$defs/rect"
+        description: A layout drawing's own page slot, measured from its #FF00FF key in the composite.
+      fit:
+        enum:
+          - cover
+          - stretch
+      scrim:
+        type: number
+        minimum: 0
+        maximum: 1
+      pixelSha256:
+        $ref: "urn:work:common:1#/$defs/sha256"
+      compositor:
+        const: scripts/work/compose-direction.mjs
+  openBlock:
+    type: object
+    minProperties: 1
+    propertyNames:
+      type: string
+      pattern: ^[A-Za-z][A-Za-z0-9]*$
+    description: "A block interface.draw writes as its own record of what it read, reviewed or composed
+      against. Its keys follow what that op actually accepted - a grammar version here, a knowledge digest
+      there - so they are constrained to a name shape rather than listed: enumerating them here would make
+      this file the authority for an op's output, which it is not, and a closed list would refuse the next
+      input the op learns to read."
+  uiAssets:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - role
+        - sha256
+      oneOf:
+        - required: [path]
+          properties: {path: true}
+        - required: [name]
+          properties: {name: true}
+      properties:
+        path:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: The file's path relative to this record's own directory (an approved final part kept in git).
+        artifact:
+          type: integer
+          minimum: 1
+          description: The job_artifacts id starci kernel report returned for the blob (optional; the sha256 is the citation).
+        name:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: The artifact name of a blob citation - agent output (a draw round, a capture, a lockup) lives in
+            the blob store, never on disk; engine/db/blob.mjs resolves it by sha256.
+        role:
+          $ref: "urn:work:common:1#/$defs/slug"
+          description: "What the file is - a direction, the exact prompt beside it, an input a later
+            iteration referenced. The role is what a checker pairs files by, rather than a filename
+            convention nobody enforces. Two roles split a composited direction: `direction-content` is the
+            drawn PART - the page slot content, the overlay panel alone, a layout's own drawing - and is
+            what the owner reviews; `direction` with a `composite` block is that part placed into the
+            real layout chain, evidence and the implement/audit reference, never an owner review image. A
+            `direction` without a composite (a record drawn before the compositor) is shown as it is."
+        sha256:
+          $ref: "urn:work:common:1#/$defs/sha256"
+          description: The file's digest, so the record is a statement about specific bytes and a replaced
+            image is a visible edit.
+        provenance:
+          oneOf:
+            - $ref: "urn:work:common:1#/$defs/prose"
+            - $ref: "#/$defs/openBlock"
+          description: Where the file came from - a sentence for a prompt or an input, or the tool's own
+            structured record for a generated image. A model name appears only where the tool itself
+            exposed one; it is never authored, and it is never the host that ran the tool.
+        generation:
+          type: object
+          additionalProperties: false
+          required:
+            - tool
+            - promptPath
+          description: "What produced this image, present only on a generated direction. It is the single
+            fact that tells a designed direction apart from a real running-page capture: an implementation
+            asset never carries one, and a generation-bearing asset outside a work/ui-screen@1 record is
+            refused."
+          properties:
+            tool:
+              $ref: "urn:work:common:1#/$defs/prose"
+              description: The tool that generated the image, named as the tool exposes itself - `draw-render`
+                for a token-rendered drawing, `image_gen.imagegen` for a raster region. A screen reaches done
+                only with at least one live draw-render asset (an image_gen.imagegen direction on a record
+                that has none, drawn before token rendering), never by an authored claim that a direction
+                exists (scripts/work/ui/ui-shapes.mjs generatedDrawingsOf).
+            promptPath:
+              $ref: "urn:work:common:1#/$defs/prose"
+              description: The sibling file holding the exact prompt that was sent. The prompt is kept as
+                its own asset so the image can be regenerated rather than only admired.
+            inputRefs:
+              type: array
+              uniqueItems: true
+              items:
+                $ref: "urn:work:common:1#/$defs/prose"
+              description: What the generation was given alongside the prompt - reference renders, a prior
+                iteration. An empty list is the claim that the prompt stood alone.
+            mode:
+              $ref: "urn:work:common:1#/$defs/slug"
+              description: How the tool was driven, where it offers more than one way - a fresh generation
+                against an edit of an existing image.
+            referencedImages:
+              type: array
+              uniqueItems: true
+              items:
+                $ref: "urn:work:common:1#/$defs/prose"
+              description: The images handed to the tool as visual input, by path, kept apart from
+                `inputRefs` so that a reader can tell what was described from what was shown.
+            loop:
+              type: object
+              additionalProperties: false
+              required:
+                - round
+              oneOf:
+                - required: [sha256]
+                  properties: {sha256: true}
+                - required: [path]
+                  properties: {path: true}
+              description: "The draw loop that produced this part (scripts/work/draw-loop.mjs; owner rulings
+                2026-09-27: draw, shoot, evaluate, fix until every machine metric passes and the independent
+                critic's beauty clears the bar): `sha256` the blob bundle `finish` stored the whole loop in
+                (loop.json, every round, critique and metrics - starci/draw-loop@1, never a folder under ui
+                assets), `round` the best round whose parts `finish` installed. A live part without it, or whose
+                loop did not install its bytes, is DRAW_LOOP_MISSING (scripts/work/draw/draw-loop-coverage.mjs).
+                The `path` form (a loop record relative to the ui record) is the pre-bundle citation, kept
+                valid for records written before it; the coverage check accepts only the bundle."
+              properties:
+                sha256:
+                  $ref: "urn:work:common:1#/$defs/sha256"
+                  description: The manifest digest of the loop's blob bundle (engine/db/blob.mjs putBundle).
+                path:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                round:
+                  type: integer
+                  minimum: 1
+            grammarSource:
+              description: The grammar the drawn component type-checked against on its best round, as
+                scripts/work/draw-grammar.mjs names it (`product@<version>` or `claude-dist@<version>`); null
+                where the grammar was not resolved. Written by draw-loop finish on a draw-loop-component part.
+              oneOf:
+                - $ref: "urn:work:common:1#/$defs/prose"
+                - type: "null"
+            grammarUpgradeOwed:
+              type: object
+              additionalProperties: false
+              required:
+                - status
+                - to
+              description: Present when the drawing type-checked only against the runtime's own grammar
+                dist, not the product's installed grammar - the upgrade of the product that is owed
+                (scripts/work/draw-grammar.mjs resolveDrawGrammar upgradeOwed).
+              properties:
+                status:
+                  $ref: "urn:work:common:1#/$defs/slug"
+                package:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                from:
+                  oneOf:
+                    - $ref: "urn:work:common:1#/$defs/prose"
+                    - type: "null"
+                to:
+                  $ref: "urn:work:common:1#/$defs/prose"
+                range:
+                  oneOf:
+                    - type: string
+                    - type: "null"
+                inRange:
+                  oneOf:
+                    - type: boolean
+                    - type: "null"
+                why:
+                  $ref: "urn:work:common:1#/$defs/prose"
+        width:
+          type: integer
+          minimum: 1
+          description: The image's width in pixels, as produced.
+        height:
+          type: integer
+          minimum: 1
+          description: The image's height in pixels, as produced.
+        viewport:
+          $ref: "urn:work:common:1#/$defs/prose"
+          description: The viewport this shot is of, where the file is a shot of a screen rather than a
+            prompt or an input. It is the asset's own copy of what the coverage map binds, so a checker
+            reading the assets alone can still tell which width it is looking at.
+        breakpoint:
+          $ref: "urn:work:common:1#/$defs/slug"
+          description: The named breakpoint that viewport belongs to, so "is every claimed breakpoint
+            shown" is a question about names rather than about pixel arithmetic.
+        theme:
+          $ref: "#/$defs/theme"
+          description: Which theme the shot is in. It is omitted where the screen claims only one, and
+            stated wherever it claims more, because a theme with no shot bound to it was never drawn.
+        composite:
+          $ref: "#/$defs/composite"
+          description: Present on a direction composited by scripts/work/compose-direction.mjs - the generated slot
+            content (or overlay panel) placed into the real layout capture or over the dimmed host.
+        retired:
+          enum:
+            - data-status
+            - image-gen
+          description: Why this file no longer counts as a drawing - `data-status`, it drew a slot's data
+            status, which renders by recipe; `image-gen`, image_gen.imagegen painted it before drawings were
+            token-rendered by draw-render (owner ruling 2026-09-27), and the redraw of its shape replaces it. The file and its entry stay; scripts/work/ui/ui-shapes.mjs does
+            not read a retired asset as a drawing.
+        selected:
+          type: boolean
+          description: Whether this candidate is the one the direction settled on. Rejected candidates are
+            kept rather than deleted, and the flag is what stops an implementer building from one.
+    description: Files this record owns under its own assets/, each with the role it plays and, where it was
+      generated, the provenance of its generation.

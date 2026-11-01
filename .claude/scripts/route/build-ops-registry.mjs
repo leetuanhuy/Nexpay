@@ -1,0 +1,193 @@
+#!/usr/bin/env node
+// starci runtime gen-ops — regenerate modules/ops/registry.yaml from the per-op
+// yamls. The registry is GENERATED (see its header); never hand-edit it.
+//
+// CLI:
+//   starci runtime gen-ops                         # rewrite registry.yaml
+//   starci runtime gen-ops --check                 # diff only, no write (CI)
+//   starci runtime gen-ops --ops-dir <dir> [--out <file>]
+//
+// Entry shape: {id, family, goal one-liner, params {default, setBy},
+// nodeKinds, completionProfile, sideEffects summary, reads/writes scope, route keys,
+// lifecycle position}. Fields absent from a per-op yaml are omitted, never invented;
+// the shape a per-op yaml may carry is modules/schemas/op.schema.yaml, enforced by
+// scripts/checks/check-op-manifest.mjs.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { byCodeUnit } from '../lib/list.mjs';
+import { fileURLToPath } from 'node:url';
+import { stringifyYaml } from '../../engine/yaml.mjs';
+import { readOpManifest } from '../lib/op-shared.mjs';
+import { stringItems, ROUTE_FIELDS } from './route-fields.mjs';
+
+const skillRoot = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
+
+// Lifecycle stages (inferred from goal/reads/writes — reading order,
+// not a runtime DAG; no op self-dispatches). route.phase[0] maps onto these ids.
+const STAGES = {
+  intake: 'classify the request into typed intake/scope facts; zero effects',
+  scope: 'bound the work — scope record, workspace bootstrap, launchable nodes',
+  decide: 'settle authority — SRS, SDS, brand, owner decisions, provisions',
+  direct: 'token-rendered UI direction + artwork slots before frontend code',
+  implement: 'write product/test/content/knowledge source inside ceilings',
+  verify: 'independent evidence-bound proof; never repairs',
+  release: 'publish/deploy/migrate — terminal external effect',
+  operate: 'runtime/service lifecycle, goal maintenance, end-of-life closeout',
+};
+
+// Coarse lifecycle terms allowed in route.phase alongside a stage id.
+const COARSE = {
+  intake: 'pre-implementation', scope: 'pre-implementation', decide: 'pre-implementation',
+  direct: 'pre-implementation', implement: 'implementation',
+  verify: 'post-implementation', release: 'post-implementation', operate: 'cross-cutting',
+};
+
+function parseArgs(argv) {
+  const args = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--check') args.check = true;
+    else if (a === '--ops-dir') args.opsDir = argv[++i];
+    else if (a === '--out') args.out = argv[++i];
+    else { console.error(`unknown arg ${a}`); process.exit(2); }
+  }
+  return args;
+}
+
+const firstLine = s => String(s ?? '').replace(/\s+/g, ' ').trim().split(/(?<=\.)\s/)[0].slice(0, 200);
+const ids = list => (Array.isArray(list) ? list : [])
+  .map(item => String(typeof item === 'object' && item ? item.id ?? item.path ?? '' : item).trim())
+  .filter(Boolean);
+
+function paramsFor(input) {
+  if (!input || typeof input !== 'object') return null;
+  const params = {};
+  for (const [name, def] of Object.entries(input)) {
+    params[name] = def?.required === true
+      ? { required: true, setBy: String(def?.setBy ?? '') }
+      : { default: def?.default ?? null, setBy: String(def?.setBy ?? '') };
+  }
+  return Object.keys(params).length ? params : null;
+}
+
+function routeFor(route) {
+  const fields = {};
+  for (const key of ROUTE_FIELDS) {
+    const values = stringItems(route[key]);
+    if (values.length) fields[key] = values;
+  }
+  return fields;
+}
+
+function entryFor(file, doc) {
+  const id = String(doc?.id ?? file.replace(/\.yaml$/, ''));
+  const entry = { id, family: id.split('.')[0] };
+  const goal = typeof doc?.goal === 'string' ? doc.goal : doc?.goal?.en;
+  if (goal) entry.goal = firstLine(goal);
+  // Tunables are the registry's one numeric column: a reader sees what an owner
+  // or the kernel may set without opening the manifest. The doc prose stays in
+  // the manifest — the registry is an index.
+  const params = paramsFor(doc?.params);
+  if (params) entry.params = params;
+  if (doc?.nodeKinds) entry.nodeKinds = stringItems(doc.nodeKinds);
+  if (doc?.completionProfile) entry.completionProfile = String(doc.completionProfile);
+  const side = stringItems(doc?.sideEffects);
+  if (side.length) entry.sideEffects = { count: side.length, summary: firstLine(side[0]) };
+  const reads = ids(doc?.reads), writes = ids(doc?.writes);
+  if (reads.length) entry.reads = reads;
+  if (writes.length) entry.writes = writes;
+  const route = doc?.route && typeof doc.route === 'object' ? doc.route : null;
+  if (route) {
+    entry.route = routeFor(route);
+    // Lifecycle position is the route phase an agent would file this op under;
+    // richer analysis stays in the per-op yaml — the registry stays an index.
+    if (entry.route.phase?.length) entry.lifecyclePosition = entry.route.phase.join(' | ');
+  }
+  entry.kindInferred = id.split('.').at(-1) ?? entry.family; // the verb: draw|implement|decide|verify|ask|...
+  return entry;
+}
+
+function sourceFiles(opsDir) {
+  return [opsDir, path.join(opsDir, 'ops')]
+    .filter(dir => fs.existsSync(dir))
+    .flatMap(dir => fs.readdirSync(dir)
+      .filter(file => file.endsWith('.yaml') && file !== 'registry.yaml' && !file.startsWith('_'))
+      .map(file => path.join(dir, file)))
+    .sort(byCodeUnit);
+}
+
+function entriesFrom(files) {
+  const entries = [], problems = [];
+  for (const file of files) {
+    try {
+      // `shared:` markers expand to the _common.yaml fragments so the registry
+      // carries the effective manifest (scripts/lib/op-shared.mjs).
+      const entry = entryFor(path.basename(file), readOpManifest(file));
+      if (!entry.route) problems.push(`${path.basename(file)}: no route: block`);
+      else if (entry.route.phase?.length && !STAGES[entry.route.phase[0]] && !Object.values(COARSE).includes(entry.route.phase[0]))
+        problems.push(`${path.basename(file)}: route.phase[0] '${entry.route.phase[0]}' is not a known stage`);
+      entries.push(entry);
+    } catch (error) {
+      problems.push(`${path.basename(file)}: ${error.message}`);
+    }
+  }
+  return { entries, problems };
+}
+
+function checkRegistry(out, next, count) {
+  const current = fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : null;
+  if (current === next) { console.log(`registry.yaml is current (${count} ops)`); return; }
+  console.error(`registry.yaml is STALE — rerun build-ops-registry.mjs (${count} ops in sources)`);
+  if (current) {
+    const before = current.split('\n'), after = next.split('\n');
+    for (let i = 0; i < Math.max(before.length, after.length); i += 1) {
+      if (before[i] !== after[i]) { console.error(`first diff at line ${i + 1}:\n  old: ${before[i]}\n  new: ${after[i]}`); break; }
+    }
+  }
+  process.exitCode = 1;
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const opsDir = path.resolve(args.opsDir ?? path.join(skillRoot, 'modules', 'ops'));
+  const out = path.resolve(args.out ?? path.join(opsDir, 'registry.yaml'));
+  if (!fs.existsSync(opsDir)) { console.error(`ops catalog missing: ${opsDir}`); process.exit(1); }
+
+  const files = sourceFiles(opsDir);
+  const { entries, problems } = entriesFrom(files);
+  entries.sort((a, b) => a.id.localeCompare(b.id));
+
+  const doc = {
+    schema: 'starci/module-ops-registry@1',
+    generatedBy: 'scripts/route/build-ops-registry.mjs',
+    origin: {
+      canonicalRegistry: '.claude/modules/ops/registry.yaml (this generated file)',
+      commonDocument: '.claude/modules/ops/_common.yaml',
+      perOpSources: 'modules/ops/ops/<id>.yaml (authored operator contract, starci/op@1 — modules/schemas/op.schema.yaml)',
+      note: 'modules/ops is the authored operator source; _common.yaml keeps the shared pre-module policy prose. An op summary is this index, generated — no manifest carries one.',
+    },
+    stages: STAGES,
+    coarsePhases: COARSE,
+    count: entries.length,
+    ops: entries,
+  };
+  const body = stringifyYaml(doc);
+  const header = [
+    '# GENERATED FILE — do not hand-edit.',
+    '# regenerate: starci runtime gen-ops',
+    '# check only: starci runtime gen-ops --check',
+    '',
+  ].join('\n');
+  const next = header + body;
+
+  if (args.check) checkRegistry(out, next, entries.length);
+  else {
+    fs.writeFileSync(out, next);
+    console.log(`wrote ${path.relative(skillRoot, out)} (${entries.length} ops)`);
+  }
+  for (const p of problems) console.error(`note: ${p}`);
+  if (problems.length && args.check) process.exitCode = 1;
+}
+
+main();

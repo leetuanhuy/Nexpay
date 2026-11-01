@@ -1,0 +1,266 @@
+# Lite-app application stack, schema starci/application-stacks@1.
+#
+# dev        the local Supabase stack (supabase CLI) with the api and web run as host processes; the descriptor is
+#            dev/environment.json and there is no sealed secret — `supabase status -o env` prints demo credentials.
+# production docker-swarm on one VPS (single-manager swarm). The Supabase Cloud project is the external datastore;
+#            no Postgres, Redis or Mongo is self-hosted (the lite edition refuses them). The one sidecar, n8n, keeps
+#            its SQLite database on the named volume n8n-data. Runbook: production/README.md.
+#
+# Owner-run DNS, TLS, releases and recovery are declared below; the public records state pending evidence.
+# Only member names are tracked. Runtime checks seal ephemeral values in a disposable example copy;
+# a product initializes its own recipient and seals real members before deployment.
+schema: starci/application-stacks@1
+ci:
+  github: {repository: starci183/starci-skills, defaultBranch: main, workflow: examples.yml}
+  secrets:
+    - {name: SONAR_TOKEN, scope: repository, purpose: example SonarCloud analysis token}
+    - {name: SOPS_AGE_KEY, scope: environment, environment: production, purpose: Optional demonstration database deployment identity; no real deploy, optional: true}
+    - {name: VPS_SSH_KEY, scope: environment, environment: production, purpose: Optional demonstration SSH deploy key; no real deploy, optional: true}
+    - {name: VPS_KNOWN_HOSTS, scope: environment, environment: production, purpose: Optional demonstration SSH host verification; no real deploy, optional: true}
+  vars:
+    - {name: SONAR_HOST_URL, scope: repository, value: 'https://sonarcloud.io', purpose: Optional example SonarCloud host, optional: true}
+    - {name: SONAR_ORGANIZATION, scope: repository, value: starcidapride, purpose: The SonarCloud organization of the runtime repository (starci183/starci-skills), optional: true}
+    - {name: VPS_HOST, scope: environment, environment: production, value: '203.0.113.10', purpose: Documentation address for demonstration deployment; no real deploy, optional: true}
+    - {name: VPS_USER, scope: environment, environment: production, value: deploy, purpose: Documentation user for demonstration deployment; no real deploy, optional: true}
+sources:
+  - repository: lite-app
+backing:
+  supabase:
+    provider: supabase
+    managed: true
+jobs:
+  booking_reminder_tick:
+    schedule: '*/15 * * * *'
+    command: node be/dist/apps/cli/src/main.js booking-reminder tick
+# Application image digests are illustrative all-zero placeholders, never a completed release.
+# The owner replaces them with verified published digests before deployment.
+components:
+  supabase:
+    role: stateful
+    purpose: The local Supabase stack (supabase start) with Postgres, Auth, Storage and Studio for development; production uses the Supabase Cloud project. Lite never self-hosts its primary database.
+    required: true
+  api:
+    role: service
+    image: lite-app/api:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    compose: infra/swarm/stack.yaml
+    purpose: The Nest api (GraphQL, the signed calendar webhook, the pgmq relay and workers). Liveness /health/live, readiness /health/ready.
+    required: true
+  web:
+    role: service
+    image: lite-app/web:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    compose: infra/swarm/stack.yaml
+    purpose: The Next.js app (standalone output); no runtime secret, its NEXT_PUBLIC_* values are build arguments. Liveness /health/live.
+    required: true
+  ingress:
+    role: ingress
+    image: caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb
+    compose: infra/swarm/stack.yaml
+    purpose: Caddy, the only service that publishes ports (80/443, ingress mode). TLS and health-checked routes for the declared hosts live in infra/swarm/Caddyfile.
+    required: true
+  n8n:
+    role: stateful
+    image: docker.n8n.io/n8nio/n8n:1.64.3@sha256:4d9116228d426ce24c442a744e9c11ee7c1187713f93f21dd5a34a12584708c1
+    compose: infra/swarm/stack.yaml
+    database: {provider: sqlite, volume: n8n-data}
+    volumes: [n8n-data]
+    purpose: The n8n automation sidecar; private network only, reached by the api as n8n:5678. Its database is SQLite (DB_TYPE=sqlite) on the persisted named volume n8n-data — a database-dependent lite sidecar declares a persistent volume instead of self-hosting Postgres.
+    required: true
+environments:
+  production:
+    status: supported
+    runtime: docker-swarm
+    composeFiles:
+      - infra/swarm/stack.yaml
+    components:
+      api:
+        replicas: 1
+        port: 8787
+      web:
+        replicas: 1
+        port: 3000
+      ingress:
+        replicas: 1
+        port: 443
+        httpPort: 80
+      n8n:
+        replicas: 1
+        port: 5678
+    runbook: README.md
+    ingress:
+      component: ingress
+      hosts: [lite-app.example, api.lite-app.example]
+    dns:
+      - {host: lite-app.example, owner: Product operator, receipt: 'README.md#owner-actions-declared-never-automated (pending DNS receipt)'}
+      - {host: api.lite-app.example, owner: Product operator, receipt: 'README.md#owner-actions-declared-never-automated (pending DNS receipt)'}
+    tls:
+      owner: Product operator
+      receipt: README.md#owner-actions-declared-never-automated (pending Caddy issuance and persistent certificate receipt)
+    release:
+      imagesLock: .starcistacks/production/infra/swarm/release/images.lock.yaml
+      pointer: .starcistacks/production/infra/swarm/release/current.yaml
+      previous: .starcistacks/production/infra/swarm/release/previous.yaml
+      healthAssertions:
+        - API /health/live and /health/ready succeed before promotion.
+        - Web /health/live, TLS, signed-in GraphQL and queued-job completion succeed before promotion.
+    backup:
+      - component: supabase
+        target: Supabase provider backup with an encrypted export to the operator's off-host archive
+        retention: Daily backups retained 30 days
+        owner: Product operator
+        restoreProof: .starcistacks/production/infra/swarm/recovery/supabase.yaml
+      - component: ingress
+        target: Encrypted off-host operator archive of lite-app-production-caddy-data and lite-app-production-caddy-config
+        retention: Daily backups retained 30 days
+        owner: Product operator
+        restoreProof: .starcistacks/production/infra/swarm/recovery/ingress.yaml
+      - component: n8n
+        target: Encrypted off-host operator archive of lite-app-production-n8n-data
+        retention: Daily backups retained 30 days
+        owner: Product operator
+        restoreProof: .starcistacks/production/infra/swarm/recovery/n8n.yaml
+    secrets:
+      - name: primary-db-url
+        runtimeName: lite-app-primary-db-url-v1
+        version: 1
+        where: secrets/primary-db-url
+        recipientPolicy: SOPS/age to the project recipient in .sops.yaml; the member holds PRIMARY_DB_URL.
+        keyCustody: The age identity is held only in the owner's untracked .claude/secret.env as SOPS_AGE_KEY; the VPS never holds it and no private identity is tracked.
+      - name: supabase-service-role-key
+        runtimeName: lite-app-supabase-service-role-key-v1
+        version: 1
+        where: secrets/supabase-service-role-key
+        recipientPolicy: SOPS/age to the project recipient in .sops.yaml; the member holds SUPABASE_SERVICE_ROLE_KEY.
+        keyCustody: The age identity is held only in the owner's untracked .claude/secret.env as SOPS_AGE_KEY; the VPS never holds it and no private identity is tracked.
+      - name: calendar-webhook-secret
+        runtimeName: lite-app-calendar-webhook-secret-v1
+        version: 1
+        where: secrets/calendar-webhook-secret
+        recipientPolicy: SOPS/age to the project recipient in .sops.yaml (creation rule for .starcistacks/*/secrets/*.enc); each key becomes one Swarm secret the api reads by its *_FILE environment name.
+        keyCustody: The age identity is held only in the owner's untracked .claude/secret.env as SOPS_AGE_KEY; the VPS never holds it and no private identity is tracked.
+    # What `starci app stack` deploys (the stack name is the project, lite-app); names and shapes only, never a value.
+    # The ingress configuration and the sidecar volume are part of the committed stack source (infra/swarm/stack.yaml).
+    deploy:
+      images:
+        api:
+          app: api
+        web:
+          app: web
+          buildArgs:
+            values:
+              NEXT_PUBLIC_SITE_URL: "https://lite-app.example"
+              NEXT_PUBLIC_GRAPHQL_URL: "https://api.lite-app.example/graphql"
+              NEXT_PUBLIC_SUPABASE_URL: "https://example-project.supabase.co"
+              NEXT_PUBLIC_SUPABASE_ANON_KEY: "sb_publishable_fake_example_lite_app_public_key"
+      volumes:
+        - lite-app-production-caddy-data
+        - lite-app-production-caddy-config
+        - lite-app-production-n8n-data
+      secrets:
+        grants:
+          - service: api
+            filePointers: true
+            from:
+              - member: primary-db-url
+              - member: supabase-service-role-key
+              - member: calendar-webhook-secret
+      verify:
+        http:
+          - name: api liveness
+            url: "https://api.lite-app.example/health/live"
+            status: 200
+            retry: true
+          - name: api readiness
+            url: "https://api.lite-app.example/health/ready"
+            status: 200
+            retry: true
+          - name: web liveness
+            url: "https://lite-app.example/health/live"
+            status: 200
+            retry: true
+k8s:
+  status: deferred
+  reason: Whole-package Kubernetes deployment is deferred; production is a single-manager Docker Swarm on one VPS and development is the local Supabase CLI stack with host processes.
+# Public example quality services use SonarCloud and Codecov OIDC.
+operations:
+  # `starci sonar project ensure --target sonarcloud` ensures this project on SonarCloud and its quality gate starci-quality-lite: the gate exists in the
+  # organization with exactly the conditions of knowledge/sonar-gate.yaml and is selected for the project. The admin credential is the
+  # variable SONAR_TOKEN of the runtime's untracked secret.env (the public runtime repository tracks no sealed secret). The organization and
+  # key are the ones the examples workflow scans with (vars.SONAR_ORGANIZATION, <organization>_starci-example-<app>); name is the project's name there.
+  targets:
+    sonarcloud:
+      provider: sonar-cloud
+      context: production
+      origin: https://sonarcloud.io
+      resource:
+        projectKey: starcidapride_starci-example-lite-app
+        name: lite-app
+        organization: starcidapride
+        qualityGate: starci-quality-lite
+      credentials:
+        - {id: admin, hostConnection: sonar-runtime-secret-env, env: SONAR_TOKEN, purpose: The SonarCloud token of the runtime's secret.env}
+      actions: [sonar.project.ensure]
+services:
+  sonar:
+    provider: sonarcloud
+    mode: hosted
+    purpose: Release analysis of the lite-app example on SonarCloud, with the one SONAR_TOKEN the runtime holds in its secret.env.
+    host:
+      public: https://sonarcloud.io
+    auth: token
+    qualityGate: starci-quality-lite
+    projects:
+      - {repository: lite-app, key: starci-example-lite-app}
+    runtimeSecrets: [SONAR_TOKEN]
+    ci:
+      workflow: .github/workflows/examples.yml
+      wiring: required
+      token: SONAR_TOKEN
+      hostVar: SONAR_HOST_URL
+      organizationVar: SONAR_ORGANIZATION
+      provisioning: >-
+        The runtime examples tag workflow scans only when its repository provides SONAR_TOKEN and SONAR_ORGANIZATION;
+        it uses https://sonarcloud.io and the project key <SONAR_ORGANIZATION>_<key above>. The rendered standalone app workflow reads
+        SONAR_TOKEN and SONAR_HOST_URL; standalone SonarCloud activation also needs the operator's organization configuration.
+        The release cut scans with SONAR_TOKEN from the runtime's secret.env and the organization from config.yaml (sonar.organization).
+    ownerAction:
+      needed: SONAR_TOKEN (a SonarCloud token) in .claude/secret.env and as the repository secret, the SonarCloud organization key as config.yaml sonar.organization and as the repository variable SONAR_ORGANIZATION.
+      reason: the runtime repository is public and holds no secret, so the token lives only in the owner's untracked secret.env and in GitHub.
+  codecov:
+    provider: codecov
+    flag: lite-app
+    mode: hosted
+    purpose: Public example coverage reporting through GitHub OIDC.
+    auth: oidc
+    target: 100
+    components: auto
+    required: true
+    ci: {wiring: required, workflow: .github/workflows/examples.yml}
+    ownerAction: none
+  dependabot:
+    provider: github
+    mode: hosted
+    purpose: Weekly dependency updates with grouped minor and patch releases.
+    ecosystems: [npm, docker, github-actions]
+    schedule: {interval: weekly}
+    groups: {minorPatch: grouped, major: per-package}
+    ignore: ['@starci/*']
+    security: immediate
+    ownerAction: none
+  audit:
+    provider: npm
+    mode: local
+    purpose: Refuse high severity production dependency vulnerabilities in CI and release gates.
+    level: high
+    omitDev: true
+    in: [release-gate, ci]
+    ownerAction: none
+  container-registry:
+    provider: ghcr
+    mode: hosted
+    purpose: Demonstration image publication and deployment through GitHub Container Registry.
+    host: {public: 'https://ghcr.io'}
+    auth: github-token
+    projects:
+      - {repository: lite-app, key: lite-app}
+    ci: {wiring: required}
+    ownerAction: none

@@ -1,0 +1,252 @@
+schema: starci/knowledge-source@1
+id: be.api-auth
+title: API authentication and input bounds
+purpose: |-
+  Given an api app, which operations are open, who verifies the caller, how is state-changing traffic protected and how is
+  input bounded? Every operation is denied by default. Opening one is a written, reviewed decision with a reason from a
+  closed vocabulary.
+appliesTo:
+  - backend
+family: be
+# The slot ids this topic teaches (knowledge/hfs/slots.yaml); scripts/gates/read-digest.mjs inverts these
+# into the READ-step slot -> pattern-topic map (knowledge/op-gate.yaml kinds), each slot's topics in index.yaml order.
+slots: [be.transport]
+provenance:
+  reviewedAt: 2026-09-30
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/slots.yaml
+    - knowledge/hfs/rules.yaml
+    - owner-locked BE convention 2026-09-30
+    - https://docs.nestjs.com/guards
+    - https://www.rfc-editor.org/rfc/rfc8725.html
+    - https://nodejs.org/api/crypto.html#cryptotimingsafeequala-b
+  limitations: |-
+    Static checks prove that the guards are registered in order and that no operation is open without a reason. They do not
+    prove that a policy is correct, that a token is verified with the right audience, or that a rate limit is effective.
+    Those need contract tests and negative-path evidence.
+rules:
+  - id: BE-AUTH-1
+    title: Default deny with APP_GUARD and @Public
+    kind: mandatory
+    hfsRules: [R41, R02, R290]
+    requirement: |-
+      `domain/identity` exports `AuthGuard`, `CredentialGuard`, `@Public({ reason: PublicReason.X })`, `@Credential({ kind })`,
+      the `CREDENTIAL_AUTHENTICATOR` port, `@Roles(...)` and `@CurrentPrincipal()`. Guards are only global `APP_GUARD`
+      bindings of the api root, registered exactly once each in this order: `RateLimitGuard`, `OriginGuard`,
+      `CredentialGuard`, `AuthGuard`. `CredentialGuard` acts only on a handler marked `@Credential({ kind })`, where kind is
+      closed at `api-key | run-token | tool-token | link-token | posting`; it authenticates through the identity-owned
+      `CREDENTIAL_AUTHENTICATOR` port (`authenticate(metadata, authorization, resourceId?)`, bound by the app) and sets
+      `request.credentialPrincipal`; on any other handler it passes through. `AuthGuard` stays default-deny: it passes a
+      credential-marked handler only when the credential principal is set, passes a handler with `@Public({ reason })`, and
+      otherwise requires a session principal; its constructor takes the reflector and the access-token verifier only. No
+      guard is injected into another guard (no `CanActivate`-typed constructor parameter) and no guard-dispatch layer
+      exists. `PublicReason` is an enum closed at `Health | AuthHandshake | SignedWebhook | CatalogRead`; API-key,
+      run-token, tool-token and link-token routes use `@Credential`, never a public reason. An operation is open only when
+      it carries `@Public({ reason })` or `@Credential({ kind })`. `@UseGuards` is not used for authentication or
+      authorization. A worker or cli app exposes no route.
+    rationale: |-
+      With allow-by-default a forgotten decorator publishes an operation unnoticed. With default deny it fails closed and the
+      exception carries a reason a reviewer can read.
+    cases:
+      - id: case-1
+        when: Registration
+        write: 'the api app''s be/apps/<app>/src/app.module.ts (slot be.app.api) provides { provide: APP_GUARD, useClass: RateLimitGuard }, { provide: APP_GUARD, useClass: OriginGuard }, { provide: APP_GUARD, useClass: CredentialGuard } and { provide: APP_GUARD, useClass: AuthGuard } in that order.'
+      - id: case-2
+        when: An open door
+        write: '@Public({ reason: PublicReason.AuthHandshake }) on the signIn operation'
+      - id: case-3
+        when: A role-restricted operation
+        write: '@Roles("admin") on the resolver method, checked by the same guard.'
+      - id: case-4
+        when: A tool-token door
+        write: '@Credential({ kind: "tool-token" }) on the handler; CredentialGuard authenticates it through CREDENTIAL_AUTHENTICATOR and AuthGuard admits it.'
+    verification:
+      automated:
+        - BE_DEFAULT_DENY
+        - HFS_SLOT_REQUIRED_MISSING
+        - HFS_MIN_INSTANCES
+        - HFS_REQUIRED_FILE_MISSING
+        - HFS_ROOT_ENTRY_MISSING
+        - HFS_APPS_REQUIRED
+        - HFS_APP_LAYOUT_INVALID
+        - HFS_README_TITLE_INVALID
+        - HFS_README_DESCRIPTION_INVALID
+        - HFS_README_SECTION_MISSING
+        - HFS_README_SECTION_ORDER
+        - HFS_README_DEVELOPMENT_INCOMPLETE
+        - HFS_README_WORK_POINTER_MISSING
+        - HFS_README_PRIVATE_URL
+        - HFS_README_BADGE_NOT_LIVE
+        - BE_PUBLIC_REASON_CLOSED
+      manual:
+        - Review each `@Credential` kind and confirm the authenticator verifies that credential for that door.
+        - Review each `@Public` reason and confirm that the operation may be reached without a session.
+    relatedExamples: []
+  - id: BE-AUTH-2
+    title: Identity owns verification
+    kind: mandatory
+    hfsRules: [R26, R41, R260]
+    requirement: |-
+      Verifying a token or session belongs to `domain/identity`, which uses `integrations/<provider>` for the identity
+      provider. Platform never verifies a caller and a GraphQL context factory never authenticates. A JWT verifier pins a
+      nonempty literal subset of `ES256`, `RS256` and `EdDSA`, reads the issuer from configuration and verifies the intended
+      audience; decoding is not verification. A Supabase principal is built only after verification and rejection of any
+      role other than `authenticated`. A workspace or tenant header is a
+      selector, never proof of access, and resource authorization stays in the handler or the domain service so jobs and other
+      entry points cannot bypass a guard.
+    rationale: |-
+      Authentication is a business capability with its own state and errors. Placing it in platform reverses the tier
+      direction.
+    cases:
+      - id: case-1
+        when: Verifying a bearer token
+        write: 'AuthGuard dispatches VerifySessionQuery, implemented with integrations/keycloak; the principal is put on the request context and read with @CurrentPrincipal().'
+    verification:
+      automated:
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+        - BE_DEFAULT_DENY
+        - BE_JWT_ALG_PINNED
+      manual:
+        - Confirm the audience, issuer and algorithm allow list against the provider contract.
+    relatedExamples: []
+  - id: BE-AUTH-3
+    title: CSRF, signed webhooks and constant-time comparison
+    kind: mandatory
+    hfsRules: [R41, R141]
+    requirement: |-
+      `platform/http-security` owns the origin and referer allowlist guard that every state-changing request passes; only
+      `SignedWebhook` is exempt. A webhook (webhooks.yaml) is `@Public({ reason: PublicReason.SignedWebhook })` and verifies its signature and
+      replay window as its first unconditional call, awaited when async, through `WebhookSignatureService.verify` of
+      `platform/http-security` or a domain verifier that owns per-connection secrets. The door accesses no data before proof;
+      a domain method may verify and then perform intake in the same call. Every comparison of a secret, signature or
+      token uses `timingSafeEqual` on equal-length buffers; a secret is never compared with `===`.
+    rationale: |-
+      A public door is only safe when the request proves its origin, and a variable-time comparison leaks the secret.
+    cases:
+      - id: case-1
+        when: A provider webhook
+        write: '@Public({ reason: PublicReason.SignedWebhook }) then `this.signature.verify({ rawBody, signature, timestamp })`, which calls timingSafeEqual.'
+    verification:
+      automated:
+        - BE_DEFAULT_DENY
+        - BE_COOKIE_ATTRIBUTES
+      manual:
+        - Review that the raw body, not a re-serialized one, is verified.
+    relatedExamples: []
+  - id: BE-AUTH-4
+    title: Typed operations, no generic tunnels
+    kind: mandatory
+    hfsRules: [R41, R88]
+    requirement: |-
+      Each operation is its own typed field or route. `@Body() x: unknown`, `Record<string, unknown>` bodies, a `GraphQLJSON`
+      parameter and a `switch (input.operation)` in transport do not exist; a generic operation name that fans out to many
+      behaviors becomes one operation per behavior.
+    rationale: |-
+      A tunnel defeats the contract, the guard and the input bounds, because the checker sees one operation where there are
+      many.
+    cases:
+      - id: case-1
+        when: A generic execute mutation
+        write: 'Split into placeOrder, cancelOrder and refundOrder, each with its own input type and its own command.'
+    verification:
+      automated:
+        - BE_DEFAULT_DENY
+        - BE_TRANSPORT_SHAPE
+      manual:
+        - Review that no operation name is decided by a string in a payload.
+    relatedExamples: []
+  - id: BE-AUTH-5
+    title: Validated, bounded input and rate-limited doors
+    kind: mandatory
+    hfsRules: [R42]
+    requirement: |-
+      The global `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true })` is registered. Every property
+      of an input class carries class-validator decorators, every string has `@MaxLength`, an enum has `@IsEnum`, and a nested
+      object has `@ValidateNested()` with `@Type(...)`. GraphQL depth is at most 10 and complexity limits are set in
+      `platform/graphql`. A global default rate-limit tier applies to every operation and `@RateLimit(RateTier.Strict)` is on
+      every `AuthHandshake` and `SignedWebhook` door.
+    rationale: |-
+      Unbounded input and unthrottled doors are the cheapest denial of service and brute-force paths.
+    cases:
+      - id: case-1
+        when: An input field
+        write: '@IsString() @MaxLength(200) note!: string'
+      - id: case-2
+        when: A door
+        write: '@RateLimit(RateTier.Strict) on the signIn operation'
+    verification:
+      automated:
+        - BE_INPUT_BOUNDED
+      manual:
+        - Confirm the chosen bounds against the accepted contract.
+        - Confirm the strict tier's limits fit the handshake (sign-in, sign-up, reset, callback) traffic.
+    relatedExamples: []
+  - id: BE-AUTH-6
+    title: Pagination is by cursor
+    kind: mandatory
+    hfsRules: [R42, R69]
+    requirement: |-
+      A list operation takes `PageArgs { first: Int (1..PAGE_SIZE_MAX), after?: String }` and returns
+      `<X>Connection { items, pageInfo { endCursor, hasNextPage } }`; cursors are opaque and HMAC-signed by
+      `platform/primitives`. Offset and page-number pagination (`skip`, `offset`, `OFFSET`) is not used.
+    rationale: |-
+      Offset pages are unstable under concurrent writes and their cost grows with the offset.
+    cases:
+      - id: case-1
+        when: A list of purchases
+        write: 'purchases(first: 20, after: $cursor) { items { id } pageInfo { endCursor hasNextPage } }'
+    verification:
+      automated:
+        - BE_INPUT_BOUNDED
+        - BE_QUERY_UNBOUNDED
+      manual: []
+    relatedExamples: []
+  - id: BE-AUTH-7
+    title: API edge configuration states its trust boundaries
+    kind: mandatory
+    hfsRules: [R261]
+    requirement: |-
+      Every API in lite and full supplies an exact browser-origin CORS allowlist, applies the response middleware owned by
+      `platform/http-security`, disables `x-powered-by` and declares a nonnegative integer proxy-hop count. A missing or
+      wildcard CORS policy and blanket proxy trust are refused. Keep these values in the typed app configuration and pass
+      them to the bootstrap rather than inferring trust from the incoming request.
+    rationale: |-
+      The app must state which browser origins and proxy hops it trusts before a request reaches an authenticated door.
+    cases:
+      - id: case-1
+        when: An API runs behind one ingress
+        write: Declare the exact browser origins and one trusted proxy hop, and apply the platform response middleware at boot.
+    verification:
+      automated:
+        - BE_CORS_ALLOWLIST
+        - BE_SECURITY_HEADERS
+        - BE_TRUST_PROXY
+      manual:
+        - Compare the origin list and proxy-hop count with the deployed ingress topology.
+    relatedExamples: []
+  - id: BE-AUTH-8
+    title: Liveness and readiness prove different health signals
+    kind: mandatory
+    hfsRules: [R262]
+    requirement: |-
+      Every API in lite and full exposes distinct live and ready signals. Readiness probes a required dependency with a
+      bounded failure timeout and returns unavailable when that dependency fails; it never aliases the live response.
+      The API Docker HEALTHCHECK calls an existing live route, and never uses an always-successful command as its proof.
+    rationale: |-
+      A live process may be unable to serve work. Separate signals let the runtime distinguish restarting a process from
+      withholding traffic while a dependency recovers.
+    cases:
+      - id: case-1
+        when: The database becomes unavailable
+        write: Keep the live process signal independent, fail readiness within its timeout, and verify that the live route is the Docker probe target.
+    verification:
+      automated:
+        - BE_READY_REAL
+        - BE_HEALTH_SIGNALS
+        - HFS_DOCKER_HEALTHCHECK_FAKE
+      manual:
+        - Fail the required dependency and confirm readiness returns unavailable within the declared bound.
+    relatedExamples: []

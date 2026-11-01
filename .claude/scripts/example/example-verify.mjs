@@ -1,0 +1,105 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {runCommand} from '../api/process/run-command.mjs';
+import { fileURLToPath } from 'node:url';
+import {parseYaml} from '../../engine/yaml.mjs';
+import {walk} from '../work/validate/check-example-work.mjs';
+import {loadRecords, resolveRecordRef} from '../work/record-ownership.mjs';
+import { isMain } from '../lib/is-main.mjs';
+import { findRecordFile } from '../lib/work-tree.mjs';
+import { parseExampleArgs } from '../lib/cli-arg.mjs';
+
+/**
+ * Re-runs every assertion in one example record's evidence.yaml against a real --cwd and compares the
+ * outcome against what the evidence claims - concept 2, "replayable evidence". `scripts/example/example-evidence.mjs`
+ * writes both `command` and `exit` on every assertion for exactly this reason: a prose `observation` alone
+ * cannot be replayed, only read. This script is the replay half of that pair; it never writes anything -
+ * evidence.yaml stays exactly as it was, whether the replay matches or not.
+ *
+ * Usage:
+ *   starci work example-verify --work <path-to-.starciwork> --record <record-id> --cwd <repo-dir>
+ *
+ * Exit 0 when every assertion's replayed outcome matches the outcome the evidence already claims. Exit 1
+ * (PROOF_STALE) the moment any assertion's replayed outcome differs, or lacks a `command` to replay at all
+ * (the same condition scripts/work/validate/check-example-work.mjs's gate refuses as PROOF_NOT_REPLAYABLE - this script
+ * treats it as a verification failure rather than duplicating that gate's own refusal wording).
+ */
+
+
+
+/** The record's own directory under `workRoot` (the record *file*'s parent: evidence.yaml sits beside it). */
+const findRecordDir = (workRoot, recordId) => {
+  const file = findRecordFile(workRoot, recordId);
+  return file ? path.dirname(file) : null;
+};
+
+/** Replays one assertion's `command` against `cwd` and reports whether the outcome it produces now
+ * matches the outcome the evidence already claims. An assertion with no `command` cannot be replayed at
+ * all and is reported as a mismatch rather than skipped - silently skipping it would let evidence stay
+ * "verified" forever by never actually being checked. */
+function replayAssertion(assertion, cwd) {
+  const claimedOutcome = assertion?.outcome ?? 'pass';
+  if (typeof assertion?.command !== 'string' || !assertion.command.trim()) {
+    return {id: assertion?.id ?? '(unnamed)', ok: false, reason: 'no command recorded; not replayable', claimedOutcome, replayedOutcome: null, replayedExit: null};
+  }
+  const status = runCommand(assertion.command, {cwd}).status;
+  const exit = typeof status === 'number' ? status : 1;
+  const replayedOutcome = exit === 0 ? 'pass' : 'fail';
+  return {
+    id: assertion.id, ok: replayedOutcome === claimedOutcome, reason: null,
+    command: assertion.command, claimedOutcome, replayedOutcome, replayedExit: exit,
+  };
+}
+
+/**
+ * Verifies one record's evidence.yaml by replaying every assertion. Throws (never a bare boolean) when the
+ * record or its evidence cannot be found at all - a caller with nothing to replay is a usage error, not a
+ * verification failure. Returns `{ok, results, recordId, evidenceFile}` otherwise: `ok` is true only when
+ * every assertion replayed with a matching outcome, exactly mirroring how a gate would read "did this
+ * still pass".
+ */
+export function verifyRecord({workRoot, recordId, cwd}) {
+  // Compact format: a collapsed criterion's id (`ac.x.y` inlined, or `parent#frag`) resolves to the
+  // record that now carries it - its evidence.yaml sits beside that record's index.yaml.
+  const canonicalId = resolveRecordRef(loadRecords(workRoot, walk), recordId) ?? recordId;
+  const dir = findRecordDir(workRoot, canonicalId);
+  if (!dir) throw new Error(`no record with id ${recordId} was found under ${workRoot}`);
+  const evidenceFile = path.join(dir, 'evidence.yaml');
+  if (!fs.existsSync(evidenceFile)) throw new Error(`no evidence.yaml beside ${recordId} at ${dir} - nothing to verify`);
+
+  const evidence = parseYaml(fs.readFileSync(evidenceFile, 'utf8'));
+  const assertions = Array.isArray(evidence?.assertions) ? evidence.assertions : [];
+  const results = assertions.map(assertion => replayAssertion(assertion, cwd));
+  const ok = results.length > 0 && results.every(r => r.ok);
+  return {ok, results, recordId, evidenceFile};
+}
+
+if (isMain(import.meta.url)) {
+  let args;
+  try {
+    args = parseExampleArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(`REFUSED ${error.message}`);
+    process.exit(1);
+  }
+
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+  const workRoot = path.resolve(root, args.work);
+  const cwd = path.resolve(root, args.cwd);
+
+  let result;
+  try {
+    result = verifyRecord({workRoot, recordId: args.record, cwd});
+  } catch (error) {
+    console.error(`REFUSED ${error.message}`);
+    process.exit(1);
+  }
+
+  for (const r of result.results) {
+    if (r.ok) console.log(`MATCH ${r.id}: still ${r.replayedOutcome} (${r.command})`);
+    else if (r.reason) console.log(`PROOF_STALE ${r.id}: ${r.reason}`);
+    else console.log(`PROOF_STALE ${r.id}: claimed ${r.claimedOutcome}, replayed ${r.replayedOutcome} (exit ${r.replayedExit}) running ${r.command}`);
+  }
+  console.log(`${args.record}: ${result.ok ? 'verified - every assertion replayed with a matching outcome' : 'PROOF_STALE - at least one assertion no longer matches what its evidence claims'}`);
+  process.exitCode = result.ok ? 0 : 1;
+}

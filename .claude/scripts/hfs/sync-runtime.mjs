@@ -1,0 +1,250 @@
+#!/usr/bin/env node
+// sync-runtime.mjs - refreshes the self-contained copies of the runtime files the published packages read, so each package
+// works in a product repository that has no runtime checkout. Every copy mirrors the runtime layout (engine/,
+// scripts/lib/, knowledge/hfs/, modules/kernel/) byte for byte, so the imports need no rewriting.
+//   packages/hfs/runtime         what `hfs` reads (with the jest preset's sonar-exclusions.cjs and the one Sonar gate, knowledge/sonar-gate.yaml, whose name starci app check holds a stack declaration to): the slot loader, the check, the architecture machine and every file either
+//                                imports (computed from the import graph, not listed), plus the failure-code catalog slice
+//                                holding the codes `starci app check` can emit and every code its bundled rule catalog owns
+//   packages/eslint/be/runtime   what @starci/eslint-canon-be reads through lib/hfs.mjs (loadHfs: slots, hfs.json, the view), the shared Sonar syntax rules and the project graph
+//                                (scripts/hfs/project-rule.mjs -> project-graph.mjs -> the architecture machine) its project rules share
+//   packages/eslint/fe/runtime   the same files for @starci/eslint-canon-fe (lib/hfs.mjs, lib/params.mjs)
+//   starci release sync-runtime [--check]     --check exits 1 when a copy differs; starci runtime check judges the same
+//                                                            differences as RT_GENERATED_DRIFT (scripts/hfs/runtime-check.mjs)
+// The copies are generated, git-ignored output (GENERATED_UNTRACKED keeps them out of the index): nothing edits or commits
+// them, and the flows that read them — pack, the packages' own tests, the repo's check and its specs — regenerate them first.
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ARCHITECTURE_RULE_IDS } from './architecture/index.mjs';
+import { REFUSAL_CODES } from './refusal-codes.mjs';
+import { parseYaml } from '../../engine/yaml.mjs';
+import { safeRemove } from '../api/fs/safe-remove.mjs';
+import { isMain } from '../lib/is-main.mjs';
+import { catalogEntries } from '../lib/i18n.mjs';
+import { byCodeUnit } from '../lib/list.mjs';
+
+const runtimeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+/** The runtime files the slot resolver needs; both bundles carry them. */
+const SLOT_FILES = [
+  'engine/runtime-root.mjs',
+  'engine/yaml.mjs',
+  'engine/plain-object.mjs',
+  'scripts/lib/glob.mjs',
+  'scripts/lib/path-key.mjs',
+  'scripts/hfs/slots.mjs',
+  'scripts/hfs/view.mjs',
+  'scripts/hfs/allows.mjs',
+  'knowledge/hfs/slots.yaml',
+];
+/** The entry modules of `starci app check`, `starci app secret`, `starci app db`, the coverage scope `starci app sync` renders and the staged-spec judgement of `starci app hygiene`; their static import closures are bundled. */
+const CHECK_ENTRIES = [
+  'scripts/hfs/check.mjs', 'scripts/hfs/architecture.mjs', 'scripts/hfs/secret.mjs', 'scripts/hfs/coverage-scope.mjs',
+  'scripts/hfs/db-baseline-verb.mjs', 'scripts/hfs/db-restamp-verb.mjs', 'scripts/hfs/db-plan-verb.mjs',
+  'scripts/api/supabase/database-push.mjs',
+  'scripts/hfs/app-wiring.mjs', 'scripts/hfs/coverage-from.mjs', 'scripts/hfs/example-secrets.mjs', 'scripts/hfs/stack-deploy-config.mjs',
+  'scripts/hfs/rules/staged-specs.mjs',
+  // The run-folder shapes of `starci uat record`, proven by the package spec src/uat-run-folder.spec.mjs over this copy.
+  'scripts/lib/uat-run-folder.mjs',
+  // What loosens a gate over one change's diff, rename-aware, proven by the package spec src/gate-loosening.spec.mjs over this copy.
+  'scripts/lib/gate-loosening.mjs',
+  // Which JSON files are managed canon (a slot-declared template or its render), proven by src/managed-json.spec.mjs over this copy.
+  'scripts/lib/managed-json.mjs',
+  // Which JSON files a tool fixes the format of (the declared formats of the json-exceptions check), proven by src/json-formats.spec.mjs over this copy.
+  'scripts/lib/json-formats.mjs',
+  // Which UPPER_SNAKE literals of a script are read values and not emitted failure codes (the failure-codes check), proven by src/failure-code-reads.spec.mjs over this copy.
+  'scripts/lib/failure-code-reads.mjs',
+  // Why the provision control verb could not read or accept a prepared operation, proven by src/provision-control-failure.spec.mjs over this copy.
+  'scripts/lib/provision-control-failure.mjs',
+  // The New Code definition a Sonar project is ensured with, proven by src/sonar-new-code.spec.mjs over this copy.
+  'scripts/lib/sonar-new-code.mjs',
+  // The Sonar gate data and its pure judgments, read by the package specs that render a CI declaration.
+  'scripts/gates/sonar-gate.mjs',
+  // The .starcistacks services gate (checkStarciStacks), proven by src/hfs-stacks-runtime-shape.spec.mjs over this copy.
+  'scripts/gates/starcistacks.mjs',
+];
+/** Static imports and `new URL(<relative>.yaml, import.meta.url)` reads (the framework-pinned knowledge file) are followed. */
+const IMPORT_SPEC = /(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+)['"](\.[^'"]+)['"]/g;
+/** A read of the DDL of one store: `schema/runtime.sql` or `schema/machine.sql`. */
+const SCHEMA_STORE = /schema[/'", ]+(runtime|machine)\.sql/g;
+const URL_SPEC = /new URL\(\s*['"](\.[^'"]+\.ya?ml)['"]\s*,\s*import\.meta\.url/g;
+
+/** The runtime-relative files reachable from `entries` through relative imports and `new URL(..., import.meta.url)` reads. */
+export function importClosure(entries) {
+  const seen = new Set();
+  const visit = (file) => {
+    if (seen.has(file)) return;
+    if (!fs.existsSync(path.join(runtimeRoot, file))) throw new Error(`${file} is imported by the bundled check but does not exist`);
+    seen.add(file);
+    if (!file.endsWith('.mjs')) return;
+    const text = fs.readFileSync(path.join(runtimeRoot, file), 'utf8');
+    for (const match of [...text.matchAll(IMPORT_SPEC), ...text.matchAll(URL_SPEC)]) visit(path.posix.normalize(path.posix.join(path.posix.dirname(file), match[1])));
+    // A module that reads its DDL from engine/db/schema/<store>.sql (ledger, machine) carries that schema file.
+    for (const store of new Set([...text.matchAll(SCHEMA_STORE)].map((match) => match[1]))) {
+      const sql = `engine/db/schema/${store}.sql`;
+      if (fs.existsSync(path.join(runtimeRoot, sql))) visit(sql);
+    }
+  };
+  for (const entry of entries) visit(entry);
+  return [...seen].sort(byCodeUnit);
+}
+
+/** The pattern topics (knowledge/patterns/be) that carry a `files:` tree: `starci app add` generates a kind from them, so the hfs bundle carries them. */
+function patternTopicFiles() {
+  const dir = path.join(runtimeRoot, 'knowledge', 'patterns', 'be');
+  return fs.readdirSync(dir).filter((name) => name.endsWith('.yaml') && Array.isArray(parseYaml(fs.readFileSync(path.join(dir, name), 'utf8'))?.files)).sort(byCodeUnit).map((name) => `knowledge/patterns/be/${name}`);
+}
+
+export const CATALOG = 'modules/kernel/failure-codes.yaml';
+/** The rule catalog the edition filter of starci app check reads (check.mjs judgedFindings), so the bundled runtime carries it. */
+const RULE_CATALOG_FILE = 'knowledge/hfs/rules.yaml';
+/**
+ * Data files the architecture machine reads at run time beside its code, which a canon bundle must carry because the
+ * canons run the machine behind the project-graph law: the managed package-scripts templates (README script names) and
+ * the pin and Sonar gate declarations. Without them the canon's rules fail to load outside the runtime checkout.
+ */
+const MACHINE_DATA = Object.freeze(['packages/hfs/templates/app/package-scripts/package.json', 'knowledge/hfs/canon-pins.yaml', 'knowledge/hfs/fe-stack.yaml', 'knowledge/sonar-gate.yaml']);
+/** The jest preset's Sonar exclusions: @starci/hfs renders them in a fresh scaffold and an upgrade before the app has installed the preset. */
+const JEST_PRESET_SONAR = 'packages/jest-preset/sonar-exclusions.cjs';
+/** The shipped config example the bundled engine/config.mjs falls back to (loadConfig, read by the temp-root owner on every child spawn). */
+const CONFIG_EXAMPLE = 'config.example.yaml';
+/** bundle directory (runtime-relative) -> the files it copies and whether it carries the failure-code slice. */
+export const BUNDLES = Object.freeze({
+  'packages/hfs/runtime': Object.freeze({ files: Object.freeze([...new Set([...SLOT_FILES, ...importClosure(CHECK_ENTRIES), 'knowledge/hfs/canon-pins.yaml', JEST_PRESET_SONAR, 'knowledge/hfs/fe-stack.yaml', 'knowledge/sonar-gate.yaml', CONFIG_EXAMPLE, RULE_CATALOG_FILE, ...patternTopicFiles()])].sort(byCodeUnit)), catalog: true }),
+  'packages/eslint/be/runtime': Object.freeze({ files: Object.freeze([...new Set([...SLOT_FILES, ...importClosure(['scripts/api/git/recorded-lines.mjs', 'scripts/lib/language.mjs', 'scripts/lib/jsdoc.mjs', 'scripts/lib/sonar-syntax-rules.mjs', 'scripts/lib/sonar-way.mjs', 'scripts/hfs/project-rule.mjs']), ...MACHINE_DATA, CONFIG_EXAMPLE, RULE_CATALOG_FILE])].sort(byCodeUnit)), catalog: false }),
+  'packages/eslint/fe/runtime': Object.freeze({ files: Object.freeze([...new Set([...SLOT_FILES, ...importClosure(['scripts/api/git/recorded-lines.mjs', 'scripts/lib/next-contract.mjs', 'scripts/lib/language.mjs', 'scripts/lib/jsdoc.mjs', 'scripts/lib/sonar-syntax-rules.mjs', 'scripts/lib/sonar-way.mjs', 'scripts/hfs/project-rule.mjs']), ...MACHINE_DATA, CONFIG_EXAMPLE])].sort(byCodeUnit)), catalog: false }),
+});
+
+/** The catalog entries for `codes`, in the catalog's own text, keyed by top-level line. */
+function catalogSlice(text, codes) {
+  const blocks = text.replaceAll('\r\n', '\n').split(/\n(?=[A-Za-z][A-Za-z0-9_-]*:\n)/);
+  const byCode = new Map(blocks.map((b) => [b.slice(0, b.indexOf(':')), b.trimEnd()]));
+  return `${[...codes].sort(byCodeUnit).map((code) => {
+    if (!byCode.has(code)) throw new Error(`${CATALOG} has no entry for ${code}`);
+    return byCode.get(code);
+  }).join('\n\n')}\n`;
+}
+
+/** Every reported code and every code the bundled rule catalog requires, leaving unrelated runtime codes out. */
+function bundledFailureCodes(ruleCatalog) {
+  const owned = parseYaml(ruleCatalog).rules.flatMap(rule => rule.failureCodes);
+  return new Set([...REFUSAL_CODES, ...ARCHITECTURE_RULE_IDS, ...owned]);
+}
+
+/** {relative path: expected text} of one bundle. */
+function expectedBundle(bundle, root) {
+  const spec = BUNDLES[bundle];
+  if (!spec) throw new Error(`no bundle ${bundle}`);
+  const out = new Map();
+  for (const file of spec.files) out.set(file, fs.readFileSync(path.join(root, file), 'utf8'));
+  if (spec.catalog) out.set(CATALOG, catalogSlice(fs.readFileSync(path.join(root, CATALOG), 'utf8'), bundledFailureCodes(out.get(RULE_CATALOG_FILE))));
+  return out;
+}
+
+const listed = (dir, base = dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? listed(path.join(dir, e.name), base) : [path.relative(base, path.join(dir, e.name)).split(path.sep).join('/')]));
+
+/** The finding code of a generated copy that differs from what this script writes (rule R121, judged by scripts/hfs/runtime-check.mjs). */
+export const GENERATED_DRIFT = 'RT_GENERATED_DRIFT';
+
+function bundleDrift(root, bundle) {
+  const bundleRoot = path.join(root, bundle);
+  const expected = expectedBundle(bundle, root);
+  const problems = [];
+  for (const [file, text] of expected) {
+    const target = path.join(bundleRoot, file);
+    if (!fs.existsSync(target)) problems.push(`missing ${bundle}/${file}`);
+    else if (fs.readFileSync(target, 'utf8').replaceAll('\r\n', '\n') !== text.replaceAll('\r\n', '\n')) problems.push(`stale ${bundle}/${file}`);
+  }
+  if (fs.existsSync(bundleRoot)) for (const file of listed(bundleRoot)) if (!expected.has(file)) problems.push(`extra ${bundle}/${file}`);
+  return problems;
+}
+
+function uiCatalogDrift(root) {
+  const target = path.join(root, UI_CATALOG_FILE);
+  if (!fs.existsSync(target)) return [`missing ${UI_CATALOG_FILE}`];
+  if (fs.readFileSync(target, 'utf8').replaceAll('\r\n', '\n') !== uiCatalogText(root)) return [`stale ${UI_CATALOG_FILE}`];
+  return [];
+}
+
+/** Differences of the package copies and generated UI catalog from the same root's canonical inputs. Never writes. */
+export function driftOfRuntime(root = runtimeRoot) {
+  const problems = [];
+  for (const bundle of Object.keys(BUNDLES)) problems.push(...bundleDrift(root, bundle));
+  problems.push(...uiCatalogDrift(root));
+  return problems;
+}
+
+/** The generated browser-readable map of the ui catalog, a JSON data file so that no Vietnamese text sits in TypeScript source (ruleParams.runtime.generated): one entry per English source of the ui scope of modules/i18n/messages. */
+const UI_CATALOG_FILE = 'ui/src/i18n/generated/catalog.json';
+function uiCatalogText(root) {
+  const entries = catalogEntries(root, { scope: 'ui' });
+  const catalog = Object.fromEntries(entries.map(({ en, vi }) => [en, vi]));
+  if (Object.keys(catalog).length !== entries.length) throw new Error('The UI i18n scope contains duplicate English sources');
+  return `${JSON.stringify(catalog, null, 2)}\n`;
+}
+
+function writeUiCatalog(root) {
+  const target = path.join(root, UI_CATALOG_FILE);
+  const text = uiCatalogText(root);
+  if (fs.existsSync(target) && fs.readFileSync(target, 'utf8') === text) return;
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, text);
+}
+
+/** Removes the directories a cleared file left empty, deepest first: git tracks no empty directory and the HFS tree check refuses one. */
+function pruneEmptyDirs(directory, keep) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) if (entry.isDirectory()) pruneEmptyDirs(path.join(directory, entry.name), false);
+  if (!keep && fs.readdirSync(directory).length === 0) fs.rmdirSync(directory);
+}
+
+function clearUnlisted(bundle, bundleRoot, expected) {
+  if (!fs.existsSync(bundleRoot)) return;
+  for (const file of listed(bundleRoot)) {
+    if (expected.has(file)) continue;
+    // A generated copy is never a held artifact: nothing but this script writes it.
+    const removed = safeRemove(path.join(bundleRoot, file), { hold: () => null });
+    if (!removed.ok) throw new Error(`cannot clear ${bundle}/${file}: ${removed.errors.map((e) => e.message).join("; ")}`);
+  }
+  pruneEmptyDirs(bundleRoot, true);
+}
+
+/** Writes each expected file whose bytes differ; returns how many files the bundle holds. */
+function writeExpected(bundleRoot, expected) {
+  for (const [file, text] of expected) {
+    const target = path.join(bundleRoot, file);
+    const current = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
+    if (current !== text) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, text);
+    }
+  }
+  return expected.size;
+}
+
+/**
+ * Rewrite every generated copy under the runtime root to what BUNDLES say, and the ui catalog map. Returns the runtime copy file count.
+ * Only a file whose bytes differ is written and only a file no bundle lists is removed, so a copy that is already current is never
+ * touched: a reader in another process (a spec scanning with the canon bundle while another process regenerates) never sees a bundle
+ * cleared or a file truncated mid-write.
+ */
+export function syncRuntime(root = runtimeRoot) {
+  let count = 0;
+  writeUiCatalog(root);
+  for (const bundle of Object.keys(BUNDLES)) {
+    const bundleRoot = path.join(root, bundle);
+    const expected = expectedBundle(bundle, root);
+    clearUnlisted(bundle, bundleRoot, expected);
+    count += writeExpected(bundleRoot, expected);
+  }
+  return count;
+}
+
+if (isMain(import.meta.url)) {
+  if (process.argv.includes('--check')) {
+    const problems = driftOfRuntime();
+    for (const p of problems) process.stderr.write(`${GENERATED_DRIFT} runtime copy drift: ${p} (run starci release sync-runtime)\n`);
+    if (!problems.length) process.stdout.write(`OK: ${Object.keys(BUNDLES).length} runtime copies match the runtime\n`);
+    process.exitCode = problems.length ? 1 : 0;
+  } else {
+    process.stdout.write(`runtime copies synced: ${syncRuntime()} files in ${Object.keys(BUNDLES).length} bundles\n`);
+  }
+}

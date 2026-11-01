@@ -1,0 +1,1447 @@
+# ============================================================================
+# modules/kernel/driver-loop.yaml — the kernel's tick contract
+#
+# The reasoned half of the kernel: what the ONE long-lived [Kernel] agent does
+# every tick of a project's life — decide non-green verdicts, pick the next leg,
+# route the op and the model, dispatch, wait for the next decision. Declarative rules
+# only; every rule cites the mechanism that owns it. Nothing here executes —
+# scripts/kernel/cli.mjs + engine/ are the spine; this file is what an agent
+# reads to reason like it.
+#
+# Operating model: .claude runs purely on Orca.
+#   chat          = goal creator + trigger only. The owner prompt lands here;
+#                   it spawns the kernel and is never an agent layer above it.
+#   [Kernel] <p>  = ONE agent per project, LONG-LIVED. plan -> decide ->
+#                   re-plan. The Job controller settles green reports. Terminal title `[Kernel] <project>`
+#                   (scripts/kernel/start-workflow.mjs spawn).
+#   [Op] <name>   = 1 op = 1 EPHEMERAL agent, spawned per dispatch BY
+#                   `starci kernel dispatch --spawn` through an Orca terminal, dies when
+#                   its verdict settles — `starci kernel settle` closes the worker
+#                   terminal (scripts/agent/lib.mjs). Terminal title
+#                   `[Op] <op-or-task>` (the worker naming rule).
+#
+# The Kernel's role (scope, duties, never, reporting) is modules/kernel/roles.yaml#kernel.
+#
+# The kernel agent touches NO state directly: every read/write below is one
+# `starci kernel <command>` call (modules/kernel/api.yaml); the
+# packet contract is modules/kernel/dispatch.yaml. modules/kernel/kernel-prompt.md
+# points the spawned kernel here; each rule is stated once, in this file.
+# ============================================================================
+
+schema: starci/module-kernel-driver-loop@1
+
+about:
+  kind: kernel-driver-loop
+  businessQuestion: >-
+    "Given an approved goal and a pool of ephemeral op agents, what does the
+    kernel do on each tick — which leg goes next, to whom, on which model —
+    and which decisions is it never allowed to take alone?"
+  businessAnswer: >-
+    The kernel is a state machine with a pulse. Each tick it decides every
+    non-green report that arrived, re-derives the frontier from the goal's state
+    variables (never from memory of what it sent), launches only what the
+    dispatch plan proves parallel-safe, and stops — it waits — when nothing is
+    both ready and legal. It decides order and assignment; it never decides
+    scope, identity or authority.
+  sources:
+    - scripts/kernel/cli.mjs
+    - engine/db/ledger.mjs
+    - scripts/agent/lib.mjs
+
+# ============================================================================
+# 0 — KERNEL BOUNDARY. What the [Kernel] agent may never do itself
+#    (api.yaml conventions.neverDoes is the api's side of it).
+# ============================================================================
+boundary:
+  hostMechanics: >-
+    The kernel NEVER calls orca, git, or an agent CLI directly — terminal
+    create/read/send/close, spawn flags, liveness screens and workspace state
+    are api internals and scripts/agent/lib.mjs functions; the kernel sees
+    receipts, not terminals. The api owns host mechanics, period.
+  apiCallsRunToEnd: >-
+    Never wrap an api call (`starci kernel dispatch --spawn` above all) in a shell
+    `timeout`, a job kill or any other bound: the api bounds its own waits,
+    and a call killed mid-write leaves a half-made launch.
+  durableSurface: >-
+    The kernel NEVER writes files as the durable record — the ledger (via
+    api calls) plus each job's declared artifacts are the only durable
+    surface; dispatch-time prompt artifacts are api-owned files under the state
+    root's dispatch-prompts (scripts/agent/prompt-file.mjs). The op IPC is durable the same way:
+    the contract, the report and the re-run checks are the
+    contracts/reports/checks ROWS transacted through `starci kernel dispatch` /
+    `starci kernel op-contract` / `starci kernel report` / `starci kernel consume-report` / `starci kernel record-checks`.
+  persistAsYouThink: >-
+    Agent memory is not durable. Survey findings, the derived plan, the
+    slice table and model/routing reasoning are persisted into the ledger
+    as they form — `starci kernel plan` records the plan digest + structural diff +
+    lineage, `starci kernel incident` records a named finding; the ledger's events
+    (engine/db/schema/runtime.sql) are the durable memory. A kernel
+    that dies mid-survey must lose nothing — hoarding state in context
+    until dispatch is a defect.
+  terminalLifecycle: >-
+    `starci kernel settle` closes the worker terminal — the kernel never reuses an op
+    terminal and never re-dispatches into a settled job's handle. What a retry
+    costs in rows and attempts is tick.drive.oneOpOneAgent below.
+  language: >-
+    Owner rule: code is English, logs are in config.yaml `language` (the
+    owner_language every packet carries). The kernel writes commands, api
+    verbs and flags, identifiers, Work records, commit messages and incident
+    kinds in English, and its terminal narration, status lines, `starci kernel notify`
+    subjects and bodies, incident details and owner-facing summaries in
+    owner_language.
+  typedLogs: >-
+    The owner's console reads typed log rows, never terminal text: logs are data
+    (scripts/kernel/typed-logs.mjs, the ledger's logs table, api.yaml
+    log). Rules: (1) what you would narrate is one `starci kernel log` row - a routing or
+    verdict choice is `--kind decision --data '{"markdown":"<why, owner
+    language>"}'`, a phase of your tick is `step.start` / `step.end
+    {"name","durationMs"}`, a blocker you hit is `error {"code","message",
+    "hint"}`; (2) `--msg` is one short line in owner_language, facts go in
+    `--data` (at most 4 KB) and bulk (a log file, a report) is named in
+    `--refs`, never pasted; (3) pass `--job <id>` when the row is about one
+    job, `--node <work-graph node>` when about one node; (4) never log a
+    credential, token or OTP (the api redacts values, but never rely on it);
+    (5) dispatch, report, check, settle, land and incident rows are derived
+    from the ledger's own events - never log them yourself. Example:
+    `starci kernel log --repo <repo> --workflow <wf> --job op-backend.implement-1a2b
+    --kind decision --msg "Reassigned to codex: devin is out of quota" --data
+    '{"markdown":"devin quota circuit open until 14:00; retry routes to codex"}'`.
+    `starci kernel logs --workflow <wf> [--job <id>]` reads the rows back.
+  opTerminalObservation: >-
+    The one sanctioned look at an op's screen is `starci kernel observe --job <id>` —
+    read-only reasoning context through the api on the job's own exact
+    worker. It sends nothing (that is `starci kernel nudge`), closes nothing (that is
+    `starci kernel settle`), and an op's screen is never proof: only `starci kernel report`
+    plus kernel-run `starci kernel record-checks` rows settle a verdict.
+  ownerChannel: >-
+    An owner question travels only through the ask path: an op outcome `ask`
+    that `starci kernel serve-ask` serves, leaving a receipt with `answered_by`. Never
+    open your agent CLI's own question dialog: nothing records its answer and
+    a watchdog wake typed into it becomes a false answer. A step only the
+    owner can drive (an assisted OAuth run, a consent screen) is `api
+    incident --kind owner-gate --holds <ops|jobs>`, resolved with `api
+    incident --resolve` once its receipt lands (api.yaml incident.ownerGate):
+    --owner-answer <dispatchId> when the owner answered an ask, else --by
+    kernel|supervisor stating what landed. Never write that the owner
+    confirmed or approved without the ask the owner answered: that refuses
+    owner-claim-unproven (api.yaml incident.ownerClaim).
+
+# ============================================================================
+# MENU — the Kernel answers; the runtime does the rest (modules/kernel/roles.yaml principle P5)
+#    The menu is data: modules/kernel/kernel-menu.yaml. `starci kernel status` prints its open items as the Decide section; `starci kernel
+#    decide` answers one item and executes the choice in-process.
+# ============================================================================
+menu:
+  rule: >-
+    Every wake: `starci kernel status`, then `starci kernel decide --workflow <wf> --item <id> --choice <choice> --reason <why>` for
+    each item of its Decide section (`--text` where the option names an input). An empty menu is a wait: yield. A choice off the menu is
+    refused with the menu. The mechanical work is the runtime's: dispatch of ready work, bounded retry, agent switch, the settle of green
+    reports, the retry of a job whose gate resolved or whose ask was answered, the enqueue of an approved leg whose plan declares its write
+    set, the rework of a red node, the re-run of a stale proof or attempt, the asset leg, the credential ask, the owner's redraw, the redo
+    of a cut ordinal that does not reconcile with its seam, and the collection of leftovers. A refused move of the runtime reaches the menu
+    as Decision Item move-refused (retry-decision for a failed job nothing follows). What stays the Kernel's is a judgment: the write set of
+    a leg the plan leaves open (leg-ready), the redraw of an answer that names no job (draw-redraw), the checks that reconcile a stub
+    sibling and the re-cut of a slipped seam (seam-duty), a move the ledger could not build (move-unbuilt), and the handover step.
+  noneFits: >-
+    `none-fits` is the typed exit of every item: it needs a reason and escalates the item to the Supervisor. A situation whose only way
+    forward is a workaround around a bug of the runtime or of a role is never a choice: answer none-fits with the evidence, and the
+    Supervisor records the runtime-defect for Debug.
+  settleFirst: >-
+    A job item (settle-nongreen, retry-decision) is answered before new work of its unit: the settle verdict of a non-green report is the
+    Kernel's judgment, by the verdict table below.
+  decisionLog: >-
+    `decide` writes the decision log entry (hypothesis = the reason, action key = the choice, metric = the item resolved) and closes it
+    keep or revert when the choice executed or failed; a restarted Kernel reads it with `starci kernel decide --workflow <wf> --list`.
+  citation: "modules/kernel/kernel-menu.yaml; scripts/kernel/kernel-menu.mjs; scripts/kernel/verbs/shared/menu-decide.mjs; modules/cli/commands/kernel/decide.yaml"
+
+
+# ============================================================================
+# 1 — THE TICK. One iteration of the driver loop, in order — expressed in api
+#    calls. The kernel agent NEVER opens .starciwork/runtime.sqlite and never
+#    spawns a terminal itself: every state operation is
+#    `starci kernel <command>` (modules/kernel/api.yaml — args,
+#    read/write sets, refusal strings). A refusal is a fact the loop routes,
+#    never a crash. The kernel never skips ahead: a report it has not settled
+#    is a verdict the next pick does not know about.
+# ============================================================================
+tick:
+  order:
+    - menu      # starci kernel status, then starci kernel decide for each item of its Decide section (menu)
+    - yield     # an empty menu is a wait: the runtime wakes the Kernel when something needs judgment
+  # The sections below are the rulebooks the Kernel judges by.
+  citation: "modules/kernel/api.yaml commands — the closed verb surface"
+
+  survey:
+    rule: >-
+      `starci kernel survey` is the tick's one deep read — goal (latest revision + the
+      approved opChain), jobs, inbox, signals, events tail, open incidents,
+      in one projection. The kernel never queries sqlite itself; a state it
+      cannot survey is a state it may not act on.
+    neverMemory: >-
+      The frontier is COMPUTED from the survey, never remembered — what was
+      dispatched, what settled, what is parked is all re-read each tick
+      (the api's status/survey projections apply the same discipline on the
+      durable spine).
+    peerInbox: >-
+      Every wake, after survey and before planning, read `starci kernel inbox --workflow
+      <id>`: peer workflows of this ledger send their requests, heads-ups,
+      handoffs and replies there, and what they say can change your plan.
+      Act on each and ack it (§ peers below).
+    runtimeRev: >-
+      Every wake names the actual runtime revision. Before affected new-leg admission, run
+      `starci kernel kernel-ack-rev --workflow <id> --plan` with --op for the upcoming operation,
+      read the single `bundle.file` the plan returns (every path under `unread` in one file, one call; the files this incarnation has not yet attested
+      with these bytes: the whole set at boot, afterwards only the new or changed ones) and attest the exact
+      returned readToken with --rev and --digest (the complete readManifest with --read-manifest still attests). The current Kernel incarnation alone acknowledges READ.
+      Boot delivery is provenance, not acknowledgement. Git keeps its actual SHA; installed
+      trees use explicitly installed current required-byte identity. Unknown, missing,
+      changed relevant bytes or incomplete acknowledgements refuse affected enqueue/dispatch.
+      Preserve already admitted attempt custody and evidence; never restart yourself to reread.
+    stallWake: >-
+      A `[stall]` finding reaches you as a Decision Item the Workflow controller opens
+      (scripts/reconciler/controllers/workflow.mjs: stale-gate, stale-wait,
+      stale-peer-wait, unread-peer, orphaned-frontier, progress-stall) through
+      `starci kernel decisions`. Such an item names something this workflow
+      can fix itself - a gate or wait whose reason is gone (with the evidence),
+      a queued job behind a settled blocker, an unread peer message, a frontier
+      nobody moved, an owner gate that is really a peer dependency. It is work,
+      not a notice, and needs no go: re-read starci kernel status, check each item's
+      evidence yourself and run the api action it names (resolve the incident,
+      re-point or retry the job, read and ack the inbox, re-record the wait as
+      a peer-wait), then continue the frontier. When the evidence is wrong,
+      record why in the incident detail instead of ignoring it: the same
+      finding 20 minutes later goes to the supervisor as a failed self-heal.
+
+  plan:
+    rule: >-
+      The kernel derives the plan from the surveyed goal and hands it to
+      `starci kernel plan --workflow <wf> --file <plan.json>` (shape: modules/schemas/goal-plan.yaml; the file
+      carries the legs' `edges` - route-plan emits them - and a file without
+      provable edges is refused plan-edges-missing, nothing written). The api
+      persists the digest + diff as a 'plan-derived' event and returns the
+      STRUCTURAL diff of the derived op set vs the approved opChain in
+      goals.json (define-goal.yaml: the chain is advisory — re-derived at
+      boot, never trusted blindly).
+    divergence: >-
+      Structural divergence — legs added, removed or re-rooted vs the
+      approved shape — is NOT a dispatch decision: `starci kernel incident --kind
+      plan-divergence` and escalate per the ladder below; no dispatch runs
+      on a divergent plan. Order tweaks and allowlist wording inside the
+      approved shape are the driver's own call (escalation.driverAlone
+      ORDER).
+
+  enqueue:
+    rule: >-
+      Each planned op with no job row gets one: `starci kernel enqueue --op <opId>
+      --paths <owned_paths csv> [--records <closed read-set csv>]` writes
+      status='queued' with the op's explicit Work-record reads and write-set
+      on the row. A downstream op that consumes a scope.define proposal binds
+      that exact predecessor scope record here; it never discovers a
+      repository-wide substitute. One row per planned op the queue lacks:
+      `starci kernel enqueue` does not refuse a second live row for the same op
+      (cutExecution needs N of them), so not doubling a leg is the kernel's
+      own discipline and the durable fence is the capacity-1 path lease
+      dispatch admission takes.
+    modeOps: >-
+      An op whose brief declares `params.mode` (setBy: kernel —
+      release.deliver, review.verify, runtime.operate, workspace.manage) is
+      enqueued with the one mode this leg runs: `--params '{"mode":"<mode>"}'`
+      on the starci kernel enqueue. Dispatch binds that mode's
+      `executionModes.<mode>.reads` into the input digests (api.yaml dispatch),
+      so a leg's admitted contract is the selected mode, never the union of
+      modes the selector envelope forbids. The default `select` leaves the
+      choice to the request; pass it when the plan names no mode.
+    cutExecution: >-
+      A preflight-proven write closure beyond the canonical cut bounds is
+      execution decomposition INSIDE the already approved semantic op, not a
+      new semantic plan leg and not an owner gate. The agent count is
+      computed, not guessed: measure the closure's files/assertions/
+      components/records, pass its paths, and call `starci kernel estimate`; its
+      `agentsAchievable` is N and its `slices` is the same number. That number
+      is the closure's size class and the owner's parallelism gear read
+      through the declared tables (modules/models/runtimes.yaml
+      allocation.slicing `weights`, `targetMinutes`, `size.<class>.from`,
+      `size.<class>.agents`, `gears`), then bounded by the disjoint partition
+      the closure actually holds — `agentsRequested` is what the gear asks
+      for and `reason` names what capped it. A gear raises the request only:
+      the pool's maxParallel, the workers' maxParallelOps and the workflow's
+      budgets.maxOps still admit, and a slice refused `max-ops` stays queued
+      until one of them frees.
+      A cut is not fan-out within an operation: the slices are DISJOINT jobs
+      of the same approved op, each still one job with one agent and one
+      verdict (dispatch.yaml oneOpOneAgent), never several agents sharing one
+      operation — which is what fanOutWithinOperation forbids.
+      Derive a stable cut id and a complete seam-first partition (seam contract-first,
+      seamContractFirst below) of concrete,
+      pairwise-disjoint path slices; enqueue one job per slice with the SAME
+      approved op id using `--cut-id <id> --cut-ordinal <n> --cut-total <N>`.
+      Every slice stays at or below the file/assertion/component bounds and
+      carries the same exact goal/record binding. A code.refactor leg whose
+      params.canonFamilies is set takes its partition from `node
+      scripts/gates/canon-scan.mjs --root ROOT --families <value> [--exclude
+      <paths other workflows own>] --json` -> `slices`: one job per slice,
+      its `paths` the owned paths, the same params.canonFamilies, each wave
+      enqueued `--after` every job of the wave before it; each slice is still
+      sized by `starci kernel estimate --paths`. Its owned paths are the slice's paths
+      PLUS the relocation destinations its findings need, and each wave's
+      shared-root files go to ONE serial canon-wire leg: run `node
+      scripts/kernel/seam-policy.mjs canon-plan --scan <that canon-scan json>
+      --cut-id <id>` and enqueue its `commands` in order, each slice with
+      --canon-scan <that json> (starci kernel enqueue refuses a canon slice without it or
+      without the plan grants, H6) - each slice with its
+      `owned` (paths + grants, never overlapping a sibling), then per wave `api
+      enqueue --op code.refactor --paths <wire> --params
+      '{"canonWire":true}' --after <every ordinal of the wave>`, which owns the
+      shared root config (package.json, tsconfig, hfs.json), the contested relocations and every
+      owedToWire path a slice reports (a wire still queued when a slice reports
+      one outside it is dropped with `starci kernel reconcile --drop` and re-enqueued on
+      the union). A canon slice that settled blocked or failed after
+      leaving work is redone from its preserved work, never from scratch: `node
+      scripts/kernel/seam-policy.mjs canon-redispatch --repo ROOT --job <job>
+      [--paths <grants it lacked>]` prints the `starci kernel enqueue ... --cut-id <id>
+      --cut-ordinal <n> --cut-total <N> --retry-of <job> --params
+      '{"resumeFrom":"refs/heads/preserved/<workflow>/<job>"}'` to run. A canon slice that settles blocked with a filed report
+      is followed up by settle itself (result nextStep kind canon-follow-up,
+      scripts/kernel/seam-policy.mjs canonSettleFollowUpOf) - a continuation from
+      its preserved work owning its page relocations, its shared-root needs added to
+      the queued canon-wire leg - so the Kernel never enqueues a second redo
+      of that job; every slice packet carries context.cut.manifest (the path
+      union and passed ordinals) from dispatch. A canon slice's
+      cut-slice-postcondition is green when every residual canon-scan finding
+      on its owned paths is listed in its report's owedToWire (verdict-contract);
+      settle adds those paths to the queued canon-wire leg. The semantic leg also waits for every canon-wire leg
+      of the cut. Route the set spread across
+      the fan-out order by routing each slice with plain `starci kernel route --job
+      <id>` in turn: persisted routes count queued and leased lanes and the
+      the balance step (models.balance) passes a full member's next slice down the order, so
+      parallel slices occupy the lanes concurrently instead of saturating one
+      member. Do not inject work.author, duplicate the op in the
+      derived goal plan, or create a mega-op. The semantic leg advances only
+      after every ordinal in the cut set settles pass and the union of their
+      declared paths equals the preflight closure. A failed slice, or any
+      settled job `starci kernel status` lists in `staleInput` (a product record it read
+      changed after it settled in a way that owes work), is redone as a new attempt of that same op and
+      cut ordinal with the same cut id/total — a stale cut seam-first, its
+      seam ordinal (the lowest, owning the root configs) alone before the
+      rest — a passed slice whose inputs are unchanged is never rerun, and a
+      stale job never counts toward its leg until its redo passes. A
+      `followUp` row owes ONE follow-up leg, never a seam-first cascade;
+      `peerDrift` and `sourceDrift` are advisory and never redone
+      (sharedWorkRecords, currentContracts).
+      An op `ask` or `blocked` that names another slice's owned paths (files
+      it may not write) is resolved by re-dispatching the owning slice as a new
+      attempt of that op and cut ordinal, never by leaving the asker waiting.
+      An `starci kernel settle` refused `workflow-foreign-change` or
+      `workflow-foreign-commit` is settled fail or blocked (its work is
+      preserved and reset) and re-dispatched; no op and no Kernel ever commits
+      by hand - the runtime commits each green op's owned paths as the
+      workflow's checkpoint. A job whose owned paths or
+      repository name the wrong target is settled fail or blocked with that
+      reason and re-enqueued with the right --paths/--repository
+      (api.yaml commands.enqueue), never fixed by editing its payload — a
+      direct ledger write §1 forbids.
+      When the operation contract declares cut-set-aware integration proof,
+      each non-final slice reruns the unchanged full regression but may retain
+      only failures mapped to unsettled sibling ordinals; its independent
+      Kernel checks are green `cut-slice-postcondition` and
+      `cut-regression-inventory`, with the raw nonzero integration result kept
+      as evidence rather than mislabeled green. The pass that closes the set
+      - the last ordinal to settle, whichever it is (`starci kernel status` cutSets
+      names it as closingOrdinal) - must record `full-regression-final` green:
+      the Kernel runs the unchanged full gates over the whole set before that
+      settle.
+      If a complete disjoint partition cannot be derived from repository
+      evidence, that inability is a technical planner incident for Kernel/AI
+      repair; it becomes an owner gate only when business scope or authority
+      truly must expand.
+    seamContractFirst: >-
+      A cut's seam never stalls the chain (owner ruling 2026-09-28: "A seam must not block the whole chain: if a seam
+      slips, re-cut it or let the later slices run in parallel with a stub, do not wait 3 hours";
+      scripts/kernel/seam-policy.mjs). The seam ordinal is enqueued with priority_json {class cut-seam}
+      and runs contract-first: its op publishes the interface (types, contracts, a stub) with
+      `starci kernel cut-seam --publish-interface` before finishing, and every sibling ordinal is released to
+      build against it at once. A sibling also stops waiting - `starci kernel status` frontier.queued reads it
+      `ready` with seamStub {mode} - when the seam's latest attempt settled failed/blocked
+      (seam-failed), when the seam failed allocation.cutSeam.recutAfterFailures times (seam-slipped),
+      when the Kernel ran `starci kernel cut-seam --release` (released), or when it has waited
+      allocation.cutSeam.maxSiblingWaitMs (timeout, modules/models/runtimes.yaml); dispatch it then
+      like any ready job - dispatch stamps payload.cut.seamStub and the op builds on the interface or
+      its own stub and lists seamAssumptions. A queued seam is dispatched first: frontier.queued ranks
+      it after foundation legs, nextActions says "dispatch seam now", and `starci kernel dispatch` refuses other
+      work the workflow's last free slot while a seam nothing holds is queued (seam-priority). A seam
+      that slipped owes a re-cut: cutSets[].seam.recutPlan keeps the feature-local interface paths as
+      the smaller seam and moves the shared-root paths into ONE wire leg of the same op enqueued
+      --after every ordinal; run its steps (nextActions retry, seamDuty recut) while the siblings
+      already run on the stub. Reconcile, not redo: a stub sibling that settles pass after the seam
+      passed is reconciled by its own settle checks, and the closing pass's full-regression-final
+      reconciles every one still owed; a stub sibling that passed BEFORE the seam landed owes one
+      light re-verify (its scoped typecheck/build and slice tests against the real seam) recorded
+      with `starci kernel cut-seam --reconcile --job <id> --exit-code <n> --command <cmd>` (nextActions
+      impact-check, seamDuty reconcile); only a red reconcile redoes that ordinal as a new attempt.
+    boundary: >-
+      Enqueue is declaration, not launch: owned_paths ride on the job row so
+      dispatch-time disjointness is checkable before any agent exists
+      (modules/goal/legality.yaml splitRules; modules/schemas/goal-plan.yaml disjoint
+      allowlists). Paths are normalized concrete workspace-relative prefixes;
+      absolute/root/traversal/glob grants are refused (a trailing `/**` is
+      normalized to its directory prefix). Broad `workspace.manage` grants are
+      decomposed into exact selected migration node/resource/stack slices when
+      those slices are derivable. In multi-repository projects each product
+      prefix is qualified by its stable repository binding (for example
+      `shop-fe/apps/landing`); canonical Work remains `.starciwork/...`.
+
+  drive:
+    peerWait: >-
+      A peer-wait is typed and durable (modules/kernel/api.yaml
+      commands.incident.peerWait): --detail names exactly what must land and
+      how you will check it (a version in a lockfile, a record state), --refs
+      the requests you sent. While it is open the held ops never route or
+      dispatch and the frontier sleeps at `peer-wait`, so the watchdog stops
+      re-waking you for nothing. When the
+      peer's message arrives (frontier peer-message; with --until-message the
+      wait is already resolved) re-check the prerequisite before you enqueue:
+      it holds -> `starci kernel incident --workflow <wf> --resolve <id>` (if still open) and continue;
+      it does not -> ack the message saying so and keep or re-record the wait.
+      A free-text incident of another kind never parks the frontier; replace
+      one with a peer-wait and resolve it. The supervisor reports a wait as
+      STALE-PEER-WAIT once the peer finished, its typed until set holds or can
+      no longer hold (untyped: a named job settled after the wait, at its
+      retry lineage head), or the peer is idle too, and an unread message from it as
+      UNREAD-PEER.
+    typedRelease: >-
+      Whenever a wait's release is machine-checkable, attach it as a typed
+      condition (modules/kernel/api.yaml commands.incident.typedRelease), never
+      only as prose in --detail: a record that must exist or reach a state/rev
+      (`--until-record <path>[@state|>=rev]`), a job that must settle or
+      succeed (`--until-job <jobId>[:settled|succeeded]`), a message a peer
+      must send (`--until-message <peer>[:kind]`), a commit or committed path
+      (`--until-commit <repo>:<ref-or-path>`), another incident
+      (`--until-incident <id>`). The runtime re-checks them on every status
+      and watchdog tick, after every settle and notify, and resolves the
+      incident itself once all hold (frontier.autoResolved), releasing what
+      it held and waking you. Keep --detail for the human reason and for the part
+      no condition expresses (a token in a stylesheet, a lane going green):
+      on the wake verify that part before you enqueue, and re-record the
+      wait if it does not hold. An open free-text wait whose release became
+      checkable is typed in place with `starci kernel incident --attach <id>
+      --until-...`. Owner-only releases (an ask answered, a consent given)
+      stay owner-gates without typed conditions. A --until-job or --after on a
+      job follows its retry lineage: once the failed job is retried the wait
+      is on the retry, so never drop and re-enqueue a dependant, or re-point a
+      wait, only because the job it names failed. A typed condition that can
+      no longer hold (frontier.gateConditionsUnmeetable: the awaited job
+      failed under :succeeded and nothing retries it) is yours to retry,
+      re-point with --attach, or resolve.
+    waiterPriority: >-
+      Work other workflows wait on goes first. frontier.queued lists the
+      queued jobs other work waits on first, heaviest (most and oldest
+      waiters) first, and frontier.blockingOthers names every job of yours
+      another workflow waits on (scripts/kernel/waiter-priority.mjs). Route
+      and dispatch in that order; `starci kernel route` names a heavier queued job in
+      blocking.outrankedBy. A queued job that has blocked a peer for 15
+      minutes brings a heads-up into your inbox ("N workflow(s) wait on
+      <job>"): dispatch it, or tell the waiting workflows why it cannot run
+      yet (starci kernel notify --kind heads-up), then ack the message with what you
+      did. Name the job id you wait on in a peer request or a wait's
+      --until-job so the owning Kernel sees you waiting.
+    reconcile: >-
+      An `effect_unknown` job is part of the open frontier and remains fenced.
+      Before routing it, call `starci kernel reconcile --job <id>`. The api reads the
+      exact managed Dispatch through Orca wrappers and requeues the same
+      job/attempt only when no contract/report exists and host evidence proves
+      prompt injection stalled before model input, the exact worker process is
+      exited, and release either completed or retained terminal bookkeeping
+      only as `identity_unproven`. Any weaker observation leaves the lease and
+      effect_unknown status intact; the kernel records/relays that blocker and
+      never creates a successor attempt from a guess.
+    deadWorker: >-
+      A workflow survives a host shutdown like a saga: the ledger is the
+      whole state, so a restarted Kernel (the reconciler Host controller relaunches it
+      through start-workflow, also after a reboot) re-reads status and recovers each
+      `worker-dead` job with `starci kernel reconcile --job <id> --dead-worker`
+      (modules/kernel/api.yaml commands.reconcile.deadWorker). The answer
+      names one route. recovery `settle`: the worker filed its report before
+      it died - consume-report, check and settle as usual. recovery
+      `settled-failed` (--settle-failed): the attempt settled failed-no-report
+      and its retry (attempt+1) is queued - route and dispatch it. recovery
+      `requeued`: the attempt provably had no effect (no report, checks or
+      worker question, no effect outside its owned paths, no change or
+      commit under them since dispatch), so the SAME job and attempt are
+      queued again - route and dispatch it; this infrastructure retry spends
+      no business attempt. recovery `fenced`: the job is effect_unknown with
+      evidence (dirty:<path>, commit:<sha>, checks, worker-question, risk,
+      unverifiable paths, or infra-retries-exhausted) - read it, inspect the
+      owned paths, settle it `fail` (or `blocked` when only the owner can
+      decide) and enqueue a new attempt whose contract states what already
+      landed. Never requeue a fenced attempt by hand and never dispatch a
+      duplicate over a running row. A dead worker is never a hand-written
+      incident: the api raises one pattern incident itself after an op's
+      third no-report death (DEAD_WORKER_PATTERN_THRESHOLD).
+    dispatch:
+      rule: >-
+        For each ELIGIBLE queued job — normalized concrete owned_paths disjoint
+        from every durable in-flight path lease AND capacity free — the kernel first
+        calls `starci kernel route --job <id>` (the model decision is resolved and
+        persisted on the job payload: model/modelId/effort/routeChain), then
+        `starci kernel dispatch --job <id> --spawn` reserves the durable lease, writes
+        the contracts row (the rendered packet — the worker's dispatch
+        authority, read back via `starci kernel op-contract`) and lands the `[Op]`
+        terminal itself. The kernel picks WHICH jobs; the api owns the
+        mechanics (modules/kernel/dispatch.yaml spawnMechanics). Without
+        --spawn it is a dry-run packet preview.
+      eligibility: >-
+        Dispatch planning's three levels, enforced inside the api's refusals:
+        file (no write/write or write/read ancestor/equality overlap with
+        anything in flight),
+        lease (no contested capacity-1 resource — the path:* write fences and
+        machine:* budgets), group (seam runs alone and first;
+        siblings bounded by runtimes.yaml fanOut.maxPerGroup). An op whose
+        `starci kernel estimate` over its measured write scope returns slices > 1
+        (the twelve-file / eight-assertion / three-component screen in
+        modules/models/kinds.yaml implementation.plan is the coarse form of
+        the same measure) is cut into a complete set of disjoint SAME-OP
+        execution slices before any slice is enqueued (`enqueue.cutExecution`);
+        this does not alter the approved semantic chain. These checks span all workflows in the canonical ledger.
+        There is no repository-wide, ledger-wide, workflow-wide or open-job
+        exclusion: disjoint concrete paths remain concurrently eligible.
+      ownRunningOverlap: >-
+        Never dispatch a job whose owned_paths overlap one of your OWN running
+        jobs (shared catalogs such as messages/en.json and vi.json are the usual
+        case): sequence it with `starci kernel enqueue --workflow <wf> --op <op> --paths <paths> --after <running job>`, or narrow
+        its paths so they are disjoint. If you do, starci kernel route/dispatch answer
+        path-lease (waiting: true) instead of launching: the job stays queued
+        path-lease naming the holder and its lease expiry, nothing is recorded
+        as a dispatch rejection, and it reads ready once the holder settles -
+        the next wake dispatches it. Do not re-dispatch it by hand meanwhile.
+      hostResources: >-
+        `starci kernel dispatch --spawn` can also answer host-resources-low (waiting:
+        true): the host's free disk on the drive holding %TEMP% and the
+        repositories is under runtimes.yaml allocation.resources thresholds,
+        or the RAM-aware throttle refuses the op (its `throttle.reason`:
+        workers-max-ops, priority-reserved, heavy-paused, does-not-fit - api
+        status ramThrottle shows the effective cap and why). Light ops keep
+        starting while heavy ones wait; running ops are never stopped. A
+        typed wait exactly like path-lease:
+        the job stays queued queuedBecause host-resources-low naming the drive
+        and its headroom, nothing is recorded as a rejection, and the
+        supervisor's housekeeping plus the owner free it — it reads ready on
+        its own once there is room again. Wait for it: never fail the job over
+        it and never re-dispatch it by hand.
+      route: >-
+        The op id was route-op's pick during plan (scripts/route/route-op.mjs
+        — pick + reasons + citations, never a whole-contract read). The
+        packet's constraints.model is decided by `starci kernel route --job <id>
+        [--difficulty <d>]` BEFORE dispatch: it resolves through the pool selection
+        (modules/models/runtimes.yaml + selection rules — eligibility first,
+        capacity/quota/incidents order the eligible; budget never makes a
+        model eligible) and PERSISTS {model, modelId, effort, routeChain,
+        routeRejected, difficulty} onto the job payload plus a
+        'route-decided' event. Dispatch then launches exactly what route
+        persisted — the kernel never picks a model ad hoc and dispatch never
+        re-decides. A verify job is allocated AWAY from the runtime that
+        implemented its slice (the api's verify-avoidance rule). Pass
+        --difficulty per job, judged honestly: multi-file implements,
+        migrations and novel builds are hard or insane; bounded verifies and
+        small writes are easy or medium.
+        The Kernel never biases a route: --prefer/--avoid on starci kernel route or
+        dispatch are unknown options and refused (unknown-option). Pool health and retry evidence
+        are the router's: a pool with an open provider-health circuit is
+        skipped, and a retry demotes or excludes the pools its own lineage
+        failed on (api.yaml commands.route lineageAdjust). Do not steer around
+        pools on hunches; an incident on another job is not a reason. The
+        owner's goal routing_bias (define-goal) is the only bias and always
+        applies.
+      oneOpOneAgent: >-
+        One queued job = one dispatch = one ephemeral [Op] agent; a job
+        holding a lease is never re-dispatched and a settled job is never
+        re-launched — a retry is a NEW row at attempt+1
+        (dispatch.yaml oneOpOneAgent; the api settles it, not a new launch).
+        The only same-row retry is an infrastructure launch rejected before
+        contract/effect and explicitly returned to queued by no-effect
+        rejection or `starci kernel reconcile`; that row no longer holds a lease and
+        spends no business attempt (verdict-contract.yaml retryAccounting).
+      starvation: >-
+        A dispatch refused because another in-flight job already holds the
+        capacity-1 path lease or machine budget it needs comes back
+        `dispatch-rejected` with the reserve reasons attached — a wait reason,
+        not a failure. The loop records it and yields; it does not force
+        (modules/models/runtimes.yaml maxParallelOps). A
+        path lease remains the durable fence until explicit settle/reconcile;
+        expiry is a recovery signal, never proof that a prior worker cannot
+        still write.
+    wait:
+      rule: >-
+        Between dispatch and the next report the kernel WAITS durably, not
+        inside one model turn. It yields only after an `starci kernel status` issued
+        AFTER its last settle or consume-report comes back
+        `frontier.actionable: false`; on `true` it does the work that field
+        names — route/dispatch the queued jobs, reconcile the fenced ones,
+        consume the filed reports, nudge the idle workers — and asks again.
+        A status read before that last transition is stale and never
+        authorizes a yield. When the fresh status is not actionable, the
+        kernel records/names the exact wait reason and yields immediately.
+        The external watchdog owns the cadence
+        (modules/models/runtimes.yaml allocation.watchdogCadenceMs) and wakes the same
+        Kernel identity; the resumed turn begins with `starci kernel status`. The Kernel
+        never runs Start-Sleep, shell sleep, a timer, or an in-turn polling loop.
+        It does not poll for work to invent. The report discipline is durable:
+        the worker files its answer through `starci kernel report --job <id> --report
+        <file>` — the file is a starci/op-report@1 JSON envelope, an upsert
+        keyed UNIQUE(workflow_id, dispatch_id) on the reports row, which IS
+        the verdict of record; `starci kernel status` projects the filed rows
+        (modules/kernel/verdict-contract.yaml envelope). The done-marker/
+        Orca message is only the wake-up.
+      observe: >-
+        While a running op owes a report the kernel may keep reasoning
+        context on it: `starci kernel observe --job <id> [--lines <n>]` reads the exact
+        worker terminal's liveness plus a bounded tail of the worker's own output
+        (`output`: read by Dispatch, the transcript when the provider has one, else
+        terminal output; `output.contentComplete: false` means older output was left
+        out), on the cadence
+        modules/models/runtimes.yaml allocation.observeCadenceMs declares and
+        especially before a nudge or settle-fail
+        decision — an op that dies without filing leaves `result.report:
+        null`, so that output is how the kernel learns what the op was doing
+        (context, never evidence: boundary.opTerminalObservation).
+      turnIdle: >-
+        A connected+writable Op terminal showing its provider input prompt is
+        not working. On the first `turn-idle` observation with no filed report,
+        call `starci kernel nudge --job <id>`; that wakes the exact worker with its existing
+        contract and grants no new authority. If the bounded wake returns idle
+        without a report, record worker-idle-without-report and settle fail from
+        the missing-report evidence before the retry (drive.oneOpOneAgent).
+        Never wait indefinitely and never spawn a duplicate over the original
+        lease.
+      workerDonePing: >-
+        An op's `worker_done` / terminal-done signal is a completion PING,
+        never an outcome — the durable outcome is the reports row filed via
+        `starci kernel report`. A worker_done with no reports row settles as
+        outcome=failed (reportFiled:false): the signal wakes the kernel,
+        the row carries the verdict.
+      boundary: >-
+        Waiting is itself supervised outside the model turn. A turn-idle Kernel
+        is woken on the watchdog cadence; only a Kernel whose terminal is proven
+        disconnected or unwritable is restarted
+        (failureHandling.kernelDeath). Failure detectors run on the resumed
+        state transition — failureHandling section.
+    settle:
+      rule: >-
+        The runtime settler consumes each landed report, re-runs the op's declared
+        checks via `starci kernel record-checks`, and settles a reproducibly green done report
+        through `starci kernel settle --job <id> --verdict pass` (progress.settleFirst). A non-green
+        report becomes a needs-kernel-decision item. The Kernel reads its report
+        and checks, chooses the verdict and calls `starci kernel settle --job <id>
+        --verdict <v> [--report <path>]`. The api validates the
+        filed envelope's outcome against the verdict, binds the reports row
+        to the job's dispatch_id (the envelope's identity fields {run, task,
+        dispatch, from} were stamped from the job row at filing —
+        validateOpReport), releases the lease and records the verdict
+        (verdict-contract.yaml accepts.kernel-consumed: a report is never
+        settled unconsumed). A refused settle is a routed verdict, never
+        silent loss (api.yaml refuses).
+      neverTrust: >-
+        `done` is never taken on trust — the op's own checks are re-run and
+        the re-run results recorded on the checks row via `starci kernel record-checks` before
+        settle, and the envelope itself is re-validated starci/op-report@1
+        (validateOpReport: outcome payload present, files inside owned_paths,
+        identity stamped from the job row). Evidence is bytes
+        on disk, never words in a summary (verdict-contract.yaml).
+      rerunReadOnly: >-
+        The declared checks are read-only: the runtime settler or Kernel runs
+        the declared gate commands (lint, typecheck, tests, gate.mjs,
+        starci runtime validate) and reads the
+        worker's committed evidence files. It never runs a script that writes
+        into the worker's owned paths (postcondition, regression-inventory or
+        any evidence generator); a write there changes the owned evidence the
+        op's checkpoint commits.
+      durableHalf: >-
+        The settle is a ledger transaction: the durable job completes, the
+        consumed report stands integrated, its machine lease refs release
+        and the worker terminal is closed
+        (scripts/agent/lib.mjs — a settled op leaves no live terminal). A
+        report whose identity fields contradict the job's bound {run, task,
+        dispatch, from} is refused at filing ('report-invalid' —
+        validateOpReport), not partially accepted.
+    repair:
+      onFail: >-
+        `starci kernel settle --job <id> --verdict fail` runs the attempt's route itself
+        (modules/models/kinds.yaml routes, limit enforced): it queues the
+        retry, or the repair and the re-run behind it, or a read-only root
+        verify when the report names a rootCause node; past the limit it
+        opens an owner gate on that job. The receipt's nextStep names what it
+        queued, and status nextActions carries it; never enqueue it again.
+        A report whose rootCause.self is false that no job of this workflow
+        can verify queues nothing: nextStep peer-blocked (its red checks are
+        a peer's change - run the settle's peerBlocked.routes) or
+        root-elsewhere (hand the root to its owner first: a shared-blocker
+        to the introducing workflow, a widened owned-paths re-enqueue for a
+        scope gap); enqueue the op again with --retry-of only once that
+        owner's change is in.
+      onBlocked: >-
+        verdict blocked -> the typed blocker is the route key
+        (verdictTable.blocked); environment/authority/ask go to needUser.
+      peerRedGate: >-
+        A repo-wide gate (test:ci, typecheck, lint) you re-run red is filed with `starci kernel record-checks` naming
+        its `failing` files (each failing test and the source it points at; with no list the api
+        reads the paths the check's evidence names). A check the api marks
+        peerBlocked is a peer's change: it never blocks the pass, and a settle it alone made red
+        spends no attempt; run the settle's peerBlocked.routes (a peer-wait on the peer's in-flight
+        job, a shared-blocker to the commit's introducer) and never enqueue a repair of the peer's
+        paths in this workflow.
+      forensicLadder: >-
+        On a settle-fail or a suspicious report the kernel climbs a ladder,
+        never reads a transcript: (1) `starci kernel record-checks` re-runs the deterministic
+        checks; (2) the kernel takes one bounded tail read of the op
+        terminal via `starci kernel observe` — triage classification only; (3) full-transcript
+        forensics are delegated to a fresh op (kind review.verify)
+        that files its own report envelope; (4) repeated failures
+        escalate to the owner with the terminal handle. The kernel never
+        ingests a full raw transcript.
+
+  finish:
+    rule: >-
+      When `starci kernel status` shows every job settled, the final verify leg settled
+      pass AND the owner approved the handover (frontier `finish-ready`),
+      `starci kernel finish` closes the workflow: phase=finished, goal finished, history
+      preserved (api.yaml finish). For product delivery the final verify must
+      include one current reconciliation proving SRS, SDS, code, test/E2E and
+      UAT against the same delivery revision; a settled job list is not that
+      proof. The approval is enforced, not instructed: `starci kernel finish` refuses
+      `handover-not-approved` unless a `handover-approved` event is newer than
+      the last business settle (scripts/kernel/handover.mjs handoverGateOf).
+      A finished workflow finishes again idempotently.
+    citation: "modules/kernel/api.yaml finish — 'run the gates, finish'; scripts/kernel/handover.mjs"
+
+# ============================================================================
+# 2 — VERDICT HANDLING. What the driver does with each settled verdict.
+#    `outcome` is the op's report; `verdict` is the kernel's judgement of it.
+#    The closed route table is modules/models/kinds.yaml routes: — first
+#    match wins, an explicit `from` stands before `any`, `limit` bounds one
+#    route per node group, and past the limit the workflow asks the user.
+# ============================================================================
+verdictTable:
+  # The report outcome enum and blocker vocabulary live in
+  # modules/kernel/verdict-contract.yaml (starci/op-report@1):
+  # OUTCOMES=['done','partial','failed','ask','blocked'],
+  # BLOCKER_KINDS=['shared-change','srs-gap','sds-gap','interface-gap',
+  #                'brand-gap','grammar-gap','test-gap','environment','authority'].
+
+  - verdict: pass           # report done AND the runtime settler re-ran the checks green
+    driverDoes: "observe the runtime-settled op; its produces variables are established; the next leg is a nextActions dispatch"
+    route: "no route fires — the chain advances"
+    citation: "the api's settle validation (validateOpReport, scripts/kernel/report-envelope.mjs); modules/models/kinds.yaml lanes advance on done"
+
+  - verdict: fail           # outcome failed, or done the kernel could not reproduce
+    driverDoes: >-
+      `starci kernel settle` routes it by the table (repair.onFail): a failed report, a
+      done claim the kernel's checks overruled (rejected) and a partial report
+      run the same op again; a red uat/e2e/perf proof repairs its lane's build
+      and runs again behind it; a worker that filed no report runs again on
+      another pool. `interface.audit` is the
+      deliberate exception to generic failed->same: bounded/local drift routes
+      to interface.implement; systemic, unclear or creatively inadequate
+      direction reports interface-gap and routes to interface.draw. Both paths
+      return through interface.implement and fresh capture before re-audit.
+    budget: "starci kernel settle enforces each route's `limit` per node group and opens an owner gate past it (repair.onFail)"
+    citation: "modules/models/kinds.yaml routes"
+
+  - verdict: blocked        # typed blocker, or ask
+    driverDoes: >-
+      Route by blocker kind: srs-gap -> business.revise; sds-gap ->
+      architecture.revise; interface-gap -> interface.draw; brand-gap ->
+      brand.decide; grammar-gap -> grammar.update; test-gap -> test.author
+      (each limit 2, reopen); shared-change -> scoped build of the owning kind
+      (limit 3, pause); environment -> needUser (limit 1); authority ->
+      needUser (limit 1); outcome ask -> needUser (limit 1 — the kernel may
+      answer only from the options the question offered, never an invented one).
+      A handover.review ask is the exception that is routed by its answer:
+      approve, feedback or question (handoverLoop; kinds.yaml handover routes).
+    provisionAsk: >-
+      Owner-bound needs go through provision.ask / decision.prepare and are
+      projected to the owner as owner requests via the inbox
+      (modules/ops/ops/provision.ask.yaml; kinds: information, credential,
+      account, access, consent, authority, business-decision,
+      irreversible-confirmation). A credential ask parks only the live-proof
+      legs that need the real value (integration.verify, e2e.verify,
+      uat.verify, uat.assisted.*; serve-ask.mjs askClassOf) and
+      settles by PRESENCE — the op is
+      'running' with no dispatch, no runtime, no slot. Build legs never wait
+      on it: they code against the declared env var or custody key with a
+      `placeholder-<VAR_NAME>` stand-in and report credentialPending
+      (modules/ops/_common.yaml "Bounded finish and blockers"). When a report
+      lands with outcome ask, the kernel runs `starci kernel serve-ask --workflow <id>
+      --dispatch <id>`, which parks it (`ask-notified`): an approval ask is
+      pushed to the owner on Telegram with a "Generate URL" button; a
+      credential ask is never pushed, it waits in the owner's /creds list,
+      and while only credential asks wait, nextActions names every other
+      approved leg to enqueue until each is. The form
+      (scripts/kernel/ask-server.mjs) is served only when the owner presses
+      the button; it seals submitted credentials into custody without any
+      agent seeing them, files a sanitized `ask-answered` event and wakes the kernel. With
+      Telegram off, or with `--now`, `starci kernel serve-ask` serves the form at once.
+      With config.yaml
+      asks.autoAcceptRecommended on, an ask that carries a recommended option
+      (question.recommended, or exactly one option marked "(recommended)",
+      "(suggested)" or their Vietnamese equivalents) and falls in no class of asks.excludes
+      is never served: `starci kernel serve-ask` records `ask-answered` with answeredBy
+      auto-recommended (receipt option, optionIndex and a note citing the
+      config key and the recommendedReason) plus an `ask-auto-accepted` audit
+      event, wakes the kernel and tells the owner once on Telegram. That
+      answer binds like an owner answer for a business choice: re-enqueue the
+      op (same op and cut ordinal, no --after) and record the decision with
+      its source (auto-recommended, the recommendedReason). Binding is the
+      api's, not your free text: `starci kernel dispatch` puts every answered ask of the
+      retry lineage in packet context.owner_answers and the prompt marks it
+      ANSWERED, and `starci kernel report` refuses an ask that repeats it
+      (ask-already-answered; dispatch.yaml context.owner_answers). A retry that
+      files the same question anyway is an api defect to raise, never an ask
+      to serve again. The owner can reverse it
+      later; a later owner answer supersedes it and is handled like a new
+      ask. A credential ask, an excluded kind and every handover.review ask
+      are always served, and a handover is never auto-accepted: its approval
+      is the owner's own answer. A draw-review ask puts shapes only to the
+      owner, one per XBase#state of ui.shapes, never a retired data-status
+      image (`draw-review.mjs question --ui <dir> --job <id>`). One the owner
+      did not ask for is auto-accepted (its accept option); re-enqueue
+      interface.draw so it applies the receipt. One the owner asked for
+      (drawOwnerRulingOf, from the ledger lineage) waits on the owner. The ask leg stays
+      parked meanwhile; runnable frontier ops keep driving. `starci kernel status`
+      awaitingOwner[] lists every op whose latest attempt waits on the owner
+      and whether its ask is answered; an answered one is re-enqueued, and
+      that attempt spends no business retry (verdict-contract.yaml
+      retryAccounting.ownerWait).
+    citation: "modules/models/kinds.yaml routes; modules/kernel/verdict-contract.yaml BLOCKER_KINDS; modules/ops/ops/provision.ask.yaml"
+
+  - verdict: suspicion      # the mid-flight wrongness signal
+    driverDoes: >-
+      Not an exception — a backward edge. The finding travels BACK to the
+      boundary that owns it and the work re-runs forward with fresh evidence:
+      propagate-invalidation marks every derivation on the changed section
+      stale; a report from the prior rev is admitted into the new rev only
+      when digests are identical (modules/goal/legality.yaml;
+      modules/ops/ops/goal.revise.yaml).
+    route: >-
+      Three levels (modules/goal/legality.yaml backwardEdges.suspicionLevels):
+      spec-conflict-in-scope -> the owning revise route (srs-gap ->
+      business.revise etc., or goal.revise for a goal-level conflict);
+      scope-expansion -> re-run scope.define, then provision.ask if authority
+      widens; identity-wrong -> provision.ask ALWAYS.
+    citation: "modules/goal/legality.yaml backwardEdges; modules/ops/ops/goal.revise.yaml"
+
+interfaceAuditLoop:
+  chain: >-
+    interface.draw -> interface.implement -> fresh capture -> interface.audit.
+    A bounded repair omits redraw; a systemic/direction repair repeats it with
+    a more explicit coverage/component/state map. interface.audit only inspects
+    and writes findings: it never edits code/design/assets/Grammar, never
+    captures replacement renders and never dispatches a repair.
+  budget: >-
+    Count interface.audit attempts for the same selected matrix across both
+    repair routes as one shared budget. Round must be 1..5 with immediate
+    predecessor lineage. Do not enqueue round 6 even if an individual route
+    counter would still permit it. On round 5, no-actionable-drift advances;
+    actionable drift records AUDIT_ROUND_LIMIT with the complete trend and
+    stops at the declared budget boundary rather than claiming pass.
+  freshness: >-
+    Every source/design repair invalidates prior captures. The next audit is
+    executable only after interface.implement stamps fresh real route x state
+    x viewport x theme captures from the repaired served build.
+  realization: >-
+    interface.draw classifies every visible region as raster-asset or
+    code-native. Rich authored mascot/illustration/photo/textured media keeps
+    exact asset identity and provenance; layout, cards, panels, controls,
+    typography, system icons, responsive structure, shadows, glows and simple
+    geometry use semantic DOM plus installed Grammar/CSS/repository-native SVG.
+    interface.implement persists the actual binding and interface.audit treats
+    flattened UI or silent CSS approximation of required authored media as hard
+    realization.mode drift.
+  deviations: >-
+    A claimed intentional departure from the accepted draw never passes by an
+    auditor or implementer explanation. interface.audit persists the measured
+    side-by-side diff, rationale, accepted-conformant alternative, strongest
+    counterargument, risks, rollback and recheck matrix as a hash-bound
+    append-only deviation case. Until an explicit owner decision names that
+    exact case digest and draw/capture hashes, keep the finding open and stop
+    with OWNER_DEVIATION_DECISION_REQUIRED. Owner approval creates newer
+    accepted direction lineage; it is not an audit self-waiver. Never ask the
+    owner about a Grammar, brand-token, registry or catalogue property: where
+    the capture follows that source and the direction pixels differ, it is a
+    direction-artifact, not a deviation (system-source-authority).
+  citation: "modules/ops/ops/interface.audit.yaml auditPolicy; modules/models/kinds.yaml interface audit routes"
+
+# ============================================================================
+# AUTOPILOT — owner ruling 2026-09-28 autopilot-run-to-finish (modules/kernel/owner-rulings.yaml):
+#    "Run to the finish in one go. Don't stop to ask the owner — not even UX/UI review. When everything is
+#    done, the owner reviews once; ugly UX/UI gets re-run and fixed in one batch instead of piecemeal."
+#    ON by default for every running workflow (runtimes.yaml allocation.autopilot; starci kernel status .autopilot.on).
+# ============================================================================
+autopilot:
+  rule: >-
+    While starci kernel status .autopilot.on is true the Kernel never waits on the owner mid-flow and never asks: the only
+    owner steps are at the end - the ONE credential checklist (when something needs real credentials, real money or
+    a shared external system) and handover.review. Everything else is machine-progressing, the Supervisor's (with a
+    timeout) or deferred. Every decision autopilot takes is recorded `by: autopilot`; nothing the Kernel writes ever
+    says the owner decided (owner-claim.mjs keeps refusing an unproven owner claim).
+  asks: >-
+    File asks exactly as the op contract says; `starci kernel serve-ask` (and every starci kernel status) hands each to autopilot first
+    (scripts/kernel/autopilot-run.mjs autopilotAnswerAsk). A draw-review or brand-direction-review ask whose machine gates
+    pass - draw loop metrics with the DNA gate, the independent critic's beauty >= allocation.drawLoop.beautyMin,
+    rationale.json, the direction checks - is answered PROVISIONALLY (answeredBy autopilot, receipt provisional:true
+    with the gate evidence): nextActions names the retry, and the retried op applies the receipt exactly like an
+    owner's (draw-review.mjs apply / brand-direction.mjs apply write a provisional acceptance: the leg reads
+    green-provisional "self-accepted provisionally", downstream proceeds, it never becomes golden). Failing gates answer
+    redraw/revise with the findings as the brief (at most redrawBudget per record; then the drawing is deferred to
+    the final review). A business choice with a recommendation is taken provisionally. A credential, real-money,
+    shared-external-system or owner-only ask is deferred-to-handover: nothing is sent, the leg is not blocked, the
+    work proceeds on the sandbox/stub path the deferral names (status .autopilot.deferredToHandover[].stubPath) and
+    the real proof is owed at handover. Credential values are never invented or entered by an agent.
+  provisionAsk: >-
+    "Limit provision asks": no provision.ask leg is opened mid-flow - starci kernel enqueue refuses it
+    (autopilot-provision-deferred) and nextActions never proposes it. A credential or approval need found mid-flow
+    is recorded with `starci kernel autopilot --workflow <wf> --defer-to-handover --op <op> --class <class> --detail <owed> [--fields ...]`,
+    and the build codes against the declared env var or custody key with a placeholder (credentialPending),
+    provider sandbox or test stubs, unit/integration tests on mocks. The live-proof legs (integration/e2e/uat) that
+    need a deferred value read queuedBecause deferred-to-handover and are neither dispatched nor failed. When every
+    other leg settled, nextActions names ONE dispatch of provision.ask (final:true, params.subject
+    handover-credentials), whose ask is `starci kernel autopilot --checklist --json` .question verbatim: the owner fills every
+    credential in one form; deferred approvals (real money, shared systems) are released at the same time (api
+    autopilot --release). The owner's answer supersedes the credential asks it supplied and the deferred live
+    proofs resume by themselves; then handover.
+  gates: >-
+    A retry cap, a needUser environment blocker, or an owner gate you would raise for a runtime/process reason is a
+    supervisor-gate (starci kernel settle opens it; starci kernel incident --kind owner-gate is recorded as supervisor-gate; starci kernel status
+    re-routes older owner gates). nextActions kind supervisor-gate is NOT yours to wait on: keep driving every other
+    leg; the Supervisor fixes the cause (lands to .claude) or decides the retry and resolves it --by supervisor, which
+    wakes you to run the retry nextActions names. With nothing else to move the frontier reads supervisor-wait (not
+    actionable): yield. After supervisorExtraBudget gates the leg is deferred (legs[].color deferred) and listed for
+    the final review; a gate older than supervisorGateTimeoutMs defers what it holds only after the owner was told (the gate's
+    Supervisor item reached the owner level); neither blocks independent work. Never route a retry cap or a runtime defect to the owner.
+    WORKAROUND FIRST (modules/kernel/op-incident-policy.yaml gateCauses): before you raise a supervisor-gate for a job, try the
+    workaround of its cause class and record it. starci kernel incident --kind owner-gate|supervisor-gate takes --cause
+    no-eligible-agent|plan-divergence|runtime-defect|peer-dependency|retry-cap|host-not-ready|budget and either --workaround <what you tried and what came of it>
+    or --no-workaround <typed reason of that class> [--because <evidence>]; without them the raise is refused (gate-cause-required,
+    gate-workaround-required). A job refused for no-eligible-candidate goes to another agent of its route chain first (starci kernel dispatch
+    --model <pool>); the runtime refuses a no-workaround claim while the chain still has an untried member (gate-workaround-available). A plan
+    divergence after autopilot's provisional answer is no gate: the runtime records the provisional answer as a revisitable decision in the
+    owner's handover list and the job continues (a typed --no-workaround answer-not-reversible|owner-only-intent raises the gate). Hold only the job
+    that is stuck (--holds <jobId>), never the workflow. Give the gate a release condition the runtime can check (--until-runtime-has <commit>,
+    --until-admission <job>, --until-check <job>:<name>, --until-job ...): the status pass resolves the gate itself when it holds; a no-eligible-agent
+    gate carries the admission condition when it is not already met. The gate is one Decision Item for the Supervisor (status autopilot.supervisorGates
+    shows handler, step n of m, deadlineAt and condition): the Supervisor answers fixed (commit), workaround (route: you dispatch the job with
+    --model <route>) or not-runtime-fault (back to you: you MUST act - retry, re-plan or decide); unanswered it climbs to the owner, who is told
+    once with what was tried. After not-runtime-fault the same cause and scope is not raised again without --evidence that differs from the
+    first gate's (gate-reraise-without-evidence).
+  budgets: >-
+    allocation.autopilot.budgets caps one workflow (real dispatch attempts, recorded attempt and Kernel tokens, wall time).
+    A measured cap overrun or completed attempts with unmeasured usage under an active token cap opens a supervisor-gate
+    holding every queued job. Unknown usage is never zero; the Supervisor records missing usage or reviews an extension
+    (starci kernel autopilot --extend-budget), then resolves the gate. Redraws, retries and supervisor gates retain their caps.
+  handover: >-
+    handover.review stays the ONE owner gate. Its ask carries question.autopilot - the "backlog awaiting the owner's review" bundle
+    from `starci kernel survey --deliveries` .autopilot (every provisional acceptance with its images in question.assets, every
+    deferred leg, every deferred-to-handover proof, the autopilot decision log); starci kernel report refuses a handover ask
+    without it. A feedback answer that names a provisional item re-opens just that item: `starci kernel autopilot --reopen
+    <provisional dispatch> --handover-answer <handover dispatch>` (refused unless the owner answered that handover
+    ask) - nextActions retries only that op, the owner's note is its brief and the draw-feedback loop applies. Ugly
+    UX/UI is re-run in one batch; golden promotion stays the owner's own accept.
+  rereadRev: >-
+    These rules reach a running Kernel through the runtime-rev re-read (survey.runtimeRev): re-read this section and
+    api.yaml commands.autopilot when a wake names the rev that brought them, then starci kernel kernel-ack-rev. No restart for an addition; a rule removed or reversed replaces the seat (modules/kernel/revision-scope.yaml).
+  citation: "scripts/kernel/autopilot-run.mjs; modules/models/runtimes.yaml allocation.autopilot; modules/kernel/api.yaml commands.autopilot"
+
+handoverLoop:
+  why: >-
+    At handover one op lets the owner test, give feedback or ask, and the
+    workflow counts as done only when the owner approves. handover.review is that op and the last leg of every chain
+    (modules/ops/ops/handover.review.yaml; modules/models/kinds.yaml
+    handover routes).
+  enqueue: >-
+    When every other approved leg settled (frontier `handover-due`), the Job controller enqueues
+    handover.review (next action origin `handover-review`) with `--paths .starciwork/evidence/<workflow>.handover`
+    and no other grant; the Workflow controller routes and dispatches it. A chain approved before the
+    op existed has no handover leg: append it as the LAST leg of the derived
+    plan - `starci kernel plan` records divergence.handoverAppended and does not count
+    it as divergence - and enqueue it anyway; no owner question is needed to
+    add it, because `starci kernel finish` refuses without it.
+  ask: >-
+    The attempt reads the goal and `starci kernel survey --deliveries` and files
+    outcome ask with the package. `starci kernel report` refuses a handover ask that is
+    not exactly the options approve, feedback, question in that order.
+    Settle it `blocked` (awaiting-owner, no business attempt spent), run
+    `starci kernel serve-ask --workflow <id> --dispatch <ask dispatch>`, and yield on
+    `awaiting-owner`; like any other ask it is served on demand from its
+    Telegram button, and only an ask that never reached the owner is
+    `ask-reserve`.
+  approve: >-
+    `handover-answered` with decision approve and byOwner true: the Job controller enqueues
+    handover.review again (origin `handover-review`). It reads the approval and files done; record one
+    kernel check (name handover-owner-approval, command the `starci kernel status
+    --workflow <id> --json` read, exit 0, evidence the ask dispatch, decision
+    and answeredBy) with `starci kernel record-checks`, then `starci kernel settle --job <id> --verdict pass`. Settle
+    re-reads the receipt itself and records `handover-approved {jobId,
+    dispatchId, answeredBy, at}`, or refuses `handover-not-approved` when the
+    receipt is not the owner's approve of the latest handover ask or a
+    business job settled after that package was filed. Then frontier reads
+    `finish-ready`: retire any leftover ask and `starci kernel finish`.
+  delegation: >-
+    Only the owner approves. serve-ask refuses a delegated approve outright;
+    a receipt whose answeredBy is not the owner never settles the handover
+    pass and never satisfies `starci kernel finish`, whatever config.yaml delegation
+    allows for other asks. A delegate's feedback or question is routed like
+    the owner's.
+  feedback: >-
+    `handover-answered` with decision feedback: the note (status handover.ask.note,
+    the receipt's note) is a defect report. Route it to the fix op of the slice it
+    names - that node's lane build step with origin repair, or the
+    srs-gap / sds-gap / interface-gap route when the note says the requirement
+    or the design itself is wrong - enqueued with `--title "handover feedback
+    <ask dispatch>: <the note in a line>"`; the fix op reads the whole note in
+    `starci kernel survey --workflow <id> --deliveries` handoverHistory. Once that fix
+    settles pass the frontier reads `handover-due`: the Job controller runs handover.review again;
+    its package opens with what was fixed and how to re-test it. The menu item handover-step carries the typed choices: route-fix-<job>
+    for each slice the workflow built (the passed unit of a build-family op; the choice reopens it titled with the note) and
+    route-requirement-gap, route-design-gap, route-interface-gap with the record in `--text`. A slice the workflow did not build is not
+    on the menu, so `decide` refuses it before anything is enqueued.
+  question: >-
+    `handover-answered` with decision question: the Job controller enqueues handover.review again (origin `handover-review`).
+    The attempt reads the question from `starci kernel survey --deliveries`
+    handoverHistory and opens its package with the answer, then asks again.
+    The kernel never answers the owner in chat or in an ask of its own.
+  staleness: >-
+    A business job that settles after the approval makes it stale: status
+    `handover.finishAllowed` turns false and the handover runs again.
+  archived: >-
+    The one existing way out without an approval is a workflow whose record
+    the owner archived (workflows.archived_at, set by starci kernel archive).
+  citation: "modules/ops/ops/handover.review.yaml; scripts/kernel/handover.mjs; modules/models/kinds.yaml routes"
+
+assistedUatLoop:
+  classify: >-
+    Third-party involvement is not itself a human gate. Use ordinary automated
+    UAT/integration whenever the action and assertions are automatable. Select
+    assisted UAT only for a declared human/provider gesture the workflow may
+    not automate, such as CAPTCHA, OTP custody, 3DS or external consent.
+  prepare: >-
+    uat.assisted.prepare freezes exact scripts, bindings, redaction and cleanup
+    without executing the journey or changing canonical Work. The user-facing
+    skills/starci/references/assisted-uat.md session may create exactly one append-only receipt.
+  verify: >-
+    A later uat.assisted.verify selects exact request/session/receipt paths and
+    derives pass from current digest equality, complete ordered execution,
+    machine postconditions, genuine sanitized artifacts and verified cleanup.
+    Human `ok` means execution finished only. Final reconciliation, not the
+    runner or either assisted op, projects current evidence into Work done.
+  slots: >-
+    UAT runs share one machine-wide ceiling, config.yaml uat.maxConcurrent
+    (STARCI_UAT_MAX_CONCURRENT overrides); scripts/uat/uat-slots.mjs queues
+    waiters FIFO. A queued assisted run reads phase queued (waitingForSlot,
+    queuePosition); `uat-slots.mjs run -- <command>` gives any other UAT
+    browser run a slot.
+  citation: "modules/ops/ops/uat.assisted.{prepare,verify}.yaml; skills/starci/references/assisted-uat.md; scripts/uat/uat-slots.mjs"
+
+# ============================================================================
+# 3 — RE-PLAN TRIGGERS. When the driver stops following the plan and makes a
+#    new one. Re-planning is re-measurement, not a rescue mode.
+# ============================================================================
+# Re-plan LINEAGE — provenance is part of the plan, not a side note.
+replanLineage: >-
+  Every re-plan carries its provenance INTO the ledger — `starci kernel plan` records
+  {replannedFrom, blocker, pathDelta, routingReason} on the plan-derived
+  event: which plan it supersedes, the typed blocker or trigger that forced
+  it, the owned_paths delta vs the prior legs, and why the legs routed as
+  they did (modules/kernel/api.yaml plan records the fields verbatim and does
+  not refuse an omitted lineage — supplying it is the kernel's obligation, and
+  a new plan with no history is a quiet rewrite this loop never files). The same fields ride a re-enqueue that exists because a
+  leg was re-planned.
+replanTriggers:
+  - trigger: s0-measured-wrong
+    when: >-
+      A survey assumption turns out false mid-flight — an op discovers the
+      record it was given contradicts reality, or a `done` surface it must
+      extend has drifted (its verified variable is DEP_STALE).
+    driverDoes: >-
+      Re-run the decomposition from the corrected S₀: SURVEY -> GAP -> CHAIN
+      (modules/goal/anatomy.yaml; legality.yaml existingSurfaceRules). The
+      delta shrinks or the chain re-routes; evidence derived from the stale
+      premise is marked stale and re-proven, never asserted fresh
+      (propagateInvalidation; scripts/work/validate/check-work-deep.mjs DEP_STALE).
+    citation: "modules/goal/legality.yaml existingSurfaceRules + backwardEdges; modules/ops/ops/goal.revise.yaml"
+
+  - trigger: goal-identity-wrong
+    when: "the discovery is that the goal itself is the wrong goal — wrong workflow, feature or product boundary"
+    driverDoes: >-
+      ESCALATE — always provision.ask, never self-decide. The spine forbids
+      the quiet fix: a goal revision that changes the workflow identity is
+      rejected, and an amendment binds baseGoalIdentity
+      (modules/goal/legality.yaml; modules/ops/ops/goal.revise.yaml). A wrong
+      identity voids every downstream derivation — every op, question,
+      decision and report is bound to the goalRev that produced it.
+    neverAlone: "the single hardest rule in this module: identity is the owner's"
+    citation: "modules/goal/legality.yaml ambiguityRules INTENT rung + backwardEdges identity-wrong"
+
+  - trigger: retry-budget-exhausted
+    when: "a route's limit fired its last allowed time for a node group"
+    driverDoes: "starci kernel settle opens an owner gate on the failed job (settle.nextStep owner-gate); other legs keep running; once the owner resolves it nextActions names the retry. Under autopilot (autopilot section) it is a supervisor-gate instead - never the owner's - and past supervisorExtraBudget the leg is deferred to the final review"
+    citation: "modules/models/kinds.yaml routes; modules/kernel/api.yaml settle.nextStep; scripts/kernel/autopilot-run.mjs"
+
+  - trigger: goal-completes
+    when: "every leg settled, the gates ran and the owner approved the handover"
+    driverDoes: "evaluate goal metrics against the goal's done block; `starci kernel finish` closes the workflow (phase=finished, inbox closed, 'workflow-finished' event) and refuses handover-not-approved without the owner's approval (handoverLoop); the kernel's job ends — the chat only ever hears the verdict"
+    citation: "modules/kernel/api.yaml finish"
+
+# ============================================================================
+# 4 — ESCALATION LADDER. What the driver may decide alone vs must ask the
+#    owner. Ordered by the cost of being wrong (legality.yaml ambiguityRules).
+# ============================================================================
+escalation:
+  driverAlone:
+    - kind: ORDER
+      scope: "which ready leg goes first, which runtime takes it, whether two ops share a tick"
+      basis: "route: prerequisites + lane order + dispatch-planning disjointness; a wrong order costs reruns only"
+      record: "assumptions land on the goal (`assumed:`) so a later revision can see they were guesses"
+    - kind: RETRY
+      scope: "dispatch the retry starci kernel settle queued inside the route's limit"
+      basis: "modules/models/kinds.yaml routes — the route row carries the limit starci kernel settle enforces"
+    - kind: REPAIR-ROUTE
+      scope: "red proof / gap blocker -> the revise/build kind the route table names"
+      basis: "the route table is closed — the driver matches, it does not improvise"
+    - kind: TECHNICAL-BLOCKER
+      scope: >-
+        checker/adapter/runtime defects, red reproducible proof, worker
+        lifecycle cleanup and other machine-resolvable failures; repair in
+        current authority or persist the typed incident for the authorized
+        runtime monitor, then resume without asking the owner
+      basis: >-
+        the report is a claim; the runtime settler checks green claims and the Kernel decides non-green ones. A model turn ending
+        is not workflow completion, and a technical incident keeps the
+        workflow running/resumable until the repair lands
+  # Under autopilot (the autopilot section) none of these is asked mid-flow: each becomes a deferred-to-handover item
+  # the owner settles at the end, and the legs that do not depend on it proceed.
+  mustAskOwner:
+    - kind: INTENT
+      why: "S* cannot be formed — a wrong identity voids all downstream evidence"
+      via: provision.ask
+    - kind: SCOPE-WIDENING
+      why: "scope is the owner's contract; AUTHORITY_WIDENING is a declared blocker that becomes an owner decision"
+      via: "scope.define proposal -> provision.ask / decision.prepare"
+    - kind: IDENTITY-WRONG
+      why: "validateGoalRevision structurally rejects it; the only legal move is the owner question"
+      via: provision.ask
+    - kind: ENVIRONMENT / AUTHORITY blocker
+      why: "route limit 1, `then: needUser` — not an operation's to fix, never auto-retried"
+      via: needUser
+    - kind: BUDGET-EXHAUSTED
+      why: "every route past its limit asks the user - under autopilot it is a supervisor-gate, never the owner (autopilot section)"
+      via: "needUser; autopilot: supervisor-gate"
+    - kind: PEER-DISAGREEMENT
+      why: "two workflows of the ledger both claim, or both refuse, a scope or a shared contract change after exchanging messages (§ peers); who should do a piece of work is otherwise settled between the peers, never asked"
+      via: "provision.ask naming both workflows and the message keys"
+  citation: "modules/goal/legality.yaml ambiguityRules; modules/models/kinds.yaml routes; modules/ops/ops/provision.ask.yaml owner-request kinds"
+
+# ============================================================================
+# PEERS — workflows of one ledger that build in the same source repositories
+#    talk to each other instead of through the owner (modules/kernel/api.yaml
+#    peers, notify, inbox; the peer rule is api.yaml peers.rule).
+# ============================================================================
+peers:
+  who: >-
+    `starci kernel peers --workflow <id>` lists every running peer: its title, current
+    leg and the owned_paths of its open jobs, plus the messages pending
+    between you. Read it before planning work that may sit in another
+    workflow's scope and before touching a path a peer's job owns.
+  request: >-
+    Work you need that belongs to a peer's scope (its goal, its records, a
+    path its open job owns: phone verification in the Login workflow while
+    you build Collab) is `starci kernel notify --workflow <wf> --to <peer> --kind request --subject <subject> --body <body>`, never work
+    you do yourself and never an owner question about who should do it. Carry
+    on with the rest of the frontier; the reply lands in your inbox and wakes
+    you.
+  headsUp: >-
+    When you change a shared contract, API, schema, migration or Work record a
+    peer reads, send it `--kind heads-up` (`--to peers` when every peer reads
+    it). Repo-wide work no workflow owns (an uncommitted migration, a shared
+    config) is taken with a heads-up or given with `--kind handoff` to the
+    peer whose scope it is. `starci kernel enqueue` already sends the owned_paths
+    overlap heads-up; its receipt `peerOverlap` names the jobs.
+  ack: >-
+    Every received message is acked with `starci kernel inbox --ack <key> --disposition
+    <what you did>` (built it, queued it as <job>, adjusted the plan, declined
+    because ..., answered in <key>); the sender reads that disposition back. A
+    request also gets `starci kernel notify --workflow <wf> --to <peer> --kind reply --reply-to <key> --subject <subject> --body <body>`.
+  escalate: >-
+    Only a disagreement the peers cannot settle between them goes to the
+    owner (escalation.mustAskOwner PEER-DISAGREEMENT).
+  boundary: >-
+    peers, notify and inbox are Kernel verbs; an op never uses them
+    (api.yaml conventions.callerBoundary). An op that finds work outside its
+    contract says so in its report and the Kernel routes it.
+
+# ============================================================================
+# FOUNDATIONS — workflows of one ledger plan their SHARED foundations together
+#    (modules/kernel/api.yaml foundations, foundation; scripts/kernel/foundation-registry.mjs).
+# ============================================================================
+foundations:
+  what: >-
+    A shared foundation is anything two workflows of this ledger build on that
+    only one of them should build: the layout tree / app shell, the brand record
+    and its tokens, the installed @starci/grammar version, a shared backend module
+    or contract, a repository baseline or scaffold. It has ONE owner workflow, a
+    state (unclaimed -> claimed -> landed, with a version) and its dependents.
+  declare: >-
+    At goal definition and on every boot (define-goal, workspace-bootstrap,
+    start-workflow), when `starci kernel peers` lists running peers, read `starci kernel foundations`
+    and declare before any feature leg: `starci kernel foundation --claim <name> --kind <k>
+    [--version <v>]` for each foundation your goal builds that nobody owns,
+    `--declare-dependent <name>` for each one you build on, or `--declare-none`.
+    Claiming one a running peer owns is refused (foundation-owned): depend on it,
+    or agree a handoff with that peer (starci kernel notify --kind handoff) - never build a
+    second one. `starci kernel status` foundations says what you owe; once the ledger plans
+    foundations, `starci kernel enqueue` refuses a workflow created after this rule until it
+    declares (foundations-undeclared). A workflow that was already running when
+    the rule landed is only advised - it declares at its next boot, nothing is held.
+  scheduleFirst: >-
+    The owner's foundation legs run first: enqueue them with `--foundation <name>`
+    (status lists them first in frontier.queued) and route/dispatch them before any
+    feature leg. When the foundation's leg settles pass, land it: `starci kernel foundation
+    --land <name> --version <v> --proof <commit / published version / record rev and
+    how it was checked>`. Landing notifies every running dependent (a peer
+    heads-up), releases every typed wait on it and wakes those Kernels.
+  depend: >-
+    A dependent's leg that cannot pass preflight before the foundation lands is
+    held with the typed wait `starci kernel incident --kind peer-wait --until-foundation
+    <name> --holds <ops|jobs> --detail <what must land>` - its peer is the owner,
+    the frontier reads peer-wait, and the landing resolves it (a typed release
+    condition, tick.drive.typedRelease). A wait already open on a peer's
+    foundation - a free-text peer-wait, or an owner-gate that is really a peer
+    dependency - is typed in place with `starci kernel incident --attach <incidentId>
+    --until-foundation <name>`. Never an owner-gate for a peer's foundation, and
+    never a hand-kept note. Legs that do not need the
+    foundation proceed meanwhile. After the landing, verify the foundation in your
+    own preflight, enqueue the held work and ack the heads-up.
+  change: >-
+    A new version of a landed foundation (a grammar bump, a new shell rev) is a
+    re-claim by its owner with --version: dependents keep the landed version until
+    the new one lands, and running legs of other workflows are never held for it
+    (currentContracts below).
+
+# ============================================================================
+# CURRENT CONTRACT — actual captured inputs and one present source law.
+# ============================================================================
+currentContracts:
+  admitted: >-
+    Dispatch captures the actual selected op contract, source bytes, target/ownership baseline,
+    READ references, identity and admission time in the existing attempt. Preserve that frozen
+    scope and its evidence. A capture is not permission to waive a current safeguard.
+  checks: >-
+    Current caller, required READ, target binding, native proof, drawing, Sonar, hygiene and
+    integrity checks are mandatory when their actual selected scope applies. Unknown or red
+    evidence refuses visibly. Never demote a refusal using a card date, a withheld list or
+    caller-supplied advisory metadata. Record actual checks through the existing native owner.
+  changes: >-
+    Current source revision admission requires an exact server-derived READ manifest.
+    Diagnose concrete Source-input differences without rewriting old evidence or automatically
+    creating historical follow-up jobs. Product Work changes retain their existing owner law.
+
+# Shared product Work records keep their actual ownership and revision duties.
+sharedWorkRecords:
+  owner: >-
+    Every shared Work record has ONE owner workflow (scripts/kernel/work-ownership.mjs
+    ownerOf): the owner of the shared foundation named after it (starci kernel foundations), else
+    the workflow whose scope record owns its feature (the catalog directory's
+    <feature>/index.yaml extensions.work3.scope.request.workflow), else the one workflow
+    whose scope names it as a node it authors, else the one workflow whose jobs own
+    it, else the ledger's repo owner. `starci kernel status` names it on every peerDrift file.
+  judged: >-
+    A settled job is judged against the record REVISION it read (the settle baseline). A
+    peer's later COMMITTED change is `peerDrift` (frontier.peerDrift): advisory, never
+    staleInput, never a redo. NEVER redo, re-verify, hold or cancel settled work because a
+    peer rewrote a shared record, and never enqueue a redo for it; a queued redo enqueued
+    only for such a change is cancelled (starci kernel reconcile --job <id> --drop --reason
+    peer-drift). An in-flight (uncommitted) rewrite by a peer's leased job is not a
+    change at all: never wait for it, never read it as the record.
+  breaking: >-
+    Only the record's OWNER turns its change into owed work, and only when peers must
+    follow it: its committed change note `change: {rev, kind: breaking}` (a rev above the
+    one a job read), or `starci kernel record-change --workflow <owner> --record <path> --reach
+    follow-up --reason <what peers must follow>` for a change whose note does not say so.
+    Mark a change breaking ONLY for a record your workflow owns and only when it withdraws
+    or replaces something a peer builds on; a change no peer needs to follow is
+    clarifying/editorial, or `starci kernel record-change --workflow <wf> --record <record> --reach advisory --reason <why>` when its note must say
+    breaking. A breaking note a non-owner writes into another workflow's record binds
+    nothing. When you need a peer-owned record changed, ask its owner (starci kernel notify --kind
+    request) instead of rewriting it.
+  followUp: >-
+    A `followUp` staleOperations row (breakingBy names the owner) owes ONE follow-up leg:
+    a new attempt of that same op and cut ordinal (same --cut-id/--cut-ordinal/--cut-total)
+    that re-reads the owner's revision, never held behind a seam, never widened to the
+    other slices of its cut or to peers. The Job controller enqueues it (kernel-menu.yaml
+    stale-ready is mechanical); you act only when it refused the move (menu item
+    move-unbuilt), and then you enqueue that one attempt by hand. It supersedes the row
+    once it settles on the new revision.
+  ownWorkflow: >-
+    Your own workflow's later legs writing what they own is planned progress, never
+    staleness (unchanged). A peer writing a record YOUR workflow owns is a `foreignWrite`
+    peerDrift: review it on your next leg of that record; redo nothing for it.
+
+# ============================================================================
+# 5 — FAILURE HANDLING. The failure shapes this loop meets in practice, and
+#    the detector + respawn rule each one maps to. The durable spine
+#    codifies each of them — both are cited.
+# ============================================================================
+failureHandling:
+
+  agentChildExit:
+    symptom: >-
+      The spawned agent's process is gone but no verdict arrived — the
+      terminal shows a bare shell ('exited', `PS <worktree>>`), or the screen still
+      shows activity while nothing moves.
+    detection-output-staleness: >-
+      The api classifies each worker from its screen and output age
+      (scripts/lib/terminal-liveness.mjs; api.yaml status workers[].liveness):
+      an `active` frame that printed nothing for
+      modules/models/runtimes.yaml allocation.liveness.activeStaleMs reads
+      turn-idle (stale-active), and one shell command silent past
+      WEDGE_MINUTES reads `wedged`. The kernel reads the result through
+      `starci kernel status`/`starci kernel observe`, never the terminal (boundary.hostMechanics).
+    detection-durable: >-
+      The api reconciles an op believed running whose Dispatch Orca no
+      longer lists and whose terminal is gone: 'dead: no worker and no
+      terminal' (scripts/agent/lib.mjs terminal state). Before it is called
+      dead the Dispatch is asked for its last words; a worker that finished
+      but could not reach the report command gets its report recovered and
+      judged on the normal path — except 'done', which is never honoured
+      from last words because it owes checks the kernel never saw
+      (modules/kernel/verdict-contract.yaml rejects done-from-last-words).
+
+  respawnPolicy:
+    ownFault: >-
+      A dead agent with no infrastructure cause and nothing to say: the op
+      attempt is settled and the no-report route re-enqueues it on another
+      pool — past the route's limit an owner gate holds it
+      (reconcile.settleFailed; kinds.yaml no-report-retries-on-another-pool). Re-brief with the
+      failure named and relaunch — never
+      silently continue a half-dead agent.
+    infrastructureFault: >-
+      A death the op did not cause does not spend its restarts: the
+      launch-time known-failure signatures — MODULE_NOT_FOUND /
+      report-command ENOENT, agent_prompt_stalled (task never delivered),
+      session_not_reported, a terminal closed under a live worker
+      (modules/host/orca/calls.yaml signatures; the adapter card's
+      knownFailures). When the durable rejection proves effectState:none, the
+      same job returns to queued at the same durable and business attempt; no
+      successor or accepted dispatch contract is created. These charge infra restarts, bound
+      by the infra restart budget, then blocked + needUser
+      (the api classifies the cause). Unknown/partial effect is never classified
+      as a free resume and consumes the ordinary business route budget.
+    neverRespawn: >-
+      Never respawn over an unsettled lease — the durable attempt is settled
+      FIRST while the writer fence is still held (the api's settle path); an
+      op whose stop cannot be reconciled is quarantined, not requeued.
+      Never re-bind a Run a second time — a repeated run-use invalidates
+      every live Dispatch.
+
+  providerCircuitRecovery:
+    symptom: >-
+      route rejects a pool with "provider <failureKind> is unavailable: ... circuit open
+      until <iso>", status reports queuedBecause circuit-open, or dispatch is
+      rejected at step provider-health, while the credential behind it has
+      since been fixed (an owner rotated the key, a launch-path repair landed).
+    rule: >-
+      A provider-health circuit is a ledger fact of its own. Resolving the
+      incident that described the failure does not clear it, and waiting out
+      a 24h auth cooldown on a credential already proven good parks the pool
+      for nothing. An auth circuit reads closed by itself when the credential
+      in effect has a different fingerprint from the one it rejected (a
+      rotated key). When the credential is unchanged but fixed, the Kernel runs
+      `starci kernel provider-health --provider <p> --recover --reason <what changed> --probe`
+      from its own terminal. The probe must pass; a refused probe means the
+      credential is still bad, so the circuit stays and the owner is told.
+      `starci kernel provider-health --provider <p>` (read-only) shows the row, its
+      recorded fingerprint and the current one first. A QUOTA circuit (a
+      provider's plan quota spent, failureKind quota) needs nothing from
+      the Kernel: the watchdog runs `starci kernel provider-health --quota-probe` every
+      tick (the card's own probe, throttled), and it clears the circuit when the
+      provider answers again. Meanwhile
+      route skips that provider; the Kernel keeps routing to the other pools.
+    boundary: >-
+      Only the Kernel clears a circuit: the api proves the caller by its
+      ORCA_TERMINAL_HANDLE against a running kernel job. A supervisor or an op
+      that finds a fixable circuit reports the exact command to the Kernel
+      instead of running it.
+
+  permissionStall:
+    symptom: >-
+      The agent is parked on a host dialog: a trust prompt, a permission menu
+      or another interactive prompt that will never answer itself.
+    rule: >-
+      The api reads it as liveness `interactive-gate`. A gate the agent card
+      allowlists (gateAutoAnswer) is answered by `starci kernel nudge`; answered
+      maxPerAttempt times it is a gate-loop in frontier.wedgedJobs, recovered
+      like a wedged worker. Any other gate is a typed environment problem
+      (api.yaml nudge). Prevention beats handling: spawn lines that pre-answer the gate —
+      `devin --permission-mode dangerous`, trust answered
+      once at spawn — which is exactly what the agent card
+      (modules/models/agents/<agent>.yaml) injects into spawnAgent
+      (scripts/agent/lib.mjs).
+    credentialShape: >-
+      On the durable spine a credential need never stalls a worker at all:
+      the ask becomes a provision request projected to the owner, the op
+      waits by presence with no runtime held (see verdictTable.blocked).
+      The chat relays the kernel's questions verbatim — it does not answer
+      for the kernel (workflow-chat rule; the Orca operating model).
+
+  kernelDeath:
+    symptom: "the [Kernel] agent/process itself is gone or silent"
+    detection: >-
+      start-workflow proves process/terminal availability. The canonical
+      watchdog additionally distinguishes an active LLM turn from the same
+      connected terminal sitting at its input prompt. Every 5 minutes it reads
+      starci kernel status/survey plus the attested frame; turn-idle wakes the same Kernel,
+      and so does an `active` frame whose terminal printed nothing for
+      modules/models/runtimes.yaml allocation.liveness.activeStaleMs (the result
+      carries reason stale-active: a frozen spinner row is not a running turn),
+      while disconnected/unwritable exact proof re-enters start-workflow for a
+      replacement. The Kernel itself never sleeps or polls to preserve liveness
+      (scripts/kernel/kernel-watchdog.mjs; scripts/kernel/start-workflow.mjs;
+      modules/kernel/start-workflow.yaml claim.onDeadKernel).
+    respawn: >-
+      start-workflow re-opens the `[Kernel] <id>` terminal and
+      re-sends the workflow-run command (kernel attempt+1, same workflow
+      generation); stale Kernel terminals of the dead kernel are
+      closed by handle first (scripts/agent/lib.mjs terminal close).
+    singleton: >-
+      One kernel per workflow, one supervisor per ledger — kernel-lock and
+      supervisor-lock signal rows are the claims (engine/db/schema/runtime.sql
+      signals). Two kernels for one workflow is the corruption this exists
+      to prevent.
+    note: >-
+      On Orca the [Kernel] agent plays this role toward its [Op]
+      children — it IS the supervisor of its own dispatches. The watchdog
+      wakes or replaces the same durable Kernel identity and runs only the
+      api's own recoveries (start-workflow.yaml watchdog.boundary); it never
+      chooses or settles workflow work.
+
+# ============================================================================
+# 6 — SUPERVISION CHAIN. Who watches whom.
+# ============================================================================
+supervision:
+  chain: >-
+    owner chat (trigger only) -> [Kernel] agent (one per project, long-lived)
+    -> [Op] agents (one per op, ephemeral). Above the kernel:
+    watchdog (scripts/kernel/kernel-watchdog.mjs) — a liveness pass at
+    modules/models/runtimes.yaml allocation.watchdogCadenceMs over
+    canonical status/survey and the attested Kernel terminal, run by the
+    Host controller while it owns host.kernel-seat (the standalone loop is
+    the off/shadow fallback); start-workflow
+    (scripts/kernel/start-workflow.mjs) — a one-shot
+    claim -> spawn -> attest; re-running it on a dead kernel claims the stale
+    binding and spawns the replacement (kernel attempt+1). The chain ends
+    there: one kernel orchestrates its whole workflow, and every other agent
+    inside it is an ephemeral Op that kernel dispatched.
+  auditTrail: >-
+    Every transition is an event in the ledger (engine/db/ledger.mjs events
+    table, hash-chained — the writer's eventDigest computes each link;
+    engine/db/schema/runtime.sql); persist-as-you-
+    think (boundary.persistAsYouThink) is what makes that trail complete —
+    findings and plans land in events as they form, so a
+    dead kernel leaves a re-readable trail, not a lost context.

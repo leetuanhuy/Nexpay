@@ -1,0 +1,67 @@
+schema: starci/knowledge-source@1
+id: repo.index
+title: Repository patterns
+purpose: |-
+  Read knowledge/hfs/README.md (HFS) first. These topics state the app-level law: the root and side map and storage states,
+  the root `.starciwork` and `.starcistacks`, sealed secrets, shared tooling, the formatter, version pins and size
+  budgets. Each rule cites the HFS rule ids it implements (hfsRules) and the finding codes that judge it
+  (verification.automated). The back-end (`be/`) and front-end (`fe/`) source rules inside the tree are in patterns/be and patterns/fe.
+appliesTo:
+  - backend
+  - frontend
+family: repo
+provenance:
+  reviewedAt: 2026-09-29
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/slots.yaml
+    - docs/architecture.md
+  limitations: |-
+    The tree law governs entries and top-level placement, tooling ownership and budgets. It does not certify behavior, deployment
+    or product completeness.
+topics:
+  - id: repo.folder
+    title: Repository folder
+    path: folder.yaml
+    decides: Every tracked path has a slot, be/apps/<app> and fe/apps/<app> only, one npm manifest at the root, .starciwork at the root and .starcistacks in be/, ignored and external storage, README
+    rules: REPO-FOLDER-1 … REPO-FOLDER-7
+  - id: repo.starciwork
+    title: .starciwork
+    path: starciwork.yaml
+    decides: Product records only, agent data never tracked, flat records, identity custody records
+    rules: REPO-WORK-1 … REPO-WORK-4
+  - id: repo.starcistacks
+    title: .starcistacks
+    path: starcistacks.yaml
+    decides: Environment shape, app-owned schedules, Swarm custody and ingress, release and backup recovery evidence, declarations versus effects
+    rules: REPO-STACKS-1 … REPO-STACKS-6
+  - id: repo.secrets
+    title: Secrets
+    path: secrets.yaml
+    decides: Sealed custody, typed environment key parity and value shapes, private identity custody, script hygiene, agents never touch values or keys
+    rules: REPO-SECRETS-1 … REPO-SECRETS-6
+  - id: repo.tooling
+    title: Tooling
+    path: tooling.yaml
+    decides: Thin configs into canon packages per side, generated files from starci app sync at the app root, one machine at every gate, no inline configuration, e2e outside automatic gates
+    rules: REPO-TOOLING-1 … REPO-TOOLING-8
+  - id: repo.formatter
+    title: Formatter
+    path: formatter.yaml
+    decides: Prettier as the only formatter and no formatting rule in ESLint
+    rules: REPO-FORMAT-1 … REPO-FORMAT-2
+  - id: repo.pins
+    title: Pins
+    path: pins.yaml
+    decides: Exact versions from canon-pins, one version per dependency, @starci/grammar from the registry, other packages from the runtime checkout
+    rules: REPO-PINS-1 … REPO-PINS-3
+  - id: repo.lite
+    title: Lite edition
+    path: lite.yaml
+    decides: One edition and one engine, migrations a parser reads, configuration and types as checked facts, one door to the database, no secret material in the tree
+    rules: REPO-LITE-1 … REPO-LITE-5
+  - id: repo.size-budgets
+    title: Size budgets
+    path: size-budgets.yaml
+    decides: The budgets, no-growth over budget, duplicated code
+    rules: REPO-BUDGET-1 … REPO-BUDGET-4

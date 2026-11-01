@@ -1,0 +1,391 @@
+# selection.yaml — how the runtime decides WHICH model may take WHICH workload.
+#
+# This file IS the rule: every gate, ladder and named step below is owned here,
+# and the names in them (workloadFor, evaluateModelEligibility, providerFilter,
+# selectEligibleCandidate, ...) name rules in this document. The executable part
+# of the path is scripts/agent/op-pick.mjs (pickOpModel), scripts/lib/tier-pick.mjs (the one picker) and
+# scripts/route/route-model.mjs; the rest is what the kernel agent reasons with.
+# Allocation-order facts that live in modules/models/runtimes.yaml and
+# registry.yaml are in `allocationFacts` and cite those files instead.
+#
+# The one-sentence business rule (capabilities.yaml): a model NAME is an
+# availability fact, never proof of capability. A model job is eligible only
+# through a measured qualification record or a narrowly scoped probation with
+# strict machine gates and independent review (the kernel's own function calls:
+# decisionFlow kernel-function). Budget orders eligible candidates;
+# it never makes one eligible and never lowers a floor.
+
+schema: starci/module-model-selection@1
+sources:
+  - modules/models/selection.yaml  # this file is the contract
+  - modules/models/runtimes.yaml
+  - modules/models/registry.yaml
+  - modules/models/capabilities.yaml
+  - modules/models/qualifications.yaml
+
+# One admission contract for every new Kernel, Op, Supervisor, worker and Critic.
+# Structural model tier is separate from the measured qualification ladder below.
+newAgentAdmission:
+  owner: modules/models/selection.yaml
+  implementation: scripts/lib/agent-admission.mjs
+  adapter: scripts/agent/admission.mjs
+  thresholds: modules/models/runtimes.yaml allocation.admission
+  roles: modules/models/runtimes.yaml allocation.admission.roles
+  request:
+    identity: [attemptId, scopeId, role]
+    allowGroup: Concrete provider/model pairs resolved from the caller's declared role or operation group; null models are invalid.
+    difficulty: The caller's measured operation difficulty after its declared kind floor is applied; allocation.admission.roles supplies any difficulty floor.
+    qualityFloor: Registry model tier; the greater of the declared role and difficulty floors is the minimum and a caller may only raise it. Qualification/probation remains a separate prerequisite.
+    constraints: Ordered prefer, avoid and only selector lists. Each selector contains only nonempty pool/provider/model fields, matched together. Prefer moves a member first, avoid removes it, only keeps the named members.
+    reserveOverride: A trusted owner authorization for one exact scopeId, role, provider and model, optional account, and nonempty reason. The owner extraction path supplies provenance; workers cannot grant themselves an override.
+    ownerScope: Owner bias is applied only to its roles, defaulted through allocation.admission.ownerBiasRoles. A pure request has already been scoped; a bias applies to every seat unless its own roles narrow it.
+  candidate:
+    concrete: [id, provider, account, model, modelAuthority, effort, qualityFloor]
+    modelAuthority: Canonical agent-card projection through model-registry.adapterModelAuthority; a logical runtime identity does not attest the provider CLI's underlying default model.
+    eligibility: Existing measured qualification, scoped probation, kernel-function or explicit control-plane/operation-policy gate; model names or registry tiers are never qualification receipts.
+    quota: Provider/account-bound fresh envelope with auth ok and every known short/long window, or a fresh explicit owner grant bound to scope and roles.
+    capacity: Known running count and maxParallel including reserved, launching, live and uncertain starts; zero slots refuses.
+  hardFilters:
+    - Validate policy version, role floor, concrete group and caller constraints before ranking.
+    - Require group membership, model floor, existing eligibility, live capacity and closed incident/cooldown (the hard filter; a bias never restores a member it drops).
+    - Missing, stale, invalid or mismatched quota/auth identity refuses every new normal admission; unknown is never presented as verified availability.
+    - Every available quota window participates; the most used window sets the member's token use. At or above reservePercent (default `90` = `modules/models/tiers.yaml:usage.reservePercent`) an automatic pick skips the member for this pick only (it stays in the chain).
+    - A member named by the owner bias (prefer or only) or by a matching scoped reserve override stays usable from reservePercent up to biasPercent (default `95` = `modules/models/tiers.yaml:usage.biasPercent`); at or above biasPercent no pick takes it. Bad auth, exhausted, stale and unknown cannot be overridden.
+    - Evidence the runtime observes itself (owner grants, direct probes) is fresh within allocation.admission.maxAgeMs; a provider window the host polls (observation host-polled, the Orca account reader only) is fresh within hostPolledMaxAgeMs, which defaults to maxAgeMs.
+    - Owner-grant providers have scoped finite slots and fresh owner authority; no window percentages are invented for them.
+    - A Critic must have a known author provider and select another provider. A caller may tighten independence to both provider and model, never relax the role rule.
+    - Prefer ranks only candidates that passed every hard filter; an only list that no member survives is a refusal (bias-empties-chain) with no silent fallback.
+    - A concrete only.model or model-level critic independence requires supported-model-argument authority; opaque or unknown model authority refuses that constraint.
+  ranking: >-
+    The common picker (scripts/lib/tier-pick.mjs) applies the hard filter, owner bias, a live seat's member, balance (maxStreak, maxSharePercent), then chain order by tokens (allocationFacts). Owner-grant candidates contribute only admitted-slot pressure, never an invented quota percentage. No synthetic quality score is used.
+  result: Policy-versioned starci/agent-admission@1 plan with the exact request identity, selected concrete candidate, ordered eligible set, and per-candidate typed rejection codes.
+  reservation: The pure plan owns no runtime state. The adapter atomically reserves a provider/account slot with attemptId and fence before launch; downstream launchers consume and revalidate the same receipt without double reservation.
+  uncertainLaunch: Live or uncertain reservations retain capacity until a matching attempt and fence carry authoritative no-effect or closure/process-exit evidence. An unknown launch requires the exact host-request replay proving no effect or closure evidence bound to its stored execution identity.
+  reach: New admissions only. Existing running work is reconciled through its original receipt rather than retroactively reselected.
+
+# ---------------------------------------------------------------------------
+# 1. Vocabularies and ladders
+# ---------------------------------------------------------------------------
+ladders:
+  risk:                      # ordinal; compared by rank, never clamped
+    order: [low, medium, high, critical]
+    default: medium          # when neither op nor context supplies one
+  qualityFloor:              # ordinal; compared by rank, never clamped
+    order: [probation, standard, high, critical]
+    default: standard
+  rule: >-
+    Comparisons are ordinal on these lists. Unknown risk/floor strings are not
+    clamped — they are disqualifying reasons ("unknown workload risk/floor").
+
+closedSets:
+  highKinds:                 # HIGH_KINDS — never probation-eligible, force elevation
+    - integration.verify
+    - interface.audit
+    - release.deliver
+    - uat.assisted.verify
+  kernelFunctionKinds:       # MODEL_KINDS + 'judge' — the kernel's own model calls,
+    - model.assessGoal       # NOT operation work. They draw per-call scope but never
+    - model.planOp           # consume the workflow's probation budget.
+    - model.decide           #  a workflow that spent that budget on kernel
+    - model.validateOp       #  decisions would starve its own operation work
+    - model.manageWorkflow
+    - model.critiqueGoal
+    - model.classifyScreen
+    - model.presentOwnerQuestion
+    - judge                  # bare 'judge' kind also counts
+  roles: [decide, plan, implement, verify, write]   # kinds.yaml vocabularies.roles
+
+# ---------------------------------------------------------------------------
+# 2. Workload normalization — what a "workload" IS
+#    Owned by this file.
+# ---------------------------------------------------------------------------
+workloadNormalization:
+  description: >-
+    Before any eligibility question, an operation plus its context collapse into
+    one normalized workload record. Fields resolve context-first, then op, then
+    default:
+  fields:
+    kind: "clean(op.kind || op.operation)"
+    role: "clean(context.role || op.role)"
+    domain: "clean(context.domain || op.domain || 'general')"
+    risk: "clean(context.risk || op.risk || 'medium')"
+    qualityFloor: "clean(context.qualityFloor || op.qualityFloor || 'standard')"
+    tools: "unique sorted list of clean(context.tools || op.tools) — empty strings dropped"
+    contextTokens: "Number(context.contextTokens ?? op.contextTokens ?? 0)"
+    requiresIndependentReview: "Boolean(context.requiresIndependentReview ?? op.requiresIndependentReview)"
+
+# ---------------------------------------------------------------------------
+# 3. Workload derivation for a real operation — the sharper normalization
+#    Owned by this file.
+# ---------------------------------------------------------------------------
+workloadDerivation:
+  description: >-
+    workloadFor() rewrites the raw op into the workload the gates actually see.
+    These are the rewriting rules:
+  rules:
+    - id: kind-synthesis
+      rule: >-
+        If op.kind === 'model' and a functionName is present, the workload kind
+        becomes `model.<functionName>`; otherwise the declared kind stands.
+        jobType 'model-function' or kind 'judge' also marks it a model function.
+    - id: external-effects
+      rule: >-
+        external = any entry of op.externalEffects||op.resourceEffects that is
+        not the string 'none' and not {external:false}. noExternalEffects = !external.
+    - id: elevation
+      rule: >-
+        elevated = kind ∈ highKinds OR risk ∈ {high,critical} OR
+        qualityFloor ∈ {high,critical}. An elevated workload's risk is forced to
+        'high' and its qualityFloor to 'high' for gating — regardless of what the
+        op declared.
+    - id: model-function-tools
+      rule: "A model-function workload carries tools: [] — kernel calls need no tool qualification."
+    - id: gate-flags
+      rule: >-
+        strictMachineGates = modelFunction OR op.checks is non-empty.
+        freshIndependentReview = modelFunction OR
+        (op.independentReview.required && op.independentReview.freshContext).
+        approved = state.approved === true. scope = 'local' (constant).
+    - id: probation-eligibility
+      rule: >-
+        probationEligible = NOT elevated AND NOT external AND
+        (modelFunction OR (checks non-empty AND fresh independent review planned)).
+        Only this shape may ever run on probation.
+
+# ---------------------------------------------------------------------------
+# 4. The qualification path — mode 'qualified'
+#    Owned by this file.
+# ---------------------------------------------------------------------------
+qualificationGates:
+  description: >-
+    evaluateModelEligibility tries the QUALIFIED path first. Every gate below
+    that fails appends its reason; zero reasons = eligible. Evidence schema:
+    starci/model-qualification@1 (capabilities.yaml requiredEvidence).
+  preconditions:
+    - evidence is a plain object with schema 'starci/model-qualification@1',
+      else the single reason 'model eligibility unavailable'.
+    - runtime must be a plain object with provider and model|target, else
+      'model eligibility unavailable'.
+  gates:
+    - {id: identity-complete, rule: "evidence.provider, evidence.model, evidence.version all non-empty", reason: "model identity qualification is incomplete"}
+    - {id: identity-match, rule: "evidence.provider === runtime.provider AND evidence.model === runtime.model|target AND evidence.version === runtime.version (runtime.version itself must exist)", reason: "qualification does not match selected runtime identity"}
+    - {id: measurable, rule: "evidence.suite, evidence.measuredAt and evidence.outcomes object all present", reason: "measurable qualification evidence is incomplete"}
+    - {id: receipt, rule: "evidence.verified === true AND receipt.schema === 'starci/model-evaluation-receipt@1' AND receipt.artifact.sha256 non-empty", reason: "verified evaluator artifact receipt is missing"}
+    - {id: date-sane, rule: "measuredAt parses and is not in the future", reason: "qualification date is invalid"}
+    - {id: not-stale, rule: "expiresAt (if present) parses and is in the future", reason: "qualification is stale"}
+    - {id: provenance, rule: "evidence.source ∈ {independent-eval, verified-runtime-eval} AND attestation ≠ 'self-claimed'", reason: "qualification provenance is not trusted"}
+    - {id: risk-known, rule: "workload.risk ∈ risk ladder", reason: "unknown workload risk"}
+    - {id: floor-known, rule: "workload.qualityFloor ∈ floor ladder", reason: "unknown quality floor"}
+    - {id: workload-covered, rule: "evidence.workloads contains workload.kind or '*'", reason: "workload <kind> is not qualified"}
+    - {id: domain-covered, rule: "evidence.domains contains workload.domain or '*'", reason: "domain <domain> is not qualified"}
+    - {id: tools-covered, rule: "every workload.tools entry ∈ evidence.tools", reason: "required tool <tool> is not qualified"}
+    - {id: context-fits, rule: "workload.contextTokens ≤ evidence.maxContextTokens", reason: "required context exceeds qualified context"}
+    - {id: floor-met, rule: "floorRank(evidence.qualityFloor) ≥ floorRank(workload.qualityFloor)", reason: "quality floor <floor> is not met"}
+    - {id: risk-met, rule: "riskRank(evidence.maxRisk) ≥ riskRank(workload.risk)", reason: "risk <risk> is not qualified"}
+    - {id: outcomes-pass, rule: "outcomes.status === 'pass' AND outcomes.cases ≥ 1 AND outcomes.passRate ≥ thresholds.minPassRate", reason: "qualification outcomes do not pass"}
+  evidenceLoading:
+    # where receipts come from
+    - The policy file must be schema 'starci/model-capability-policy@1' or loading THROWS ('Model capability policy is unavailable').
+    - Each qualification record's receipt.artifact.path must resolve INSIDE the declared qualification root (realpath check, prefix-bound); outside paths are silently skipped.
+    - The artifact bytes are re-hashed; sha256 must equal receipt.artifact.sha256. Records passing both are stored as evidenceByRuntime[runtimeId] with verified:true. Anything else never reaches the gate.
+    - Current store (modules/models/qualifications.yaml) is EMPTY — no model is certified by shipping the package; "empty records mean no measured qualification".
+
+# ---------------------------------------------------------------------------
+# 5. The probation path — mode 'probation', scoped never manufactured
+#    Owned by this file.
+# ---------------------------------------------------------------------------
+probation:
+  principle: >-
+    "Bootstrap is scoped probation, never manufactured qualification. Strict
+    oracle and independent review remain mandatory." Probation is only ever
+    CONSULTED after the qualified path fails.
+  recordGates:
+    # probationReasons — what a probation record must satisfy
+    - schema 'starci/model-probation@1' AND status 'active', else 'model eligibility unavailable'
+    - provider/model match the selected runtime identity
+    - scopeId non-empty AND probation.workloads contains the workload kind (exact match — no '*' wildcard here, unlike qualifications)
+    - strictMachineGates AND independentReview AND noExternalEffects all true on the record
+    - workload.risk ≤ medium AND workload.qualityFloor ∉ {high, critical} — "probation cannot satisfy elevated quality or risk"
+    - remainingAttempts ≥ 1
+  admission:
+    # localProbationAllowed — when the kernel may CREATE a probation record
+    allRequired: [approved===true, scope==='local', noExternalEffects===true, strictMachineGates===true, freshIndependentReview===true, probationEligible===true, "kind ∉ highKinds"]
+  budgets:
+    # createWorkflowModelEligibility — two nested limits, both finite
+    perScope: >-
+      scopeId = `${workflowId}/${opId|'workflow'}/${kind}/${role}`.
+      Each scope starts with remaining=2 attempts — "every operation may need a
+      planner, one native worker and an independent judge; each workload gets two
+      attempts".
+    workflowCeiling: >-
+      probationBudget.remaining = configured state.engine.probationCeiling else
+      max(6, opsCount*6) — "one finite workflow ceiling still prevents
+      runtime/provider switching from minting budget". Kernel functions
+      (kernelFunctionKinds) are EXEMPT from this ceiling; operation work is not.
+  consumption:
+    # consumeProbation — spending an attempt is a typed, idempotent event
+    - requires job.jobId; repeat consumption of the same jobId returns 'probation-consumed-cached'
+    - decrements scope.remaining, records a consumedReceipt {jobId, runtimeId, workflowId, opId, generation, at}
+    - non-kernel-function consumption also decrements the workflow probationBudget
+    - scope exhaustion marks every probation record on that scopeId 'exhausted'
+  refunds:
+    # refundProbation — an attempt is returned ONLY for kernel-side failure,
+    # proven by an identity-bound receipt. Three valid proof shapes:
+    proofs:
+      - {code: native-execution-never-began, requires: "effectState 'none' AND taskCreated false AND inputAccepted false"}
+      - {code: runtime-perception-settlement, requires: "liveness 'stalled-idle' — the kernel misread a running turn as idle; the model did not fail"}
+      - {code: runtime-restart-settlement, requires: "proof.generation < current engine generation — an owner-directed retry ends a generation; the attempts were the runtime's to end"}
+    identityBinding: >-
+      proof.attestationId + jobId + generation + workflowId + opId + runtimeId
+      must all match the consumed receipt. Anything else: 'probation-refund-proof-invalid'.
+    effect: "scope.remaining += 1 (capped at initial); workflow budget += 1 for non-kernel functions; exhausted records revive while attempts remain"
+
+# ---------------------------------------------------------------------------
+# 6. Putting it together — the decision flow
+# ---------------------------------------------------------------------------
+decisionFlow:
+  # evaluateModelEligibility (per candidate):
+  - step: normalize
+    do: "job = normalizeWorkload(op, context); reject outright if runtime has no provider+model"
+  - step: qualified-first
+    do: "reasons = qualificationGates(runtime, evidence, job); mode = 'qualified'"
+  - step: probation-fallback
+    do: "if reasons non-empty AND a probation record exists: re-evaluate under recordGates; mode = 'probation'"
+  - step: kernel-function
+    do: "if reasons remain AND workload.kind ∈ kernelFunctionKinds AND the runtime is a member of the tier of the kind's seat (modules/models/tiers.yaml kindSeats -> seats; frontier for the planner, validator and kernel manager): eligible, mode = 'kernel-function'; no qualification record is required"
+    reason: >-
+      The kernel's own model calls (the [Kernel] seat, its decisions and validations) are the
+      runtime's control plane, not operation work: they carry no operation effects for a
+      qualification record to scope, and they run only on the members of their seat's tier
+      (modules/models/tiers.yaml: frontier is Claude Opus 5.5, then GPT-6.1 Sol). The qualification
+      store ships empty, so without this step
+      an elevated kernel route (model.manageWorkflow --risk high) refuses on every fresh install and
+      a single-model config pin becomes the only way to boot a kernel. Qualified and probation
+      admissions still come first when they exist; operation kinds never take this step.
+  - step: verdict
+    do: "eligible = reasons empty; on success return qualification {provider, model, evidenceId, scopeId?}"
+  - step: kernel-availability
+    do: >-
+      Kernel functions use newAgentAdmission after scoped eligibility. Fresh identity-bound quota and all-window
+      reserve/exhaustion rules apply before ranking. A provider circuit, missing or stale observation, exhausted
+      window or ordinary reserve window rejects the member by name. No eligible member produces a typed refusal.
+  # createWorkflowModelEligibility wraps this per workflow:
+  - "callback(job, runtime): derive workload via workloadFor, lazily CREATE a probation record when none exists and admission+budgets allow, then evaluate. Ineligible with no evidence prepends 'model qualification evidence is missing' plus the probation-unavailable detail."
+  - "providerFilter(job): if ANY runtime is qualified → return exactly those targets. Else walk candidates via callback; collect eligible — but STOP after the first for non-kernel work ('probation admits exactly one target for one durable job so an internal fallback can never execute an unconsumed probation candidate'). Kernel functions keep all eligible members (per-call selection)."
+  # selectEligibleCandidate — ordering among the eligible:
+  - "filter eligibleCandidates → sort by budget[runtime].remaining DESC, then runtime.id ASC → take first. 'Quota can order eligible candidates; it can never make an ineligible model eligible or lower the floor.'"
+  - "No eligible model → {ok:false, reason:'no eligible model'} — a typed exclusion, never a silent model swap."
+
+# ---------------------------------------------------------------------------
+# 7. Independent review — who may judge
+#    Owned by this file; the evidence shape is capabilities.yaml review.
+# ---------------------------------------------------------------------------
+reviewerPolicy:
+  rules:
+    - "Candidate must pass the full qualification path with requiresIndependentReview forced true, role 'verify'."
+    - "authorAttempt.attemptId must exist — 'author attempt identity is missing'."
+    - "candidate.attemptId must exist and ≠ authorAttempt.attemptId — 'review must use a distinct attempt'."
+    - "candidate.freshContext must be true — 'review context is not fresh'."
+    - "candidate.inheritsAuthorConversation must be false — 'review inherits author hidden context'."
+    - "candidate.contextDigest ≠ authorAttempt.hiddenContextDigest — 'review context includes author hidden history'."
+  notes: >-
+    providerDifferent and modelDifferent are REPORTED, not required —
+    capabilities.yaml: "differentProviderAloneIsInsufficient". A Critic is independent by the
+    admission role policy (allocation.admission.roles.critic.independence), but eligibility itself is the gates above.
+
+# ---------------------------------------------------------------------------
+# 8. Ordering, fallback and failure — the facts the algorithm consumes
+#    sources: runtimes.yaml allocation + registry.yaml fallback/selection
+# ---------------------------------------------------------------------------
+allocationFacts:
+  # One picker for every seat and every operation (scripts/lib/tier-pick.mjs, reached through scripts/lib/agent-admission.mjs
+  # selectAdmission). modules/models/tiers.yaml owns the data: tiers (ordered member chains), seats, difficulty, kindTiers,
+  # tierUse, calls, balance and usage. config.yaml `models` overrides tiers, seats, balance and usage; there is no other policy key.
+  # A headless call (calls.imagegen, made by `starci work imagegen`) is picked by the same function over a call tier and reserves
+  # one provider slot for its duration (scripts/agent/call-admission.mjs); the owner decision of 2026-10-07 makes imagegen a call, never an op's seat.
+  tiers: modules/models/tiers.yaml tiers
+  seats: modules/models/tiers.yaml seats and kindSeats         # supervisor, kernel, worker, planner, validator, kernelManager
+  difficultyTier: modules/models/tiers.yaml difficulty          # insane frontier, hard high, medium medium, easy low
+  kindTiers: modules/models/tiers.yaml kindTiers                # a kind that takes a tier whatever its difficulty (none today: the drawing ops take their difficulty's tier)
+  callTiers: modules/models/tiers.yaml tierUse and calls        # a call tier (imagegen) is read by a headless call only; no seat or op is seated on it
+  concurrency: modules/models/registry.yaml executionModel.concurrency
+  workerCeiling: modules/models/runtimes.yaml maxParallelOps
+  difficultyVocabulary:               # tier keys of difficulty
+    canonical: [easy, medium, hard, insane]
+  precedence: hard filter > owner bias > a live seat keeps its member > balance > chain order by tokens
+  poolSelection:
+    # The tier of the work, then its chain - scripts/agent/op-pick.mjs pickOpModel executes this for an operation.
+    chainRule: >-
+      tier = tiers.yaml kindTiers[kind] when the kind names one, else tiers.yaml difficulty[d] where d is the
+      measured difficulty raised to the kind's runtimes.yaml roleOfKind floor (a floor never lowers it). The
+      candidates are the members of that tier in chain order; a model may sit in several tiers. A seat takes the
+      tier of tiers.yaml seats (the Kernel manager, planner and validator calls through kindSeats).
+    hardFilter: >-
+      Per member, in order: a registry.yaml pool exists for its agent; the role is served by the pool; an
+      explicit-workflow-quota pool holds an owner grant covering the role with running < granted slots (when
+      config.yaml declares allocation.grants); the agent card carries every host tool the kind requires
+      (route.riskHints host-tool-required); the retry lineage has not excluded the pool (two attributable
+      failures; one failure demotes it behind the others); no provider circuit is open; then
+      newAgentAdmission enforces fresh identity-bound quota and auth, known capacity and no open incident. Missing or
+      unknown evidence refuses live routing. A call without a capacity map is only a static plan and reports
+      live-evidence-required; it is not an admission receipt and cannot authorize launch. Every dropped member is
+      reported with its typed reason in the pick record.
+    bias: >-
+      newAgentAdmission request prefer, avoid and only selectors (goal routing_bias, and the seat pin of config.yaml
+      kernel / supervisor.kernel as an only). Pool strings normalize to pool selectors. The hard filter precedes the bias,
+      and a bias applies to every seat unless its own roles narrow it. A bias that empties the chain refuses
+      (bias-empties-chain) and says why; the picker never drops the bias itself.
+    balance: >-
+      A head member picked tiers.yaml balance.maxStreak times in a row among the tier's recent picks, or holding more than
+      maxSharePercent of the tier's running seats (running seats counted), yields to the next member that passes the hard
+      filter and the token step; with no such member the head stays. A bias skips this step.
+    tokens: >-
+      The first member below reservePercent (default `90` = `modules/models/tiers.yaml:usage.reservePercent`) of its most used quota window; an automatic pick skips a member at or above
+      it for this pick only, and the member stays in the chain. A member named by the owner bias (prefer or only), or by an
+      owner reserve grant, stays usable up to biasPercent (default `95` = `modules/models/tiers.yaml:usage.biasPercent`); from biasPercent no pick takes it, with or without a bias;
+      exhaustedPercent (default `100` = `modules/models/tiers.yaml:usage.exhaustedPercent`) is never used. Every member out of tokens refuses (tokens-out) and reports the earliest reset.
+    liveSeat: >-
+      A live seat keeps its member; the steps above apply only to a new pick or to the replacement of a dead seat.
+    record: >-
+      Every pick returns {tier, chain, steps[{step, chain}], dropped[{id, step, reason}], balance?, chosen{id, by}}; each
+      --plan and each route prints exactly this record and the route persists it as payload.pick.
+    modelRule: >-
+      Each member names its model and effort; the launch attests the effective model against it (candidate.modelAuthority
+      says whether the card selects a launch model or names a configured logical runtime). The pool's defaultModel
+      only resolves a launch that names no model.
+  note: >-
+    A tier is the within-capability order the picker walks; in a workflow the kernel's providerFilter and the picker's
+    hard filter decide what may launch.
+  cooldowns:                          # a failed runtime is parked, doubling per repeat
+    rate-limited: 600000
+    quota: 3600000
+    auth: 86400000
+    other: 300000
+    backoffFactor: 2
+    maxCooldownMs: 3600000
+  launchFailure: >-
+    A member whose launch fails is skipped for that pick and the failure is recorded (kernel-start-failed, the provider
+    circuit and strikes); it stays in its chain and is picked again once the circuit is closed.
+fallback:
+  # registry.yaml fallback — when a chain MAY advance to the next target
+  advanceOnlyWhen:
+    - "failure reason ∈ {unavailable, quota-exhausted, rate-limited, startup-failure, unsupported}"
+    - "effectState === 'none' — typed, identity-bound proof nothing happened"
+    - "a rejected provider candidate with effectState none reuses the same operation job/attempt; pool fallback never mints a logical operation attempt"
+  neverAdvanceWhen: [permission-denied, user-checkpoint, business-ambiguity, safety-block, partial-or-unknown-effects]
+  corollary: >-
+    A missing output, unknown effect or guessed terminal identity never permits
+    fallback (CONTEXT.md lifecycle correction). Fallback is an availability
+    mechanism, not a quality retry.
+
+# ---------------------------------------------------------------------------
+# 9. Misuse modes — what goes wrong when an agent routes by vibes
+# ---------------------------------------------------------------------------
+misuseModes:
+  - "name-as-proof: \"Shipping in the package ≠ qualified. qualifications.yaml is empty; every operation admission today is qualification-by-receipt or probation (kernel functions: decisionFlow kernel-function).\""
+  - "budget-as-eligibility: \"Ordering by remaining quota cannot rescue an ineligible candidate (selectEligibleCandidate).\""
+  - "probation-as-qualification: \"Probation never covers high/critical floors or highKinds; elevation strips it before the gates run (workloadFor).\""
+  - "fallback-as-retry: \"Advancing a chain on a partial-effect failure re-executes real effects — forbidden without effectState 'none'.\""
+  - "pool-name-as-model: \"A pool's models map pins the model per difficulty; attestation must match that pin, not the pool name (runtimes.yaml purpose).\""
+  - "bias-as-eligibility: \"prefer/avoid/only reorder or remove tier members; they cannot make a member serve a role or tool it does not declare (poolSelection.bias).\""
+  - "supervisor-budget-burn: \"Kernel function calls skip the workflow probation budget deliberately — do not route them through operation accounting (MODEL_KINDS comment).\""

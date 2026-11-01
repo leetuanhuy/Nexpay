@@ -1,0 +1,5 @@
+# The runtime example tracks no sealed members or shared recipient.
+# scripts/hfs/example-secrets.mjs configures an ephemeral recipient in a disposable copy.
+# A product configures its own recipient with `starci app secret init`; its private identity
+# lives only in untracked .claude/secret.env as SOPS_AGE_KEY.
+creation_rules: []

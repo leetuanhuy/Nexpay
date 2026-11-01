@@ -1,0 +1,224 @@
+schema: starci/knowledge-source@1
+id: repo.lite
+title: Lite edition
+purpose: |
+  Given a small product on Supabase, which part of the one HFS standard still applies and how is it kept? All of it: a lite app
+  is the full code structure with its backing infrastructure swapped for Supabase (owner ruling 2026-10-13, R212 cases
+  1-3), seen through a filtered slot and rule view (`edition: lite` in hfs.json). The same monorepo, slots, patterns and
+  back-end unit specs; every pattern port implemented on Supabase (knowledge/patterns/be/supabase-queues.yaml and the lite
+  adapter of each pattern topic); the same front end (knowledge/hfs/fe-stack.yaml); no e2e world, with optional contract specs. Its api and
+  sidecars run on the VPS with Docker Swarm through app.starcistacks.
+appliesTo:
+  - backend
+  - frontend
+family: repo
+provenance:
+  reviewedAt: 2026-10-14
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/slots.yaml
+    - knowledge/hfs/rules.yaml
+    - docs/lite-edition.md
+    - ruling:R212/case-1 (2026-10-12, with the Work boundary amended by ruling:R212/case-4; lite keeps full architecture with Supabase backing services; queue transport Supabase Queues/pgmq)
+    - owner rulings 2026-10-13 (one code structure and one front end for both editions; backing infrastructure swapped for Supabase; the HFS standard, migration baseline and assets policies)
+    - owner-approved Swarm canon 2026-10-14 (lite api and sidecars on the VPS, app-owned scheduled work)
+    - knowledge/hfs/fe-stack.yaml
+    - https://supabase.com/docs/guides/database/postgres/row-level-security
+  limitations: |
+    The lite rules judge source text, migrations and configuration. They do not certify that a policy expresses the intended access
+    model; a person still reads every policy. The local database proof belongs to the app, not to the standard.
+rules:
+  - id: REPO-LITE-1
+    title: One edition, one engine
+    kind: mandatory
+    hfsRules: [R212, R10]
+    requirement: |
+      `hfs.json` names its edition (`full`, or `lite`; absent means `full`). The edition selects which slots and rules are in
+      view; it never selects another engine or relaxes a rule locally. Lite keeps the full monorepo (the api, cli and optional
+      worker apps, the features and modules of the back end, the front-end apps and packages, the Supabase project and the stack
+      declaration), the CQRS
+      shape, every pattern (queue, event bus, saga, reactors, projection, realtime, webhooks, fenced job) declared the same way,
+      and the back-end unit specs exactly as full (ruleParams.be.unitRoles, logicRoles at 100 per file, @starci/jest-preset
+      doubles, builders). Backing adapters run on Supabase: schema authority in app.supabase.migrations; queue and
+      event bus on Supabase Queues (pgmq); realtime on the same socket.io gateway run inside the api process (one instance, no
+      Redis adapter); cache and locks on Postgres; app-owned schedules through back-end schedulers, pgmq jobs or pg_cron ticks
+      (+ pg_net); storage and auth on Supabase. The api, web, ingress and application sidecars run on Docker Swarm on the VPS;
+      app.starcistacks declares Supabase as managed backing and the environment with `runtime: docker-swarm`. The ingress is
+      any declared `role: ingress` component (Traefik or Caddy); a sidecar such as n8n keeps its state in SQLite on a declared
+      persistent volume, never in a self-hosted Postgres.
+      Integration specs are optional and run only on `starci supabase start`. Contract specs are optional (ruling:lite-contract-specs). A lite app holds
+      none of the infrastructure lite does not run: no e2e spec or script, no e2e workflow or browser journey, no
+      UAT record, no test container, toxiproxy, BullMQ, Kafka or Redis dependency. The app.starcistacks lite overlay permits
+      Swarm infra and refuses the other infra runtimes, runtime and seeds trees and components duplicating Supabase-provided
+      backing services. The app.supabase.functions slot is unavailable. The front end is the one front-end standard of
+      knowledge/hfs/fe-stack.yaml, identical to full and
+      with no tests (R97): Apollo GraphQL and SWR to the back end, modules/auth as the only Supabase importer (auth only), no
+      Server Action and no route handler beyond health/live and the auth callback (R243).
+      Lite's Work tree (slot app.starciwork) is required only when brand records exist and permits only `.gitignore`, the workspace
+      metadata and the brand records. Readers read workspace metadata normally for the project id and repo roles used by
+      app-root detection and front-end role mapping. The catalog, shell, features, resources, UAT and br records are
+      forbidden (HFS_STARCIWORK_LITE_FORBIDDEN).
+    rationale: |
+      One manifest and one catalog keep a lite app upgradable to full by additions only: swap the adapters, add the full
+      test world and self-hosted backing services; lite may already carry optional contract specs (owner:lite-contract-specs).
+    cases:
+      - id: case-1
+        when: A product outgrows lite
+        write: Run the upgrade verb with the full edition; it adds the full slots and removes nothing.
+      - id: case-2
+        when: "Owner ruling 2026-10-14: a lite app needs background work, events or a push channel"
+        write: >-
+          Declare the pattern in hfs.json exactly as in full (queue, event-bus, saga, realtime ...) and write the same ports; the
+          adapter behind them is Supabase - platform/queue sends to pgmq, a processor reads with a visibility timeout and archives
+          on dead letter, a schedule is a pg_cron job, a be push goes out on the socket.io gateway of the api process. Each
+          service and cli command has its unit spec beside it, and declared patterns have integration scenario proofs;
+          there is no e2e spec.
+      - id: case-3
+        date: "2026-10-13"
+        source: owner
+        when: "Owner ruling 2026-10-13: the lite front end read through a Supabase data layer and wrote through Server Actions"
+        write: >-
+          The back-end feature exposes GraphQL (be.transport.graphql); the front end calls it through modules/api/graphql and
+          hooks/swr exactly as in full, reports writes through modules/toast, keeps Supabase for auth only in modules/auth, and
+          follows heavy work (a mutation that enqueues a pgmq job) through a status query polled by SWR or a socket namespace.
+      - id: case-4
+        when: A lite app needs production delivery tooling
+        write: >-
+          Use app.deploy for delivery helpers, Caddy configuration, environment examples and operator shell scripts;
+          app.ci-deploy and app.ci-authorize-deploy-key for deployment and deploy-key authorization workflows; and
+          app.scripts.delivery for helpers to build, sync environment settings and load or set secrets. Lite's backing services
+          stay on Supabase; app.starcistacks requires the declaration and holds Swarm topology, the environment runbook and
+          record, and sealed secret custody. Scheduled CLI batches use the replicated-job and scheduler contract of
+          repo.starcistacks; delivery never installs a host crontab. Delivery files remain legal after
+          an upgrade to full; operational helpers then use app.scripts.
+    verification:
+      automated:
+        - HFS_EDITION_INVALID
+        - HFS_EDITION_FORBIDDEN_PRESENT
+        - HFS_STARCIWORK_LITE_FORBIDDEN
+        - HFS_STACKS_SHAPE
+      manual: []
+    relatedExamples: []
+  - id: REPO-LITE-2
+    title: Migrations are code a parser reads
+    kind: mandatory
+    hfsRules: [R213, R214, R215]
+    requirement: |
+      A migration is a timestamped forward file under `supabase/migrations`; one already on the base branch is never edited. Every
+      table in an exposed schema enables row level security in the same migration and carries policies of a checked shape. A
+      privileged function pins its search path and is not callable by `public`. DDL is never assembled from strings.
+    rationale: |
+      Authorization that lives in the database is only as good as the file that declares it; a parser can check what a reviewer
+      skims.
+    cases:
+      - id: case-1
+        when: A new owner-scoped table
+        write: One migration that creates the table, enables RLS, adds owner policies, and grants only what the back-end role needs.
+      - id: case-2
+        date: "2026-10-13"
+        source: owner
+        when: "Owner ruling 2026-10-13: an existing app moves onto the standard and its old migrations break the rules"
+        write: >-
+          Dump the live schema into one baseline migration written to the current standard and mark it applied on production
+          (no re-run); move the older files to supabase/migrations/_archive/ (app.supabase.migrations.archive: never applied
+          by the Supabase CLI and never judged by the migration rules); new migrations append after the baseline.
+    verification:
+      automated:
+        - DB_MIGRATION_SHAPE
+        - DB_RLS_REQUIRED
+        - DB_DYNAMIC_DDL
+        - DB_POLICY_SHAPE
+        - DB_DEFINER_SAFE
+        - DB_STORAGE_POLICY
+      manual:
+        - Read every policy against the intended access model.
+    relatedExamples: []
+  - id: REPO-LITE-3
+    title: Configuration and types are checked facts
+    kind: mandatory
+    hfsRules: [R216]
+    requirement: |
+      `supabase/config.toml` carries no literal credential and mirrors the Supabase block of hfs.json (signup, token lifetime, site
+      and redirect urls). The generated database types equal what the local stack produces; a drift is a finding.
+    rationale: |
+      A client typed by stale generated types compiles against a schema that no longer exists.
+    cases: []
+    verification:
+      automated:
+        - DB_CONFIG_POLICY
+        - DB_TYPES_DRIFT
+        - HFS_EMIT_DB_TYPES_STALE
+      manual: []
+    relatedExamples: []
+  - id: REPO-LITE-4
+    title: Supabase is one door per side and the front end is auth only
+    kind: mandatory
+    hfsRules: [R217, R219, R243]
+    requirement: |
+      On the front end only modules/auth imports a Supabase client, and only for the session and the access token; it never
+      reads or writes data, and no service-role key reaches fe/. On the back end only the Supabase integration imports the
+      client, and the principal is the access token verified against the project JWKS. The front end serves no API: no Server
+      Action and no route handler beyond health/live and the auth callback slot.
+    rationale: |
+      The back end is the one place where the session, the authorization check and the data shape are enforced, in both
+      editions.
+    cases:
+      - id: case-1
+        date: "2026-10-13"
+        source: owner
+        when: "Owner ruling 2026-10-13: a page saves a row"
+        write: A GraphQL mutation of the back-end feature, called by mutation-<x>.ts in modules/api through useMutate<X>Swr and useGraphQLWithToast; the resolver verifies the principal.
+    verification:
+      automated:
+        - FE_SUPABASE_CLIENT_OWNER
+        - BE_SUPABASE_CLIENT_OWNER
+        - FE_SERVICE_ROLE_FORBIDDEN
+        - BE_SUPABASE_JWT_VERIFIED
+        - FE_SERVER_ACTION_FORBIDDEN
+        - FE_ROUTE_HANDLER_FORBIDDEN
+      manual: []
+    relatedExamples: []
+  - id: REPO-LITE-5
+    title: No secret material in a lite tree
+    kind: mandatory
+    hfsRules: [R06, R220]
+    requirement: |
+      A lite app holds no root `.env*`, `.secrets/` or sealed file outside the `.starcistacks` secrets location, and `fe/` and
+      `supabase/` hold no token, JWT or connection string with a password. Configuration names a secret as `env(NAME)`.
+      Delivery slots remain subject to the plaintext-secret checks, including environment examples, workflows and operational
+      helpers: use placeholders and runtime secret references rather than credential values.
+    rationale: |
+      Supabase keys are bearer credentials; a tree that holds none cannot leak one.
+    cases: []
+    verification:
+      automated:
+        - HFS_PLAINTEXT_SECRET
+        - HFS_LITE_SECRET_CUSTODY
+      manual: []
+    relatedExamples: []
+  - id: REPO-LITE-6
+    title: Templates, small assets and media each have one place
+    kind: mandatory
+    hfsRules: [R212]
+    requirement: |
+      In both editions, static templates, copy and presets are TS constants in the owning domain capability
+      (`<x>.templates.ts` of be.domain) and user-editable ones are seed rows; small binaries bundled with the build (fonts a
+      renderer embeds, a watermark) live in be.assets (`be/src/assets/<kind>/`); large or user media (music, video, uploads)
+      live in object storage (Supabase Storage in lite, S3-compatible storage in full) and are fetched at runtime. There is no
+      `be/resources/` folder.
+    rationale: |
+      A template beside the capability that renders it changes with it; binaries in the image stay small; media in storage
+      stay out of the build.
+    cases:
+      - id: case-1
+        date: "2026-10-13"
+        source: owner
+        when: "Owner ruling 2026-10-13: a back end kept fonts, message templates and music under be/resources/"
+        write: Fonts move to be/src/assets/fonts/, the message templates to <capability>.templates.ts of their domain capability, and the music to object storage.
+    verification:
+      automated:
+        - HFS_EDITION_INVALID
+        - HFS_EDITION_FORBIDDEN_PRESENT
+        - HFS_STARCIWORK_LITE_FORBIDDEN
+      manual: []
+    relatedExamples: []

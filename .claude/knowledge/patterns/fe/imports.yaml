@@ -1,0 +1,295 @@
+schema: starci/knowledge-source@1
+id: fe.imports
+title: Imports
+purpose: |
+  Given a frontend file, what may it import, through which path and in which direction? Layout of the import block is
+  Prettier's decision and is not a rule.
+appliesTo:
+  - frontend
+family: fe
+provenance:
+  reviewedAt: 2026-09-29
+  sources:
+    - knowledge/hfs/README.md
+    - knowledge/hfs/slots.yaml
+    - knowledge/patterns/fe/architecture-check.yaml
+    - https://www.typescriptlang.org/docs/handbook/modules/reference.html
+  limitations: |
+    Static analysis resolves aliases, relative paths, literals, re-exports and packages through the app's TypeScript
+    project. Verify installed Grammar exports at the public entry @starci/grammar/common.
+rules:
+  - id: FE-IMPORTS-1
+    title: Paths
+    kind: mandatory
+    hfsRules: [R30]
+    requirement: |
+      Same-unit imports use relative paths. Cross-folder imports inside one source root use the app's declared alias (`@/`).
+      Cross-package imports use the dependency package name and a declared package export. Grammar objects come from a verified
+      installed family entry, `@starci/grammar/common` for the common tier. Type-only imports use `import type`. Every import
+      across owners targets the owner's public entry.
+    rationale: |
+      Aliases are source-root conveniences, while package exports are ownership contracts. TypeScript paths do not create or
+      replace a package API.
+    cases:
+      - id: case-1
+        when: "Another owner under the same source root"
+        write: 'import { AuthenticationPage } from "@/features/pages/AuthenticationPage"'
+      - id: case-2
+        when: "A Grammar object"
+        write: 'import { SurfaceCard, Text, Heading, Badge, Button } from "@starci/grammar/common"'
+      - id: case-3
+        when: "HeroUI"
+        write: 'import { cn } from "@heroui/react" in classNames.ts; vendor components only in leaves and blocks, never in a page component.tsx'
+      - id: case-4
+        when: "Files inside the same unit"
+        write: "./component, ./classNames, ./index"
+      - id: case-5
+        when: "A workspace package"
+        write: 'import { StatusChip } from "@nivo/ui" through package.json exports; never reach fe/packages/nivo-ui/src through @/ or a tsconfig path'
+    verification:
+      automated:
+        - BE_PUBLIC_SURFACE
+        - ARCH_OWNER_EXPORT_BYPASS
+        - ARCH_OWNER_EXPORT_STAR
+        - HFS_ALIAS_REEXPORT
+        - ARCH_PACKAGE_EXPORT_BYPASS
+      manual:
+        - Verify @starci/grammar/common exports before importing; do not use the package root.
+    relatedExamples:
+      - connected-block
+
+  - id: FE-IMPORTS-2
+    title: Layout and order are Prettier's
+    kind: residual
+    hfsRules: [R19]
+    requirement: |
+      Import layout is produced by Prettier. Import order is not enforced. The conventional grouping is framework packages,
+      then Grammar, then own tiers, then the own unit, and is left to the author.
+    rationale: |
+      Order carries no dependency meaning that a check could judge.
+    cases:
+      - id: case-1
+        when: "A conventional file"
+        write: "react, next-intl, @starci/grammar/common, @/components, @/hooks, @/modules, then ./classNames and ./component"
+    verification:
+      automated:
+        - HFS_FORMAT
+      manual: []
+    relatedExamples: []
+
+  - id: FE-IMPORTS-3
+    title: Data enters through the owning feature or module
+    kind: mandatory
+    hfsRules: [R56, R50, R26, R92]
+    requirement: |
+      Every authored hook lives under hooks/ (FE-NAMING-4). Feature owners and connected blocks import those hooks through a resolved
+      hooks public entry. Only hooks/swr imports API transport operations through the module public entry (`@/modules/api`);
+      other hooks compose those SWR hooks or reach non-transport domain capabilities through their public entries.
+      Feature owners never import transport directly.
+      Leaves, branches and composites may call a hooks/ui intrinsic hook
+      whose resolved implementation stays free of product, session and API lifecycle. They do not call product hooks.
+    rationale: |
+      One hook location makes declaration ownership auditable while resolved implementation closure keeps intrinsic UI
+      helpers distinct from product lifecycle.
+    cases:
+      - id: case-1
+        when: "Authentication owns a browser request lifecycle"
+        write: 'import { useAuthentication } from "@/hooks/authentication"; its declaration is under fe/apps/<app>/src/hooks/authentication/useAuthentication.ts'
+      - id: case-2
+        when: "A hook reaches GraphQL"
+        write: "A hooks/swr hook imports the operation (query<X> or mutate<X>) of modules/api; presentation never imports transport."
+      - id: case-3
+        when: "A presentation needs a feature model"
+        write: "Import the feature or view type through the feature entry, never a generated wire type."
+    verification:
+      automated:
+        - FE_HOOKS_ARE_HOOKS
+        - FE_CUSTOM_HOOK_LOCATION
+        - FE_BLOCK_PRODUCT_HOOK_DEFINITION
+        - FE_COMPONENT_DEEP_HOOK_IMPORT
+        - FE_TRANSPORT_OWNER
+        - FE_EFFECT_FETCH
+        - FE_SWR_KEY_IDENTITY
+        - FE_SWR_MUTATION_RESOURCE_IDENTITY
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+        - FE_COMPONENT_API
+        - FE_COMPONENT_WORLD_OWNERSHIP
+        - FE_WORLD_OWNER_RENDER_BOUNDARY
+        - FE_CONNECTED_BLOCK_RENDER_PAIR
+        - FE_PURE_REACHES_DATA
+        - FE_PURE_WORLD_HOOK
+        - FE_PURE_WORLD_IMPORT
+      manual:
+        - Confirm a data lifecycle has a feature owner and reusable presentation does not import it.
+    relatedExamples:
+      - connected-block
+
+  - id: FE-IMPORTS-4
+    title: Responsibility direction
+    kind: mandatory
+    hfsRules: [R27, R64, R26]
+    requirement: |
+      App adapters import internal code only through public entries below features/{pages,layouts,overlays}, including
+      type-only imports and re-exports. Features compose components, hooks and modules. Page and layout owners at
+      features/{pages,layouts}/<Name>/index.tsx may also import overlay public entries and compose blocks. The only
+      feature-to-feature edge is pages or layouts to overlays: a layout never imports a page, and an overlay never imports
+      another overlay. A server page may import and render a client overlay entry without becoming a client component.
+      Components descend blocks to composites to branches to leaves; no block imports another block.
+      A pure component or branch renders supplied block render props without importing blocks or fetching. Components
+      never point to app or features; hooks never point to app, features or components; modules never point to app, features, components or hooks.
+      An app never imports another app. Product visuals may import Grammar. Re-export barrels and aliases obey the same
+      resolved direction, and a cycle between owners is a finding.
+    rationale: |
+      One-way responsibility direction keeps route, product and data ownership above reusable presentation.
+    cases:
+      - id: case-1
+        when: "Route to feature page"
+        write: 'import { AuthenticationPage } from "@/features/pages/AuthenticationPage"'
+      - id: case-2
+        when: "Feature to module and visual contract"
+        write: "The feature page imports @/components/blocks/... and @/hooks; its hook imports @/modules/api."
+      - id: case-3
+        when: "Reusable visual to Grammar"
+        write: 'import type { ButtonVariant } from "@starci/grammar/common"'
+      - id: case-4
+        when: "Pure half to data layer"
+        write: "never at runtime; component.tsx may use import type from a generated type only through a feature model"
+      - id: case-5
+        when: "Client list composition"
+        write: 'The page imports @/features/overlays/ItemListOverlay; that overlay imports @/components/blocks/ItemBlock and passes renderItem={id => <ItemBlock id={id} />} to its Base and branch. The branch imports neither the block nor its hook.'
+      - id: case-6
+        when: "A layout hosts overlays selected by the URL"
+        write: >
+          The server layout imports OverlayRouteHost and candidate overlay entries, and supplies rendered candidate nodes
+          to that client host. Its route-state hook supplies scalar selection to the pure OverlayHost branch; the host
+          and branch import no candidate overlay (FE-BOUNDARY-5).
+    verification:
+      automated:
+        - ARCH_OWNER_CYCLE
+        - FE_APP_ISOLATION
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+      manual:
+        - Confirm leaves do not import higher tiers or world-reading hooks.
+    relatedExamples:
+      - connected-block
+
+  - id: FE-IMPORTS-5
+    title: Vendor boundaries
+    kind: mandatory
+    hfsRules: [R62, R61, R93]
+    requirement: |
+      Only the Icon leaf imports the icon set of knowledge/hfs/fe-stack.yaml (the heroicons family: @heroicons/react, then @starci/heroicons). Headings come from Grammar Heading, never a raw h2. Form controls come from
+      the Grammar renderers, never a raw select, input, textarea or button. Grammar peerDependencies are exactly @heroui/react
+      and react.
+    rationale: |
+      Vendor glyph, heading and control ownership stays behind Grammar so product units compose one surface.
+    cases:
+      - id: case-1
+        when: "Glyphs"
+        write: "only the Icon leaf imports @heroicons/react or @starci/heroicons; everything else takes the Grammar Icon with a source prop"
+      - id: case-2
+        when: "Headings"
+        write: "Heading from Grammar, never a raw h2"
+      - id: case-3
+        when: "Controls"
+        write: "the Grammar field renderer, never a raw input"
+    verification:
+      automated:
+        - FE_NATIVE_FORM_CONTROL
+        - FE_NATIVE_IMAGE
+        - FE_STYLE_TOKEN_ONLY
+        - FE_STYLE_SOURCE_UNRESOLVED
+        - FE_VENDOR_BOUNDARY
+        - ARCH_GRAMMAR_CONTRACT_INVALID
+        - ARCH_GRAMMAR_EXPORT_BYPASS
+      manual: []
+    relatedExamples: []
+
+  - id: FE-IMPORTS-6
+    title: Re-exports
+    kind: mandatory
+    hfsRules: [R30, R25]
+    requirement: |
+      Feature, module and package public entries use explicit named exports for their supported contract, never `export *`
+      across ownership boundaries. Grammar family entries use named re-exports with the package's emitted suffix convention.
+      An export with no consumer is deleted.
+    rationale: |
+      Explicit named re-exports keep the public surface auditable.
+    cases:
+      - id: case-1
+        when: "A feature public entry"
+        write: "Export its route-facing entry, application contract and intended hooks explicitly."
+      - id: case-2
+        when: "Grammar family entry"
+        write: 'export { COMMON_SPACING_SCALE, type CommonSpacingStep } from "./spacing.js" with the .js suffix'
+    verification:
+      automated:
+        - BE_PUBLIC_SURFACE
+        - ARCH_OWNER_EXPORT_BYPASS
+        - ARCH_OWNER_EXPORT_STAR
+        - HFS_ALIAS_REEXPORT
+        - ARCH_PACKAGE_EXPORT_BYPASS
+        - HFS_UNUSED_EXPORT
+        - HFS_UNUSED_FILE
+      manual: []
+    relatedExamples: []
+
+  - id: FE-IMPORTS-7
+    title: Forbidden
+    kind: mandatory
+    hfsRules: [R18, R30, R61, R62, R26]
+    requirement: |
+      Do not bypass another owner or package public entry, let resolved presentation runtime-import transport, default-export
+      from reusable src/components, use an inline lint or type suppression, import Grammar from the package root or mixed
+      families, load a second family stylesheet under one root, clone Common shell geometry, or put product names or business
+      logic into Grammar public exports.
+    rationale: |
+      These bans protect mockability, lint integrity and Grammar family boundaries.
+    cases:
+      - id: case-1
+        when: "A reusable visual imports a data hook or a consumer deep-imports another feature"
+        write: "Move lifecycle to the feature owner or consume the owner's explicit public entry."
+      - id: case-2
+        when: "Inline lint config"
+        write: "There is none: noInlineConfig is true and eslint-disable, ts-ignore and ts-expect-error are findings."
+      - id: case-3
+        when: "Mixing families, or importing the package root"
+        write: >
+          renderers and prop types come from the installed public family entry or @starci/grammar/common; never from the
+          package root or mixed families
+      - id: case-4
+        when: "A second family stylesheet under one root"
+        write: "select one family at the composition root and load its verified stylesheet once"
+      - id: case-5
+        when: "An app-local clone of a Common renderer, an anonymous layout, or a shell band the application draws itself"
+        write: >
+          Use the Common renderer and pass props. A shell unit (a folder whose name ends in Layout, Shell, TopBar, Navbar, Nav,
+          Sidebar or Rail) composes a Grammar shell object and writes classes only inside the slots it is handed. A bar
+          assembled from divs is shell geometry whatever it is named. A band is mounted beside the page in the route layout,
+          never inside a shell object's header slot, because that slot is already wrapped in a banner and the nesting would
+          publish two banner landmarks for one band.
+      - id: case-6
+        when: "A product name in a Grammar public export, or business logic inside Common or Core"
+        write: "Learn, Console and Dashboard stay in product code; routes, permissions, persistence and effects never enter the package"
+    verification:
+      automated:
+        - HFS_INLINE_SUPPRESSION
+        - BE_PUBLIC_SURFACE
+        - ARCH_OWNER_EXPORT_BYPASS
+        - ARCH_OWNER_EXPORT_STAR
+        - HFS_ALIAS_REEXPORT
+        - ARCH_PACKAGE_EXPORT_BYPASS
+        - FE_STYLE_TOKEN_ONLY
+        - FE_STYLE_SOURCE_UNRESOLVED
+        - FE_NATIVE_FORM_CONTROL
+        - FE_NATIVE_IMAGE
+        - BE_TIER_DIRECTION
+        - FE_TIER_DIRECTION
+        - ARCH_PACKAGE_IMPORTS_APP
+      manual:
+        - Confirm Grammar imports use verified @starci/grammar/common exports only.
+    relatedExamples: []

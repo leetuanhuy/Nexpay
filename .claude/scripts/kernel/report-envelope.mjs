@@ -1,0 +1,259 @@
+// starci/op-report@1 — the op's filed result. `starci kernel report` validates the
+// envelope before it becomes a durable reports row; the api stamps the
+// identity fields (run/task/dispatch/from) from the job row — a worker can
+// never claim another job's dispatch. Contract: modules/kernel/
+// verdict-contract.yaml §2.
+
+import { readModuleJson } from '../../engine/runtime-root.mjs';
+import { claimsProblems } from './proof-integrity.mjs';
+import { normPath } from '../lib/path-key.mjs';
+
+const OP_REPORT_SCHEMA = 'starci/op-report@1';
+export const OP_REPORT_OUTCOMES = ['done', 'partial', 'failed', 'ask', 'blocked'];
+// modules/models/kinds.yaml `vocabularies.blockers` is the one authority: the route table
+// that dispatches on a blocker kind and the envelope that accepts one read the
+// same list. Missing or misshapen, the envelope refuses to load at all.
+export const BLOCKER_KINDS = (() => {
+  const blockers = readModuleJson('modules', 'models', 'kinds.yaml')?.vocabularies?.blockers;
+  if (!Array.isArray(blockers) || !blockers.length || blockers.some((k) => typeof k !== 'string' || !k.trim())) {
+    throw new Error('modules/models/kinds.yaml vocabularies.blockers must be a non-empty list of kind names');
+  }
+  return blockers;
+})();
+
+const ALLOWED_KEYS = new Set(['schema', 'outcome', 'run', 'task', 'dispatch', 'from', 'summary', 'files', 'checks', 'open', 'question', 'blocker', 'head', 'credentialPending', 'rootCause', 'claims', 'failureClass', 'seamAssumptions', 'owedToWire']);
+// Why a failed attempt failed (scripts/kernel/verify-failure.mjs): the route table keys failed routes on it.
+// The api derives it from the evidence and accepts a stated one only where the evidence does not contradict it.
+export const FAILURE_CLASSES = ['environment', 'tool', 'findings', 'product', 'deterministic', 'transient'];
+const text = (v) => typeof v === 'string' && v.trim().length > 0;
+const normalizePath = (p) => normPath(p, { collapse: true, dot: true });
+
+const underOwned = (file, ownedPaths) => {
+  if (!ownedPaths.length) return true; // no declared write set → nothing to check against
+  const f = normalizePath(file);
+  return ownedPaths.some((own) => {
+    // A trailing /** spells the same directory prefix (engine/admission.mjs normalizeOwnedPath).
+    // The compare is literal, so App Router names ([lang], [...slug], (group)) match themselves.
+    const o = normalizePath(typeof own === 'string' ? own : own?.path).replace(/\/\*\*$/, '');
+    return o && (f === o || f.startsWith(o + '/'));
+  });
+};
+
+// A report file written in a legacy code page (Windows PowerShell 5.1
+// Set-Content, a native-exe argument) reaches the ledger with every
+// non-ASCII letter replaced by '?' ("Ch?n tuy?n c?ng khai"), and an owner ask
+// is then served unreadable. Text that lost its characters is refused, never
+// stored: the words cannot be recovered from the ledger afterwards.
+const LOSSY_MARK = /\p{L}\?\p{L}|\?\?\p{L}|\uFFFD/gu;
+export function lossyTextFields(value) {
+  const fields = [];
+  const scan = (label, v) => { if (typeof v === 'string') fields.push([label, v]); };
+  scan('summary', value?.summary);
+  scan('question.text', value?.question?.text);
+  scan('question.recommendedReason', value?.question?.recommendedReason);
+  (Array.isArray(value?.question?.options) ? value.question.options : []).forEach((o, i) => scan(`question.options[${i}]`, typeof o === 'string' ? o : o?.label));
+  scan('blocker.detail', value?.blocker?.detail);
+  (Array.isArray(value?.open) ? value.open : []).forEach((o, i) => scan(`open[${i}]`, o));
+  const marks = fields.map(([label, text]) => [label, (text.match(LOSSY_MARK) ?? []).length]).filter(([, n]) => n > 0);
+  const total = marks.reduce((sum, [, n]) => sum + n, 0);
+  return total >= 3 || fields.some(([, text]) => text.includes("\uFFFD")) ? marks.map(([label]) => label) : [];
+}
+
+// op/files (lane op-verify): the build op that owns the fix and the files it repairs, when the node alone
+// (an op, or a Work record id such as impl.<feature>.<repo>.<name>) does not say them.
+const ROOT_CAUSE_KEYS = new Set(['node', 'self', 'category', 'claim', 'evidence', 'counterCheck', 'expectedFix', 'recheck', 'op', 'files']);
+/** Why a report's rootCause {node, self?, category, claim, evidence[], counterCheck?, expectedFix?, recheck?, op?, files?} is malformed: [reason]. */
+export function rootCauseProblems(rc) {
+  if (!rc || typeof rc !== 'object' || Array.isArray(rc)) return ['rootCause must be an object {node, self?, category, claim, evidence[], counterCheck?, expectedFix?, recheck?}'];
+  const out = [];
+  for (const k of Object.keys(rc)) if (!ROOT_CAUSE_KEYS.has(k)) out.push(`rootCause has unknown field '${k}'`);
+  if (!text(rc.node)) out.push('rootCause.node is required: the op (op or op#instance) whose output caused the failure');
+  if (rc.self !== undefined && typeof rc.self !== 'boolean') out.push('rootCause.self must be a boolean');
+  for (const k of ['category', 'claim']) if (!text(rc[k])) out.push(`rootCause.${k} is required`);
+  if (text(rc.claim) && rc.claim.length > 600) out.push('rootCause.claim exceeds 600 chars');
+  if (!Array.isArray(rc.evidence) || !rc.evidence.length || rc.evidence.some((e) => !text(e) || e.length > 400)) out.push('rootCause.evidence must be a nonempty array of strings of at most 400 chars');
+  out.push(...rootCauseOptionalProblems(rc));
+  return out;
+}
+
+/** The optional rootCause fields' problems (counterCheck, expectedFix, recheck, op, files). */
+const rootCauseOptionalProblems = (rc) => {
+  const out = [];
+  for (const k of ['counterCheck', 'expectedFix', 'recheck']) {
+    if (rc[k] !== undefined && (!text(rc[k]) || rc[k].length > 600)) out.push(`rootCause.${k} must be a nonempty string of at most 600 chars`);
+  }
+  if (rc.op !== undefined && (!text(rc.op) || !/^[a-z]+(\.[a-z]+)+$/.test(rc.op))) out.push('rootCause.op must be an op kind such as backend.implement');
+  if (rc.files !== undefined && (!Array.isArray(rc.files) || rc.files.some((f) => !text(f) || f.length > 300) || rc.files.length > 60)) out.push('rootCause.files must be an array of at most 60 repository paths (repository:<id>/<path> for another checkout)');
+  return out;
+};
+
+/** Schema, key, outcome and summary problems of the envelope itself. */
+const envelopeProblems = (value) => {
+  const out = [];
+  if (value.schema !== undefined && value.schema !== OP_REPORT_SCHEMA) out.push(`schema must be ${OP_REPORT_SCHEMA}, got '${value.schema}'`);
+  for (const k of Object.keys(value)) if (!ALLOWED_KEYS.has(k)) out.push(`unknown field '${k}'`);
+  if (!OP_REPORT_OUTCOMES.includes(value.outcome)) out.push(`outcome must be one of ${OP_REPORT_OUTCOMES.join('|')}, got '${value.outcome}'`);
+  if (!text(value.summary)) out.push('summary is required');
+  else if (value.summary.replace(/\s+/g, ' ').length > 600) out.push('summary exceeds 600 chars');
+  return out;
+};
+
+// A build op codes on a placeholder when a credential is missing and names the
+// variables here; only the live-proof leg waits for the real values
+// (modules/ops/_common.yaml "Bounded finish and blockers").
+const credentialProblems = (value) => value.credentialPending !== undefined && (!Array.isArray(value.credentialPending)
+  || value.credentialPending.some((v) => typeof v !== 'string' || !/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(v)))
+  ? ['credentialPending must be an array of env var or custody key names'] : [];
+
+const failureClassProblems = (value) => {
+  const out = [];
+  if (value.failureClass !== undefined && !FAILURE_CLASSES.includes(value.failureClass)) out.push(`failureClass must be one of ${FAILURE_CLASSES.join('|')}`);
+  if (value.failureClass !== undefined && value.outcome !== 'failed') out.push("failureClass belongs to outcome 'failed' only");
+  return out;
+};
+
+// seamAssumptions: what a cut sibling that ran on a stub assumed of its unlanded seam
+// (scripts/kernel/seam-policy.mjs); the Kernel's cut-seam-reconcile re-verifies them once the seam lands.
+const seamAssumptionProblems = (value) => value.seamAssumptions !== undefined && (!Array.isArray(value.seamAssumptions)
+  || value.seamAssumptions.some((a) => !a || typeof a !== 'object' || Array.isArray(a) || !text(a.symbol) || !text(a.assumption) || (a.file !== undefined && !text(a.file))))
+  ? ['seamAssumptions must be an array of {symbol, assumption, file?}'] : [];
+
+// owedToWire: a canon slice's residual findings that only its cut's canon-wire leg can land (a shared-root
+// registration, config, public entry or consumer outside its owned paths; modules/ops/ops/code.refactor.yaml
+// SCOPE_WIDENING). The brief always named it; the envelope refused it, so slices could not declare it
+// (a code.refactor slice was overruled for 'missing the formal owedToWire').
+const owedToWireProblems = (value) => value.owedToWire !== undefined && (!Array.isArray(value.owedToWire)
+  || value.owedToWire.some((o) => !o || typeof o !== 'object' || Array.isArray(o) || !text(o.path) || !text(o.finding) || Object.keys(o).some((k) => !['path', 'finding', 'file', 'ruleId'].includes(k))))
+  ? ['owedToWire must be an array of {path, finding, file?, ruleId?}'] : [];
+
+const appendOwnedFileProblems = (value, ownedPaths, out) => {
+  if (value.files !== undefined) {
+    if (!Array.isArray(value.files) || value.files.some((f) => !text(f)) || new Set(value.files).size !== value.files.length) out.push('files must be an array of unique path strings');
+    else for (const f of value.files) if (!underOwned(f, ownedPaths)) out.push(`file '${f}' is outside owned_paths`);
+  }
+};
+
+/** The declared-field problems (credentialPending through files), in the envelope's filing order. */
+const declaredProblems = (value, ownedPaths) => {
+  const out = credentialProblems(value);
+  // rootCause names the node the report blames; settle routes a failure whose node is another op's to a
+  // read-only root verify of it (scripts/kernel/cli.mjs enqueueNextStep).
+  if (value.rootCause !== undefined) out.push(...rootCauseProblems(value.rootCause));
+  // claims name what the job's artifacts prove (scripts/kernel/proof-integrity.mjs): indexed with them at settle.
+  if (value.claims !== undefined) out.push(...claimsProblems(value.claims));
+  out.push(...failureClassProblems(value), ...seamAssumptionProblems(value), ...owedToWireProblems(value));
+  appendOwnedFileProblems(value, ownedPaths, out);
+  return out;
+};
+
+/** One checks[i] row's problems. */
+const checkShapeProblems = (c, i) => {
+  const out = [];
+  if (!c || typeof c !== 'object' || !text(c.name) || !text(c.command) || !Number.isInteger(c.exitCode)) out.push(`checks[${i}] needs {name, command, exitCode}`);
+  else if (c.evidence !== undefined && String(c.evidence).length > 400) out.push(`checks[${i}].evidence exceeds 400 chars`);
+  else if (c.failing !== undefined && (!Array.isArray(c.failing) || c.failing.some((f) => !text(f)))) out.push(`checks[${i}].failing must be an array of file paths`);
+  return out;
+};
+
+const checkPathMetadataProblems = (c, i) => {
+  const out = [];
+  for (const field of ['stdoutPath', 'stderrPath', 'outputPath', 'cwd'])
+    if (c?.[field] !== undefined && !text(c[field])) out.push(`checks[${i}].${field} must be a nonempty path`);
+  return out;
+};
+
+const checkPhaseProblems = (c, i) => {
+  const out = [];
+  if (c?.phase !== undefined && !['before', 'after', 'verify', 'parity', 'integrate'].includes(c.phase))
+    out.push(`checks[${i}].phase must be before|after|verify|parity|integrate`);
+  return out;
+};
+
+const checkTimestampProblems = (c, i) => {
+  const out = [];
+  for (const field of ['startedAt', 'finishedAt'])
+    if (c?.[field] !== undefined && (!Number.isInteger(c[field]) || c[field] < 0)) out.push(`checks[${i}].${field} must be an epoch millisecond integer`);
+  return out;
+};
+
+const checkTimeOrderProblems = (c, i) => {
+  const out = [];
+  if (Number.isInteger(c?.startedAt) && Number.isInteger(c?.finishedAt) && c.finishedAt < c.startedAt)
+    out.push(`checks[${i}].finishedAt precedes startedAt`);
+  return out;
+};
+
+const checkAvailabilityProblems = (c, i) => {
+  const out = [];
+  // The checker could not run (tool missing, host down): infra, never red (H7). exitCode still records what the shell returned.
+  if (c?.unavailable !== undefined && typeof c.unavailable !== 'boolean') out.push(`checks[${i}].unavailable must be a boolean`);
+  return out;
+};
+
+const checkMetadataProblems = (c, i) => [...checkPathMetadataProblems(c, i), ...checkPhaseProblems(c, i),
+  ...checkTimestampProblems(c, i), ...checkTimeOrderProblems(c, i), ...checkAvailabilityProblems(c, i)];
+
+const checkProblems = (c, i) => [...checkShapeProblems(c, i), ...checkMetadataProblems(c, i)];
+
+/** question.recommended / question.recommendedReason problems (see ask-recommendation.mjs below). */
+const questionProblems = (q) => {
+  const out = [], count = Array.isArray(q.options) ? q.options.length : 0;
+  if (q.recommended !== undefined && q.recommended !== null
+    && (!Number.isInteger(q.recommended) || q.recommended < 0 || q.recommended >= count)) {
+    out.push(`question.recommended must be the 0-based index of one of question.options (0..${Math.max(count - 1, 0)}), got ${JSON.stringify(q.recommended)}`);
+  }
+  if (q.recommendedReason !== undefined && q.recommendedReason !== null) {
+    if (typeof q.recommendedReason !== 'string') out.push('question.recommendedReason must be a string');
+    else if (q.recommendedReason.length > 600) out.push('question.recommendedReason exceeds 600 chars');
+    else if (q.recommended === undefined || q.recommended === null) out.push('question.recommendedReason needs question.recommended: the index of the option it recommends');
+  }
+  return out;
+};
+
+// validateOpReport(value, {ownedPaths, identity}) — identity fields present in the file must match the job's
+// truth (identity = {run, task, dispatch, from}); absent ones are stamped by the caller. No op commits (the runtime
+// is the only committer, scripts/kernel/workflow-checkpoint.mjs), so no report owes a head.
+// Returns {ok:true, report} or {ok:false, reasons[]}.
+const checkArrayProblems = (value, fail) => {
+  if (value.checks === undefined) return;
+  if (!Array.isArray(value.checks)) fail('checks must be an array');
+  else value.checks.forEach((c, i) => { for (const r of checkProblems(c, i)) fail(r); });
+};
+
+const outcomeProblems = (value, fail) => {
+  if (value.outcome === 'done' && value.open !== undefined && (!Array.isArray(value.open) || value.open.length)) fail("outcome 'done' carries no unfinished open items; report partial instead");
+  if (value.outcome === 'partial' && (!Array.isArray(value.open) || !value.open.length || value.open.some((o) => !text(o)))) fail("outcome 'partial' requires a nonempty open[] of unfinished items");
+  if (value.outcome === 'ask' && (!value.question || !text(value.question.text))) fail("outcome 'ask' requires question.text");
+  // question.recommended: the 0-based index of the option the op recommends, with
+  // question.recommendedReason saying why (config.yaml asks.autoAcceptRecommended
+  // may answer the ask with it; scripts/machine/ask-recommendation.mjs).
+  if (value.question && typeof value.question === 'object') for (const r of questionProblems(value.question)) fail(r);
+  if (value.outcome === 'blocked' && (!value.blocker || !BLOCKER_KINDS.includes(value.blocker.kind) || !text(value.blocker.detail))) fail(`outcome 'blocked' requires blocker {kind <- ${BLOCKER_KINDS.join('|')}, detail}`);
+};
+
+const identityProblems = (value, identity, fail) => {
+  for (const k of ['run', 'task', 'dispatch', 'from']) {
+    if (value[k] !== undefined && identity[k] != null && value[k] !== identity[k]) fail(`identity '${k}' is '${value[k]}' but the job binds '${identity[k]}'`);
+  }
+};
+
+export function validateOpReport(value, { ownedPaths = [], identity = {} } = {}) {
+  const reasons = [];
+  const fail = (r) => { reasons.push(r); };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { ok: false, reasons: ['report is not a JSON object'] };
+
+  for (const r of envelopeProblems(value)) fail(r);
+  for (const r of declaredProblems(value, ownedPaths)) fail(r);
+  checkArrayProblems(value, fail);
+  outcomeProblems(value, fail);
+
+  const lossy = lossyTextFields(value);
+  if (lossy.length) fail(`text in ${lossy.join(', ')} lost its non-ASCII characters ('?' inside words): write the report file as UTF-8 (Node fs.writeFileSync, or PowerShell Out-File -Encoding utf8 / [IO.File]::WriteAllText) and file it again`);
+
+  identityProblems(value, identity, fail);
+
+  if (reasons.length) return { ok: false, reasons };
+  const report = { ...value, schema: OP_REPORT_SCHEMA };
+  for (const k of ['run', 'task', 'dispatch', 'from']) if (identity[k] != null) report[k] = identity[k];
+  return { ok: true, report };
+}

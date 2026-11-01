@@ -1,0 +1,981 @@
+schema: starci/op@1
+id: review.verify
+goal:
+  en: Independently verify a selected delivery, business, workflow, rendered visual or API result
+    without repairing its producer.
+params:
+  mode:
+    type: enum
+    enum: [select, delivery, business, workflow, visual, api, lint]
+    default: select
+    setBy: kernel
+    doc:
+      en: The execution mode this dispatch runs; starci kernel dispatch binds that mode's reads into the input
+        digests. select leaves the choice to the request.
+  lintRole:
+    type: enum
+    enum: [auto, measurement, gate]
+    default: auto
+    setBy: kernel
+    doc:
+      en: "For mode lint, whether this run MEASURES (its findings are its result and the input of
+        the legs after it; it completes done) or GATES (its findings fail it and route one repair of the
+        build that owns them). auto: a measurement until a build op of the workflow settled before this job
+        was enqueued, a gate after (scripts/kernel/verify-failure.mjs isMeasurementLeg)."
+nodeKinds: [operations]
+completionProfile: operations
+sideEffects:
+  - Only the selected operation contract permits effects; no union of mode permissions.
+graphPolicy:
+  mode: read-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+reads:
+  - id: application-stacks
+    path: shared
+    purpose:
+      en: shared
+  - id: target
+    path: N/index.yaml
+    purpose:
+      en: Read current target, ancestor scope, refs, dependencies, assertions and validator freshness.
+        Preserve unaffected accepted content.
+  - id: selection
+    path: shared
+    purpose:
+      en: shared
+  - id: profile
+    path: shared
+    purpose:
+      en: shared
+  - id: comment-contract
+    path: docs/code-pattern-enforcement.md + <app>/<reviewed range>
+    purpose:
+      en: Read the applicable public API and decision-comment contract with the selected source and callers.
+  - id: review-gate
+    path: knowledge/op-gate.yaml + scripts/gates/gate.mjs + <app>/<reviewed range>
+    purpose:
+      en: "The gate the review runs over the reviewed range and the classes its defects take: gate.mjs (the installed canon, the merge guard over base..HEAD, starci app lint, tsc and the slice's specs, measured against the range's base read-only from git objects) and op-gate.yaml proofs.review-gate and review-defects (starci/review-defects@1)."
+      vi: "Cổng mà bản review chạy trên dải được review và các loại mà lỗi của nó mang: gate.mjs (canon đã cài, merge guard trên base..HEAD, starci app lint, tsc và các spec của slice, đo so với base của dải ở chế độ chỉ đọc từ đối tượng git) cùng proofs.review-gate và review-defects của op-gate.yaml (starci/review-defects@1)."
+writes:
+  - id: node
+    path: shared
+    content:
+      en: shared
+  - id: evidence
+    path: shared
+    content:
+      en: shared
+  - id: gate-proof
+    path: STARCI_JOB_SCRATCH/gate.json
+    schema: starci/gate@1
+    content:
+      en: "The gate report over the reviewed range: exit, base, head, the changed files, the merge guard's checked merges and dropped main changes, new and preexisting counts and every new finding."
+      vi: "Báo cáo cổng trên dải được review: exit, base, head, các tệp đã đổi, các merge mà merge guard đã kiểm và các thay đổi của main bị mất, số lỗi mới và có sẵn, và từng lỗi mới."
+  - id: review-defects
+    path: STARCI_JOB_SCRATCH/review-defects.json
+    schema: starci/review-defects@1
+    content:
+      en: "Every defect the review found: {schema: starci/review-defects@1, defects: [{id, title, class: business|non-business, caughtBy: the check that caught it or null, missingCheck: {check, rule, detail} when non-business and no check caught it}]}; empty when it found none."
+      vi: "Mọi lỗi bản review tìm thấy: {schema: starci/review-defects@1, defects: [{id, title, class: business|non-business, caughtBy: check đã bắt được hoặc null, missingCheck: {check, rule, detail} khi non-business và không check nào bắt được}]}; rỗng khi không tìm thấy lỗi nào."
+steps:
+  - reads:
+      - application-stacks
+      - target
+      - selection
+      - profile
+    writes: []
+    action:
+      en: "Resolve the exact named operation and load only its contract. Its reads/writes, effect ceiling
+        and completion profile replace this selector envelope, except the mechanism steps and proofs
+        below (the gate over the reviewed range, code-comment review and defect classes), which every mode they name keeps; the union of modes never grants
+        authority. Resolve the execution profile and actual tool availability before selecting
+        instruments; this does not switch the model/runtime or spawn workers. For an explicitly new
+        target, absence is expected: inspect the nearest existing ancestor/workspace, then create
+        only that selected scope."
+  - reads:
+      - target
+      - selection
+    writes: [node, evidence]
+    action:
+      en: Execute the selected mode procedure through its actual postconditions. Return operation, scope,
+        per-criterion results and real output refs; no other mode, source repair or successor is
+        implied. This handoff is conditional and does not change standalone or named frontend
+        response contracts.
+  - reads: [comment-contract, target, selection]
+    writes: [evidence]
+    action:
+      en: |
+        In the code modes (delivery, workflow, api, and select when it picks one of them), CHECK
+        the reviewed source against REF-COMMENT-1 in docs/code-pattern-enforcement.md. Compare API
+        JSDoc and important decision comments with actual owning code, callers and relevant tests.
+        A failing or unjudged required criterion prevents a passing review. Record per-criterion
+        results and source/test references in the existing mode evidence; carry defects into the
+        review-defects classification below. REPORT mechanical proof and agent semantic judgment
+        separately. This review changes no source and creates no extra proof schema or checklist.
+  - reads: [review-gate, target, selection]
+    writes: [gate-proof, evidence]
+    action:
+      en: "In the code modes (delivery, workflow, api, and select when it picks one of them) run the gate READ-ONLY over the reviewed range: starci gate run --root <app> --base <the first reviewed commit>^ [--main <the main ref>] --out $STARCI_JOB_SCRATCH/gate.json. It changes nothing in the checkout: the base is measured from git objects, and its MERGE GUARD recomputes every merge in the range with git merge-tree, so a merge that kept the lane side over a main change is a finding merge/dropped-main-change. A new finding, a dropped main change or a tool that could not run is the review's own result - the review never passes a range the gate finds red or could not judge, and it repairs nothing. REPORT with gate.json attached."
+      vi: "Ở các chế độ mã (delivery, workflow, api, và select khi nó chọn một trong số đó) chạy cổng CHỈ ĐỌC trên dải được review: starci gate run --root <app> --base <commit đầu tiên được review>^ [--main <ref main>] --out $STARCI_JOB_SCRATCH/gate.json. Nó không thay đổi gì trong checkout: base được đo từ đối tượng git, và MERGE GUARD của nó tính lại mọi merge trong dải bằng git merge-tree, nên merge giữ bản của lane thay cho thay đổi của main là lỗi merge/dropped-main-change. Lỗi mới, thay đổi của main bị mất hoặc công cụ không chạy được là kết quả của chính bản review - review không bao giờ cho qua một dải mà cổng thấy đỏ hoặc không chấm được, và không sửa gì. BÁO CÁO kèm gate.json."
+  - reads: [review-gate, target]
+    writes: [review-defects, evidence]
+    action:
+      en: "Classify every defect the review found, in every mode but lint (whose findings are its measured result, each caught by the lint itself), into $STARCI_JOB_SCRATCH/review-defects.json: business (the product does not do what the records decided - a requirement, a rule, a journey) or non-business (structure, canon, typing, security, wiring, test layer, documents - anything a machine could judge). Name for each the check that caught it (caughtBy: the gate finding, the canon rule, the validator) or null. A non-business defect that no check caught is a missing check for .claude (owner rule): record missingCheck {check: the check or canon rule that should have caught it, rule: the knowledge/hfs/rules.yaml id when one applies, detail: why it slipped through} so the runtime grows that check; a business defect needs none. A review that found nothing attaches an empty list. REPORT with review-defects.json attached."
+      vi: "Phân loại mọi lỗi bản review tìm thấy, ở mọi chế độ trừ lint (lỗi của nó là kết quả đo, mỗi lỗi đều do chính lint bắt), vào $STARCI_JOB_SCRATCH/review-defects.json: business (sản phẩm không làm điều bản ghi đã quyết - một yêu cầu, một luật, một hành trình) hoặc non-business (cấu trúc, canon, kiểu, bảo mật, nối dây, tầng test, tài liệu - bất cứ gì máy chấm được). Với mỗi lỗi nêu check đã bắt được nó (caughtBy: lỗi của cổng, luật canon, bộ kiểm tra hợp lệ) hoặc null. Lỗi non-business không check nào bắt được là một check còn thiếu cho .claude (luật của chủ sở hữu): ghi missingCheck {check: check hoặc luật canon lẽ ra phải bắt nó, rule: mã knowledge/hfs/rules.yaml khi có, detail: vì sao nó lọt qua} để runtime bổ sung check đó; lỗi business không cần. Bản review không tìm thấy gì thì đính kèm danh sách rỗng. BÁO CÁO kèm review-defects.json."
+proofs:
+  - id: mode-result
+    requirement:
+      en: Exactly the selected mode contract and all requested criteria pass with real evidence before
+        delivery.
+  - id: review-gate
+    requirement:
+      en: "In the code modes starci kernel settle re-reads the attached gate.json (runtime check op-proof, proof review-gate): a done without it (op-gate-proof-missing), with a tool that could not run (op-gate-tool-failed) or over a range with a new finding or a dropped main change (op-gate-new-findings) is refused."
+      vi: "Ở các chế độ mã starci kernel settle tự đọc lại gate.json đính kèm (check op-proof, proof review-gate): done thiếu nó (op-gate-proof-missing), có công cụ không chạy được (op-gate-tool-failed) hoặc trên một dải có lỗi mới hay thay đổi của main bị mất (op-gate-new-findings) đều bị từ chối."
+    check: scripts/kernel/gate-settle.mjs
+  - id: review-defects
+    requirement:
+      en: "In every mode but lint starci kernel settle re-reads the attached review-defects.json (runtime check op-proof, proof review-defects): a done without it (op-review-defects-missing), with a defect not classified business or non-business (op-review-defect-unclassified) or with a non-business defect no check caught and no missingCheck recorded (op-review-missing-check-unrecorded) is refused."
+      vi: "Ở mọi chế độ trừ lint starci kernel settle tự đọc lại review-defects.json đính kèm (check op-proof, proof review-defects): done thiếu nó (op-review-defects-missing), có lỗi chưa phân loại business hay non-business (op-review-defect-unclassified) hoặc có lỗi non-business không check nào bắt mà không ghi missingCheck (op-review-missing-check-unrecorded) đều bị từ chối."
+    check: scripts/kernel/gate-settle.mjs
+  - id: verified-head
+    requirement:
+      en: "The report's head is git rev-parse HEAD of the tree this review verified. In a workflow worktree the finish lands only that exact head: the head the runtime recorded at this op's settle must equal the report's head and the head that lands (reviewVerifiedOf), else workflow-finish-verify-stale and review.verify runs again."
+      vi: "head trong báo cáo là git rev-parse HEAD của cây mà lần review này đã kiểm. Trong worktree của workflow, finish chỉ đưa vào main đúng head đó: head mà runtime ghi lại khi settle op này phải trùng head trong báo cáo và head được đưa vào main (reviewVerifiedOf), nếu không là workflow-finish-verify-stale và phải chạy lại review.verify."
+    check: scripts/kernel/workflow-checkpoint.mjs
+judge:
+  - by: machine
+    measures: [declared-checks, op-proof:review-gate, op-proof:review-defects, contract-script]
+    proofs: [review-gate, review-defects, verified-head]
+    why: "the gate is re-run read-only over the reviewed range, every defect must be classified, and the head it verified must equal the head that lands"
+blockers:
+  - code: OPERATION_REQUIRED
+    condition:
+      en: Missing, unknown or multiple operations; select a single mode under existing task authority.
+placeholders:
+  feature: shared
+  app: shared
+  bound-paths: shared
+  environment: shared
+  identity: shared
+  fixture: shared
+  resource: shared
+  screen: Selected surface/state slug
+layoutPolicy:
+  checks: [starci-validate]
+policy:
+  # specsToggle: what this op does when the owner's config.yaml specs.<class> is false (scripts/route/spec-deferral.mjs):
+  # defer-leg = never dispatched, settled deferred; skip = runs without that class of test or coverage; not-counted = the gate does not demand it.
+  specsToggle: {unit: not-counted, e2e: not-counted}
+  modePolicy:
+    selection: required-exactly-one
+    implicitChain: false
+    permissionUnion: false
+    completion: selected-mode-profile
+  executionModes:
+    delivery:
+      id: review.verify
+      goal:
+        en: Review implementation quality evidence bound to the exact delivered revision without rerunning
+          or repairing its gates.
+      nodeKinds: [operations]
+      completionProfile: operations
+      sideEffects: []
+      graphPolicy:
+        mode: read-only
+        location: .starciwork node dependsOn/refs with direct sourceRefs and collocated assets
+        prerequisiteState: done
+        dispatch: never
+      reads:
+        - id: application-stacks
+          path: knowledge/application-stacks.yaml + docs/application-stacks.md +
+            docs/application-stacks.md + modules/schemas/application-stacks.schema.yaml
+          purpose:
+            en: Reconcile component ownership, encrypted credential custody, lifecycle commands and existing
+              consumers. This conditional read grants no extra deployment or source scope.
+        - id: target
+          path: N/index.yaml
+          purpose:
+            en: "Read the existing selected N/index.yaml, ancestor scope, declared refs/dependencies/assertions
+              and validator freshness. This consumer op requires its target node to exist. An absent
+              target is a scope/graph gap: report it and propose a separately selected scope op; do
+              not create a target or invent its acceptance/graph here."
+        - id: repo
+          path: <app>/<bound-paths>
+          purpose:
+            en: When source exists/is selected, resolve repository resource, actual checkout/root/HEAD and dirty
+              state; read applicable instructions, manifests, owning code, callers and relevant
+              tests. Greenfield/spec-only work records source not-yet-created and grounds intent in
+              the user request; no invented repository or fact citation. Source implementation still
+              needs an actual selected writable repository.
+        - id: gates
+          path: actual repository scripts/config + selected gate criteria
+          purpose:
+            en: Read actual commands, thresholds, test scopes and applicable product-change proof. Explicit task
+              scope may authorize normal tests; do not impose a new blanket E2E approval. Shared
+              destructive tests still need scoped authority. Routine gates are unit + typecheck + lint
+              + canon + build; E2E runs manually only (owner ruling 2026-09-29), so this review never
+              runs the e2e suite itself and runs only the specs the reviewed change affects, never the whole
+              repository suite (owner 2026-09-29; unit.verify or the release cut runs it).
+      writes:
+        - id: node
+          path: N/index.yaml
+          fields: [state, blocker, completion.inputDigest, completion.evidence]
+          content:
+            en: Read the existing selected scope, expected assertions and .starciwork graph unchanged. Write
+              only state/blocker/completion here; actual observations, findings, commit mappings and
+              remaining cleanup belong to the evidence result, not semantic node prose. Missing
+              refs/dependencies/acceptance require a reported gap or separately selected scope
+              update; never add/remove them to obtain pass.
+        - id: evidence
+          path: evidence/manifest.yaml
+          fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+          content:
+            en: Record review findings and references to the actual implementation-produced gate evidence. No
+              new runner execution is claimed.
+        - id: evidence-coverage
+          path: evidence/coverage.json
+          content:
+            en: Retain only the selected delivery coverage.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-result
+          path: evidence/result.md
+          content:
+            en: Retain only the selected delivery result.md at this exact destination; its scope and provenance remain those of evidence.
+      steps:
+        - reads:
+            - application-stacks
+            - target
+            - repo
+            - gates
+          writes: [node, evidence, evidence-coverage, evidence-result]
+          action:
+            en: Read the exact delivered source/build and producer evidence for lint, typecheck, tests/coverage,
+              build and processed Sonar quality gate. Check command identity, real logs, required
+              case/threshold coverage, full commit binding and freshness; verify evidence hashes and
+              actual accessible results. Do not execute gates, repair code or accept scanner
+              submission as Sonar pass - Sonar proof is the producer's attached sonar.json from
+              scripts/gates/sonar-local.mjs with scope slice, outcome pass and revision.commit
+              equal to the tested commit (the slice's new issues, hotspots and duplication;
+              projectGate is whole-project debt, a note and never a finding against the slice).
+              The lint, typecheck and slice-spec proof of a slice is the producer's attached gate.json
+              (starci/gate@1 from `starci gate run` over the slice's changed files against its
+              base) with exit 0 for the tested revision - only the slice's NEW findings gate it, and its
+              preexisting count is repository debt already there at base - record it as code.refactor's
+              note, never a finding against the slice; this op's own whole-repository starci app lint still
+              measures the repository. Issues located only outside the slice are not the slice's.
+              Missing, stale, skipped or failing proof returns a finding
+              to the owning implement op. Record per-required-criterion pass/fail/not-run and
+              evidence references; do not weaken acceptance or complete implementation for its
+              owner.
+      proofs:
+        - id: review-binding
+          requirement:
+            en: Every required gate observation belongs to the exact delivered revision; missing producer
+              evidence prevents a passing review.
+      blockers:
+        - code: GATE_UNAVAILABLE
+          condition:
+            en: Required command/config/runtime cannot run as declared.
+        - code: SOURCE_CHANGED
+          condition:
+            en: Source or configuration changed during measurements, making results incoherent.
+        - code: DECLARED_DEPENDENCY_UNMET
+          condition:
+            en: A declared input is neither a current reviewed todo SRS/SDS seed nor an effectively done
+              evidenced delivery node, or a required scope is missing. Report node/resource IDs and
+              propose a separately selected graph update when needed; never weaken
+              dependsOn/refs/required to proceed.
+      placeholders:
+        feature: Selected feature slug
+        app: The bound app checkout (its root); every path written <app>/<path> is app-relative - be/..., fe/..., .starciwork/... or a path of the app root
+        bound-paths: Inspected source read set
+        environment: Resolved environment resource slug
+        identity: Selected actor resource slug
+        fixture: Selected fixture resource slug
+        resource: Selected owned resource slug
+        screen: Selected surface/state slug
+    business:
+      id: review.verify
+      goal:
+        en: Reconcile the current SRS and SDS with delivered source, test/E2E and UAT evidence at one
+          delivery revision without rewriting their semantic content.
+      nodeKinds: [operations]
+      completionProfile: operations
+      sideEffects: []
+      graphPolicy:
+        mode: read-only
+        location: .starciwork node dependsOn/refs with direct sourceRefs and collocated assets
+        prerequisiteState: done-or-exact-direct-predecessor-proposal
+        dispatch: never
+      reads:
+        - id: target
+          path: N/index.yaml
+          purpose:
+            en: "This consumer requires its selected target to exist. A reviewed SRS/SDS seed may remain todo only when its exact selected proposal and producer evidence are bound by the passed immediate predecessor in this packet's approved goal identity/revision; todo alone does not satisfy a prerequisite. Do not discover another proposal or add unbound intent. Final completion still requires the current full delivery reconciliation."
+        - id: business
+          path: .starciwork/features/<feature>/{fr,nfr,br,decision,data,journey}/**/index.yaml
+          purpose:
+            en: Read accepted requirements, decisions, constraints and acceptance IDs declared as relevant
+              inputs in the selected .starciwork graph. Intent governs expected behavior; source is
+              not a replacement. Do not invent a mandatory BA predecessor for a scope that does not
+              require one; a needed missing input is a reported graph/scope gap, not a new
+              dependency silently added here.
+        - id: architecture
+          path: .starciwork/features/<feature>/{sds,contract,integration}/**/index.yaml
+          purpose:
+            en: Read the current reviewed SDS seed and exact SRS mappings for the selected delivery slice.
+              Architecture remains todo until this reconciliation proves the same current source and
+              runtime revision; source cannot silently replace its logical contracts.
+        - id: repo
+          path: <app>/<bound-paths>
+          purpose:
+            en: Source implementation still needs an actual selected writable repository.
+        - id: proofs
+          path: selected SRS/SDS/implementation/test/E2E/UAT nodes and original evidence bundles
+          purpose:
+            en: Read original assets, assertion observations, input digests, source identity/commit lineage,
+              test and E2E results, served runtime revision and UAT captures. Every required layer
+              must bind the same current delivery revision; chat summaries are navigation hints, not
+              acceptance proof.
+      writes:
+        - id: node
+          path: selected requirement/design/implementation/test/E2E/UAT index.yaml records
+          fields: [state, evidence, blockedBy, owners]
+          content:
+            en: Read semantic content unchanged and write only state/evidence/blockedBy - plus, on each selected
+              work/sds-component@1, its sds-component owners, which architecture.decide leaves absent - the
+              role and path module roots of the done implementation records whose proves names the component,
+              copied from those records as written (app-relative, be/... or fe/...), never guessed;
+              a component no done implementation proves keeps none. Author state done only
+              on the selected required records after one current reconciliation manifest binds every
+              requirement, design, implementation, test/E2E and UAT proof demand to the same
+              delivery revision. Otherwise keep affected records todo, record blockedBy where
+              applicable and return partial or blocked. Findings, commit mappings and remaining
+              cleanup belong to evidence, never rewritten record prose.
+        - id: evidence
+          path: evidence/manifest.yaml
+          fields:
+            - id
+            - nodeId
+            - inputDigest
+            - bindings:[nodeId,inputDigest]
+            - outcome
+            - assertions
+            - assets
+            - provenance
+            - sourceIdentity
+            - codeRefs
+            - extensions
+          content:
+            en: "Record requirement IDs, source/evidence refs, actual verification and discrepancy list;
+              preserve deferred and untested work explicitly. Operator-specific observed result in
+              evidence/result.md: For each AC list expected, enforcing source, proving evidence, actual,
+              freshness and gap owner; no business done/implemented flag is copied over an
+              incomplete tree. The manifest's primary nodeId/inputDigest plus bindings[] cover every
+              selected leaf, and sourceIdentity binds the exact tested commits/build represented by
+              the reconciliation."
+        - id: evidence-reconciliation
+          path: evidence/reconciliation.json
+          content:
+            en: Retain only the selected business reconciliation.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-result
+          path: evidence/result.md
+          content:
+            en: Retain only the selected business result.md at this exact destination; its scope and provenance remain those of evidence.
+      steps:
+        - reads:
+            - target
+            - business
+            - architecture
+            - proofs
+            - repo
+          writes: []
+          action:
+            en: Resolve original requirement/evidence versions and delivered repository commits; reject
+              stale/missing refs before claiming enforcement.
+        - reads:
+            - business
+            - architecture
+            - repo
+            - proofs
+          writes: [evidence, evidence-reconciliation, evidence-result]
+          action:
+            en: Compare each required business dimension and mapped design contract to delivered code and
+              independent observations, including denial and persistence where required. Existing
+              tests proving another behavior do not close this AC. Reject mixed input digests,
+              commits, served builds or revisions even when each isolated result is green.
+        - reads:
+            - business
+            - architecture
+            - proofs
+            - target
+          writes: [node, evidence, evidence-reconciliation, evidence-result]
+          action:
+            en: Record pass, discrepancy, stale and unproven rows plus named owners. Keep each layer's evidence
+              distinct while binding the shared reconciliation revision. Never edit expected to
+              match actual or waive missing scope without a real decision.
+        - reads:
+            - target
+            - proofs
+          writes: [node, evidence, evidence-reconciliation, evidence-result]
+          action:
+            en: Validate all refs and the complete SRS-to-UAT evidence chain. Author done only when every
+              required selected leaf is current and bound to the same revision; otherwise keep todo
+              and report partial or blocked with the missing/stale layer named. Stop; proposing a
+              next repair does not execute it.
+      proofs:
+        - id: binding
+          requirement:
+            en: Run the record-class validator `starci runtime validate` and, on every record directory it writes, `starci runtime validate --strict`; every cited ID/path exists or is explicitly
+              proposed, required assertions are covered, input bindings are current, and an honest
+              not-run/fail cannot earn done.
+        - id: reconciliation
+          requirement:
+            en: Every selected required AC and SDS mapping is genuinely supported by current implementation,
+              test/E2E and UAT evidence at the same delivery revision. E2E and UAT rows are required only
+              when the plan selected an e2e.verify or uat.* leg (the goal explicitly asked for it);
+              otherwise they are recorded not-selected, never a gap. Unresolved, stale, skipped or
+              cross-revision rows remain visible, keep the leaves todo and cannot certify the parent
+              complete.
+      blockers:
+        - code: DELIVERY_UNPROVEN
+          condition:
+            en: A required claim has no coherent code/evidence revision or contradicts observed behavior.
+        - code: DELIVERY_CHAIN_INCOMPLETE
+          condition:
+            en: Any required SRS, SDS, implementation, test/E2E or UAT link is missing, stale, skipped, failing
+              or bound to a different delivery revision; return partial or blocked and never done.
+      placeholders:
+        feature: Selected feature slug
+        app: The bound app checkout (its root); every path written <app>/<path> is app-relative - be/..., fe/..., .starciwork/... or a path of the app root
+        bound-paths: Inspected source read set
+        environment: Resolved environment resource slug
+        identity: Selected actor resource slug
+        fixture: Selected fixture resource slug
+        resource: Selected owned resource slug
+        screen: Selected surface/state slug
+    workflow:
+      id: review.verify
+      goal:
+        en: Inspect selected peer/piece outcomes against one task purpose without running or changing their
+          work.
+      nodeKinds: [operations]
+      completionProfile: operations
+      sideEffects: []
+      graphPolicy:
+        mode: read-only
+        location: .starciwork node dependsOn/refs with direct sourceRefs and collocated assets
+        prerequisiteState: done
+        dispatch: never
+      reads:
+        - id: target
+          path: N/index.yaml
+          purpose:
+            en: This consumer op requires its target node to exist.
+        - id: assignments
+          path: actual selected task/piece assignments + original node IDs
+          purpose:
+            en: Read the explicitly selected peer set, exact goals, owned write scopes and delivered result
+              locations. Do not infer another task identity from a title or send a self-message as
+              peer delivery.
+        - id: repo
+          path: <app>/<bound-paths>
+          purpose:
+            en: Source implementation still needs an actual selected writable repository.
+        - id: proofs
+          path: selected peers original .starciwork nodes and evidence
+          purpose:
+            en: Read original current requirement/code/evidence, not a summarized pass. Task messages may locate
+              proof but cannot replace it.
+        - id: deliveryChain
+          path: selected final SRS/SDS/code/test-E2E/UAT reconciliation evidence
+          purpose:
+            en: For a product-delivery workflow, read the final reconciliation manifest and verify every
+              required layer binds the same current delivery revision. A collection of individually
+              green peer reports is not a complete delivery chain.
+      writes:
+        - id: node
+          path: N/index.yaml
+          fields: [state, blocker, completion.inputDigest, completion.evidence]
+          content:
+            en: Read the existing selected scope, expected assertions and .starciwork graph unchanged.
+        - id: evidence
+          path: evidence/manifest.yaml
+          fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+          content:
+            en: "Retain source/evidence identity checks and task-to-piece coverage; no invented delivery receipt
+              or automatic follow-up message. Operator-specific observed result in evidence/result.md: Map
+              task done-when to selected peer node IDs and actual repository delivery. Record
+              missing peer proof, conflicting ownership and integration gaps without modifying their
+              states."
+        - id: evidence-portfolio-review
+          path: evidence/portfolio-review.json
+          content:
+            en: Retain only the selected workflow portfolio-review.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-result
+          path: evidence/result.md
+          content:
+            en: Retain only the selected workflow result.md at this exact destination; its scope and provenance remain those of evidence.
+      steps:
+        - reads:
+            - assignments
+            - target
+          writes: [node]
+          action:
+            en: Freeze the selected purpose/peer set for this review and resolve exact node and repository
+              identities. A missing peer locator is unknown, not permission to search unrelated
+              tasks.
+        - reads:
+            - proofs
+            - deliveryChain
+            - repo
+            - assignments
+          writes: [evidence, evidence-portfolio-review, evidence-result]
+          action:
+            en: Read each original outcome and actual delivered bytes/commit; compare every assigned goal line
+              and required assertion with its proof. Verify integration lineage and current versions
+              separately.
+        - reads:
+            - target
+            - assignments
+            - proofs
+            - deliveryChain
+          writes: [node, evidence, evidence-portfolio-review, evidence-result]
+          action:
+            en: Report aggregate scope coverage, absent/failed/stale evidence and cross-piece conflicts. A
+              product-delivery workflow may pass only when its final reconciliation proves current
+              SRS, SDS, code, test/E2E and UAT at one revision; otherwise report partial or blocked
+              even if every scheduled peer job settled. Preserve peer states, source, runtimes and
+              messages; finish without dispatching another op.
+      proofs:
+        - id: portfolio
+          requirement:
+            en: Every claimed peer contribution has direct inspectable proof and purpose mapping; a green
+              summary alone is rejected. Product-delivery completion additionally requires the
+              current same-revision SRS/SDS/code/test-E2E/UAT reconciliation manifest.
+      blockers:
+        - code: PEER_PROOF_MISSING
+          condition:
+            en: Selected peer identity, original evidence or actual delivery revision cannot be resolved.
+        - code: DELIVERY_CHAIN_INCOMPLETE
+          condition:
+            en: Final reconciliation is absent or any required SRS, SDS, code, test/E2E or UAT evidence is
+              missing, stale, failing or bound to another revision.
+        - code: DECLARED_DEPENDENCY_UNMET
+          condition:
+            en: A declared prerequisite is not effectively done, or a required declared input/scope is missing.
+              Report node/resource IDs and propose a separately selected graph update when needed;
+              never run predecessors or weaken dependsOn/refs/required to proceed.
+      placeholders:
+        feature: Selected feature slug
+        app: The bound app checkout (its root); every path written <app>/<path> is app-relative - be/..., fe/..., .starciwork/... or a path of the app root
+        bound-paths: Inspected source read set
+        environment: Resolved environment resource slug
+        identity: Selected actor resource slug
+        fixture: Selected fixture resource slug
+        resource: Selected owned resource slug
+        screen: Selected surface/state slug
+    visual:
+      id: review.verify
+      goal:
+        en: Inspect actual rendered selected screens and record truthful visual acceptance independently of
+          implementation.
+      nodeKinds: [uat.ui]
+      completionProfile: uat.ui
+      sideEffects: [authorized navigation/sign-in and non-destructive UI state setup]
+      graphPolicy:
+        mode: read-only
+        location: .starciwork node dependsOn/refs with direct sourceRefs and collocated assets
+        prerequisiteState: done
+        dispatch: never
+      reads:
+        - id: target
+          path: N/index.yaml
+          purpose:
+            en: This consumer op requires its target node to exist.
+        - id: business
+          path: .starciwork/features/<feature>/{fr,nfr,br,decision,data,journey}/**/index.yaml
+          purpose:
+            en: Intent governs expected behavior; source is not a replacement.
+        - id: repo
+          path: <app>/<bound-paths>
+          purpose:
+            en: Source implementation still needs an actual selected writable repository.
+        - id: environment
+          path: .starciwork/_resources/environments/<environment>/resource.yaml
+          purpose:
+            en: Read exact target/origins, owner, configuration revision, declared probes and allowed effects;
+              validate live observations without inferring identity from hostname alone.
+        - id: identity
+          path: .starciwork/_resources/identities/<identity>/resource.yaml
+          purpose:
+            en: For authenticated/identity-changing scope, read actor alias, provider subject, roles/membership
+              refs, environment and sealed custody reference; never print/copy credentials. Explicit
+              anonymous scope records anonymous instead, without inventing an account resource.
+        - id: design
+          path: .starciwork/_resources/design/<resource>/resource.yaml + accepted visual evidence
+          purpose:
+            en: Read actual accepted design/state/viewport expectations and relevant installed UI proof rules;
+              do not require a nonexistent universal design grammar.
+      writes:
+        - id: node
+          path: N/index.yaml
+          fields: [state, blocker, completion.inputDigest, completion.evidence]
+          content:
+            en: Read the existing selected scope, expected assertions and .starciwork graph unchanged.
+        - id: evidence
+          path: evidence/manifest.yaml
+          fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+          content:
+            en: "Capture real image bytes, viewport/theme/route/state and actual DOM/computed measurements.
+              Provenance includes environment, actor or anonymous, servedVersions, tool, capturedAt,
+              servedVersionEvidence assertion. Images must be opened and inspected.
+              Operator-specific observed result in evidence/result.md: Bind environment, actor or anonymous
+              and all served repositories in refs. Record current findings without restyling source
+              or altering acceptance."
+        - id: evidence-screen
+          path: evidence/<screen>.png
+          content:
+            en: Retain only the selected visual <screen>.png at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-measurements
+          path: evidence/measurements.json
+          content:
+            en: Retain only the selected visual measurements.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-runtime
+          path: evidence/runtime.json
+          content:
+            en: Retain only the selected visual runtime.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-review
+          path: evidence/review.md
+          content:
+            en: Retain only the selected visual review.md at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-result
+          path: evidence/result.md
+          content:
+            en: Retain only the selected visual result.md at this exact destination; its scope and provenance remain those of evidence.
+      steps:
+        - reads:
+            - target
+            - business
+            - repo
+            - design
+          writes: [node]
+          action:
+            en: Select only the requested screen/state matrix and acceptance assertions. Read actual
+              implementation ownership and accepted design; do not substitute a generated concept
+              for the target.
+        - reads:
+            - environment
+            - identity
+            - repo
+            - target
+          writes: [evidence, evidence-screen, evidence-measurements, evidence-runtime, evidence-review, evidence-result]
+          action:
+            en: Apply common browser provenance and isolation protocol. Verify actual rendered product
+              login/state and served build, not just URL/HTTP 200. Anonymous paths explicitly omit
+              authenticated identity.
+        - reads:
+            - design
+            - target
+            - environment
+          writes: [evidence, evidence-screen, evidence-measurements, evidence-runtime, evidence-review, evidence-result]
+          action:
+            en: Reach each selected state using observed controls, capture actual viewport/theme and retain
+              local hashed images. Inspect the images for hierarchy, density, text/content,
+              overflow, responsive arrangement and reference fidelity.
+        - reads:
+            - design
+            - target
+            - business
+          writes: [evidence, evidence-screen, evidence-measurements, evidence-runtime, evidence-review, evidence-result]
+          action:
+            en: Measure applicable contrast, computed layout, focus/keyboard behavior and motion/reduced-motion
+              with actual tool observations. Label subjective design judgement separately from
+              numeric measurements. When the brand record declares a colour token with a valueSource
+              (planned from a reference render), run `starci work brand <work-root> --source
+              <repository-root> --stage verify` and retain its output; a planned token the app source
+              still does not declare (planned-source-missing) is a failed assertion routed to
+              interface.implement, never accepted on its reference.
+        - reads:
+            - target
+            - design
+          writes: [node, evidence, evidence-screen, evidence-measurements, evidence-runtime, evidence-review, evidence-result]
+          action:
+            en: Write per-assertion pass/fail/not-run/inconclusive and owner-routed defects. Missing
+              runtime/capture is a blocker; known visual failure remains fail. Validate and stop
+              without source fixes or UAT behavioral certification.
+      proofs:
+        - id: visual
+          requirement:
+            en: Required UI assertions pass with real inspected local PNG/JPEG/WebP assets and passing
+              served-version observation. Hash integrity alone is insufficient.
+      blockers:
+        - code: CAPTURE_UNAVAILABLE
+          condition:
+            en: Selected state cannot be reached/captured on the verified product runtime.
+        - code: IDENTITY_UNPROVEN
+          condition:
+            en: Guarded state lacks authorized actor/custody or real authenticated product content.
+      placeholders:
+        feature: Selected feature slug
+        app: The bound app checkout (its root); every path written <app>/<path> is app-relative - be/..., fe/..., .starciwork/... or a path of the app root
+        bound-paths: Inspected source read set
+        environment: Resolved environment resource slug
+        identity: Selected actor resource slug
+        fixture: Selected fixture resource slug
+        resource: Selected owned resource slug
+        screen: Selected surface/state slug
+    api:
+      id: review.verify
+      goal:
+        en: Verify a selected API contract against the real served target with isolated authorized effects.
+      nodeKinds: [uat.ux]
+      completionProfile: uat.ux
+      sideEffects:
+        - declared API test writes within owned namespace; no provisioning, deploy or broad cleanup
+      graphPolicy:
+        mode: read-only
+        location: .starciwork node dependsOn/refs with direct sourceRefs and collocated assets
+        prerequisiteState: done
+        dispatch: never
+      reads:
+        - id: application-stacks
+          path: knowledge/application-stacks.yaml + docs/application-stacks.md +
+            docs/application-stacks.md + modules/schemas/application-stacks.schema.yaml
+          purpose:
+            en: Reconcile component ownership, encrypted credential custody, lifecycle commands and existing
+              consumers. This conditional read grants no extra deployment or source scope.
+        - id: target
+          path: N/index.yaml
+          purpose:
+            en: This consumer op requires its target node to exist.
+        - id: business
+          path: .starciwork/features/<feature>/{fr,nfr,br,decision,data,journey}/**/index.yaml
+          purpose:
+            en: Intent governs expected behavior; source is not a replacement.
+        - id: repo
+          path: <app>/<bound-paths>
+          purpose:
+            en: Source implementation still needs an actual selected writable repository.
+        - id: identity
+          path: .starciwork/_resources/identities/<identity>/resource.yaml
+          purpose:
+            en: Explicit anonymous scope records anonymous instead, without inventing an account resource.
+        - id: fixture
+          path: .starciwork/_resources/fixtures/<fixture>/resource.yaml
+          purpose:
+            en: When fixture inputs are needed, read their revision, owned namespace/IDs, expected precondition,
+              creation method, cleanup owner and exact allowed deletion set; never preseed tested
+              outcomes. Explicit no-fixture scope records why no mutable prerequisite/cleanup
+              applies, without a fabricated fixture.
+        - id: suite
+          path: actual repository API test suite + selected architecture contract
+          purpose:
+            en: Read real suite command/cases, API schema/auth/error/transaction expectations and selected
+              required assertions. Missing suite is a source-owner gap, not fabricated passing
+              cases.
+      writes:
+        - id: node
+          path: N/index.yaml
+          fields: [state, blocker, completion.inputDigest, completion.evidence]
+          content:
+            en: Read the existing selected scope, expected assertions and .starciwork graph unchanged.
+        - id: evidence
+          path: evidence/manifest.yaml
+          fields: [id, nodeId, inputDigest, outcome, assertions, assets, provenance, codeRefs, extensions]
+          content:
+            en: "Store actual suite cases and result output, status/error/schema checks, read-back and lifecycle
+              observations, namespace effects and runtime provenance. API proof is not UI proof.
+              Operator-specific observed result in evidence/result.md: Bind actor/environment/repositories,
+              preserve selected API expectations and name untested or failed cases."
+        - id: evidence-api-result
+          path: evidence/api-result.json
+          content:
+            en: Retain only the selected api api-result.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-readback
+          path: evidence/readback.json
+          content:
+            en: Retain only the selected api readback.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-runtime
+          path: evidence/runtime.json
+          content:
+            en: Retain only the selected api runtime.json at this exact destination; its scope and provenance remain those of evidence.
+        - id: evidence-result
+          path: evidence/result.md
+          content:
+            en: Retain only the selected api result.md at this exact destination; its scope and provenance remain those of evidence.
+      steps:
+        - reads:
+            - application-stacks
+            - target
+            - business
+            - suite
+            - repo
+          writes: []
+          action:
+            en: Bind required assertions to actual suite cases and verify test/runner revision. Identify
+              undeclared effects before running, without rewriting product cases here.
+        - reads:
+            - identity
+            - fixture
+            - repo
+          writes: [evidence, evidence-api-result, evidence-readback, evidence-runtime, evidence-result]
+          action:
+            en: Verify target physical/runtime version, authorization and owned fixture preconditions;
+              distinguish anonymous cases from authenticated actors. Do not seed tested outcomes.
+        - reads:
+            - suite
+            - identity
+            - fixture
+          writes: [evidence, evidence-api-result, evidence-readback, evidence-runtime, evidence-result]
+          action:
+            en: Execute the actual declared API client suite with isolated inputs and preserve redacted
+              request/result diagnostics. Copy only cases the runner reported; missing output is
+              not-run or inconclusive.
+        - reads:
+            - business
+            - suite
+            - fixture
+          writes: [evidence, evidence-api-result, evidence-readback, evidence-runtime, evidence-result]
+          action:
+            en: Check response contract, persistent read-back and lifecycle/authorization independently,
+              including replay/idempotency or denial where promised. Observe owned effects and
+              cleanup status; do not delete outside an explicitly selected safe set.
+        - reads:
+            - target
+            - suite
+          writes: [node, evidence, evidence-api-result, evidence-readback, evidence-runtime, evidence-result]
+          action:
+            en: Record per-assertion verdict and actual served-version evidence, validate bindings and finish
+              without UI claims or source repair.
+      proofs:
+        - id: api
+          requirement:
+            en: Required contract/data/lifecycle observations pass with actual behavior assertion and verified
+              served build; no guessed API case or unconditional HTTP-200 success.
+      blockers:
+        - code: SUITE_MISSING
+          condition:
+            en: Required API behavior has no executable declared case or cannot be reached safely.
+        - code: NAMESPACE_CONFLICT
+          condition:
+            en: Test data overlaps shared/foreign state or effect authorization is insufficient.
+      placeholders:
+        feature: Selected feature slug
+        app: The bound app checkout (its root); every path written <app>/<path> is app-relative - be/..., fe/..., .starciwork/... or a path of the app root
+        bound-paths: Inspected source read set
+        environment: Resolved environment resource slug
+        identity: Selected actor resource slug
+        fixture: Selected fixture resource slug
+        resource: Selected owned resource slug
+        screen: Selected surface/state slug
+    lint:
+      id: review.verify
+      goal:
+        en: Execute the selected architecture, Work and stack static checks and retain precise findings
+          without repairing source or changing policy.
+      nodeKinds: [operations]
+      completionProfile: operations
+      sideEffects:
+        - Write only the selected attempt's static-check reports; no auto-fix, source mutation,
+          stack operation or completion rewrite.
+      graphPolicy:
+        mode: read-only
+        location: .starciwork node dependsOn/refs with direct sourceRefs and collocated assets
+        prerequisiteState: done
+        dispatch: never
+      reads:
+        - id: request
+          path: selected lint request + resolved host project binding
+          purpose:
+            en: Identify exact repositories, projects, Work root and optional stack profiles. Select only
+              required checks; do not infer deployment or repair authority.
+        - id: policy
+          path: docs/code-pattern-enforcement.md +
+            modules/models/code-patterns.yaml + docs/architecture.md +
+            docs/application-stacks.md + scripts/gates/canon-scan.mjs
+          purpose:
+            en: Read the applicable FE/BE responsibility boundaries and static-check limits for mono or separate
+              repositories, accepted Work ownership and selected Docker/native stack declarations.
+        - id: inputs
+          path: actual repository tsconfig and package exports + canonical Work + selected rendered stack
+            model
+          purpose:
+            en: Resolve actual projects and TypeScript, declared aliases, source bindings and stack model. No
+              missing project, compiler, root, profile or artifact may silently produce a green
+              report.
+      writes:
+        - id: evidence
+          path: evidence/lint-commands.json
+          fields: [commands, exitCodes, runtimeDigest, inputBindings, reports, coverage, limitations]
+          content:
+            en: Store selected checker commands, identities and summaries in the Work proof, preserving
+              violations and unknown coverage; attach raw checker outputs from STARCI_JOB_SCRATCH through starci kernel report.
+      steps:
+        - reads:
+            - request
+            - policy
+            - inputs
+          writes: [evidence]
+          action:
+            en: Execute the whole-repository starci app lint (starci app lint --cwd ROOT --format json, the app's own install) for every selected
+              FE/BE source repository with the actual project bindings. This one lint runs the canon's
+              per-file and project-graph rules and the repository checks with exact rule/file coverage;
+              a repository's other package lint cannot substitute for it. Execute starci runtime validate for
+              selected canonical Work and starci-stacks-check for selected materialized stack
+              profiles. Inspect each repository's real package scripts and run its additional
+              required non-mutating lint/typecheck commands; a script that auto-fixes source is not
+              a checking command. When the goal carries a code.refactor
+              leg with params.canonFamilies, also execute starci gate canon-scan --root
+              ROOT --families <that value> --json for each selected repository - the repository's own
+              lint config against this runtime's canon source plus the architecture check - and
+              keep its raw report under STARCI_JOB_SCRATCH and attach it at starci kernel report; the conformance gate is its status ok.
+              MEASUREMENT versus GATE - a lint leg with no build leg settled before it (the first
+              review.verify#lint of a canon-conformance chain, params.lintRole measurement or auto) is a MEASUREMENT - its
+              findings and slices are the input the code.refactor cut executes, so it files outcome done
+              with every finding retained in the attached lint-reports.json and each checker's real exit code in
+              report.checks, even when the goal's final gate (canon-scan status ok) is red. Only a checker
+              that did not measure fails it (canon-scan exit 2/3, a crashed or unresolvable run) -
+              failureClass tool. The lint leg after the build legs (params.lintRole gate, or auto once a build settled) is the GATE - its
+              findings are failed with failureClass findings and a rootCause naming the build op that
+              owns them (node code.refactor, backend.implement or interface.implement, files the paths),
+              and the kernel routes one repair of that op - never a re-run of the same measurement at an
+              unchanged HEAD.
+              Capture each original report and exit code. This whole-repository starci app lint is the repository measurement, while a
+              delivery slice is judged by its own gate.json (new findings only). Do not run fix flags, hide files, lower rules or replace machine output with
+              prose. An unavailable required checker or unresolved target fails the gate. Route
+              measured findings to separately authorized owners; static pass never proves runtime
+              dependency injection, live startup, browser UAT or business correctness.
+      proofs:
+        - id: executed-checks
+          requirement:
+            en: Every requested static check actually executes with declared coverage. A read-only lint
+              measurement completes (outcome done) with typed violations retained as findings - starci kernel record-checks
+              marks a measurement leg's findings exits as measured and settle refuses to fail it on them
+              (measurement-findings-are-the-result); a
+              delivery/static-conformance gate passes only when every required exit code is zero.
+              Missing, malformed or unavailable inputs fail the audit and never become findings or
+              clean coverage.
+        - id: bounded-meaning
+          requirement:
+            en: The result explicitly separates static architecture/metadata conformance from runtime,
+              behavioral and deployment proof. It grants no source repair or product completion
+              authority.
+      blockers:
+        - code: CHECK_UNAVAILABLE
+          condition:
+            en: Required compiler, script, project config, Work binding or rendered model is absent or invalid.
+        - code: STATIC_VIOLATION
+          condition:
+            en: A required checker reports a violation; retain its file, location and rule identifier for the
+              owning repair.
+        - code: SOURCE_CHANGED
+          condition:
+            en: Selected inputs changed during measurement and results no longer bind one coherent checkpoint.
+      placeholders: {}
+route:
+  nodeKinds: [operations]
+  phase: [verify, post-implementation]
+  intent: [review, verify, audit, delivery]
+  prerequisites: [a delivery to inspect]

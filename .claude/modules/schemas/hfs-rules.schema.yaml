@@ -1,0 +1,278 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:starci:hfs-rules:3
+title: HFS rule catalog
+description: >-
+  The shape of knowledge/hfs/rules.yaml. Semantic rules JSON Schema cannot state (ids unique and increasing, a failure code
+  named by one rule only, the first failure code is the rule's own code, an existing non-eslint enforcer names its file,
+  gate claims match the rule's scope, the sonar gate needs a sonar enforcer) are checked by
+  scripts/hfs/rule-catalog.mjs loadRuleCatalog. Whether the named eslint rules, files and catalog entries exist is
+  scripts/checks/check-hfs-rules.mjs.
+type: object
+additionalProperties: false
+required: [schema, version, gates, enforcerKinds, rules]
+properties:
+  schema: {const: starci/hfs-rules@3}
+  version:
+    type: string
+    pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+    description: MAJOR.MINOR.PATCH. The major equals the number after @ in `schema` and the major of knowledge/hfs/slots.yaml.
+  gates:
+    type: object
+    additionalProperties: false
+    required: [pre-commit, pre-push, settle, land, ci, sonar, runtime]
+    properties:
+      pre-commit: {type: string, minLength: 1}
+      pre-push: {type: string, minLength: 1}
+      settle: {type: string, minLength: 1}
+      land: {type: string, minLength: 1}
+      ci: {type: string, minLength: 1}
+      sonar: {type: string, minLength: 1}
+      runtime: {type: string, minLength: 1}
+  enforcerKinds:
+    type: object
+    additionalProperties: false
+    required: [eslint-be, eslint-fe, stylelint, machine, hfs, work-validate, sonar, runtime]
+    properties:
+      eslint-be: {type: string, minLength: 1}
+      eslint-fe: {type: string, minLength: 1}
+      stylelint: {type: string, minLength: 1}
+      machine: {type: string, minLength: 1}
+      hfs: {type: string, minLength: 1}
+      work-validate: {type: string, minLength: 1}
+      sonar: {type: string, minLength: 1}
+      runtime: {type: string, minLength: 1}
+  rules:
+    type: array
+    minItems: 1
+    items: {$ref: '#/$defs/rule'}
+$defs:
+  rule:
+    type: object
+    additionalProperties: false
+    required: [id, code, law, kinds, gates, failureCodes, enforcers]
+    properties:
+      id: {type: string, pattern: '^R[0-9]{2,3}$'}
+      code:
+        type: string
+        pattern: '^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$'
+        description: The rule's finding code, a key of modules/kernel/failure-codes.yaml.
+      law: {type: string, minLength: 1, description: The rule in one English line.}
+      scope: {const: runtime, description: 'Present only on a rule that governs the StarCi runtime repository itself (a RT_* law); a product rule is cited by the hfsRules of at least one knowledge/patterns topic instead (R193 judges both directions).'}
+      amendedBy:
+        $ref: '#/$defs/caseReferences'
+        description: Successor rules or owner rulings that amend part of this rule without retiring its remaining law.
+      kinds:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {enum: [codemod, lint, check, design]}
+        description: How a violation is fixed and blocked - codemod, lint (eslint or stylelint), check (machine, hfs or work-validate), design (a person or Opus decides).
+      gates:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {enum: [pre-commit, pre-push, settle, land, ci, sonar, runtime]}
+        description: Product rules name land or ci as a release gate; runtime-scoped rules may instead name runtime. The loader checks this requirement.
+      failureCodes:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {type: string, pattern: '^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$'}
+        description: The rule's own code first, then any sub-check codes that report the same rule.
+      editions:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {enum: [full, lite]}
+        description: The editions that judge this rule (default both). A rule that names editions without lite is not judged in a lite app, and its finding codes are dropped by the one findings filter (checkRepo and checkRepository); an app cannot opt out of a rule, it can only pick an edition (R16, R17).
+      codeEditions:
+        type: object
+        minProperties: 1
+        propertyNames: {type: string, pattern: '^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$'}
+        additionalProperties: {$ref: '#/$defs/editions'}
+        description: Per-code edition subsets for codes owned by this rule; omitted codes inherit the rule's editions. The loader verifies ownership and that each list is a subset of the rule's editions.
+      editionWhy:
+        type: string
+        minLength: 1
+        description: The reason for an edition difference, citing the owner ruling case that authorizes it; the coverage check resolves the citation.
+      templateNa:
+        type: string
+        minLength: 1
+        pattern: '\S'
+        description: Why this rule has no scaffolded surface and therefore needs no rule template; required or managed slot templates remain checked separately.
+      docs:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          oneOf:
+            - {$ref: '#/$defs/docPath'}
+            - {$ref: '#/$defs/docEvidence'}
+        description: Repository-relative documentation paths with optional anchors; a string covers both editions, a map can select one edition or an editions list.
+      exemplifiedBy:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          oneOf:
+            - {$ref: '#/$defs/repoPath'}
+            - {$ref: '#/$defs/proof'}
+        description: Repository-relative example, dedicated fixture or spec-helper paths containing a conforming instance, optionally scoped to editions, finding codes and fixture ids.
+      proves:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          oneOf:
+            - {$ref: '#/$defs/repoPath'}
+            - {$ref: '#/$defs/proof'}
+        description: Spec paths, optionally scoped to editions, finding codes and fixture ids; the coverage check reads the spec's proves headers.
+      witness:
+        oneOf:
+          - type: array
+            minItems: 1
+            uniqueItems: true
+            items:
+              oneOf:
+                - {$ref: '#/$defs/witness'}
+                - {$ref: '#/$defs/proof'}
+        description: Mutations that make a conforming example emit the expected codes, or dedicated fixture or spec-helper references with violating and passing evidence. A rule judged only inside the runtime (RUNTIME_ONLY_ENFORCERS) needs none.
+      enforcers:
+        type: array
+        minItems: 1
+        items: {$ref: '#/$defs/enforcer'}
+      cases:
+        type: array
+        minItems: 1
+        items: {$ref: '#/$defs/case'}
+        description: 'The dated owner rulings that shaped the rule, oldest first: a ruling is recorded where its law lives, never in a side document.'
+  case:
+    type: object
+    additionalProperties: false
+    required: [id, date, source, ruling]
+    properties:
+      id: {type: string, pattern: '^case-[1-9][0-9]*$'}
+      date: {type: string, pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'}
+      source: {const: owner}
+      ruling: {type: string, minLength: 1, description: The ruling in English, as the rule now applies it.}
+      quote: {type: string, minLength: 1, description: 'The owner''s words, in English (an owner message in Vietnamese is quoted in translation: the knowledge is English, R96).'}
+      supersedes:
+        $ref: '#/$defs/caseReferences'
+        description: Earlier cases or owner rulings replaced by this case; case-N refers to this rule.
+      status: {enum: [live, superseded, amended], description: 'The current state of this ruling; absent means live.'}
+      staleWhen:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {type: string, minLength: 1}
+        description: Case-insensitive JavaScript regexes for obsolete wording; the loader checks regex syntax and the coverage check finds stale citations outside the case and CHANGELOGs.
+      amendedBy:
+        $ref: '#/$defs/caseReferences'
+        description: Successor cases or owner rulings that amend this case.
+  enforcer:
+    type: object
+    additionalProperties: false
+    required: [kind, id]
+    properties:
+      kind: {enum: [eslint-be, eslint-fe, stylelint, machine, hfs, work-validate, sonar, runtime]}
+      id: {type: string, pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'}
+      editions:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {enum: [full, lite]}
+        description: 'The editions this ONE enforcer runs in (default the editions of its rule); lets a rule that stays in lite keep a single full-only lint rule, for example the GraphQL-preference law of the doors.'
+      editionWhy:
+        type: string
+        minLength: 1
+        description: The reason for this enforcer's edition difference, citing the owner ruling case that authorizes it.
+      status: {const: planned, description: Present only while the enforcer is owed; absent means it exists.}
+      at: {type: string, minLength: 1, description: Repository-relative file that emits one of the rule's failure codes; only an existing machine, hfs, work-validate or runtime enforcer carries it.}
+  repoPath:
+    type: string
+    minLength: 1
+    pattern: '^(?!\s)(?!.*\s$)(?!.*(?:^|/)\.\.?(?:/|$))[^/\\#:\r\n\u0000]+(?:/[^/\\#:\r\n\u0000]+)*$'
+    description: A repository-relative path using forward slashes, without empty, dot or parent segments; glob segments are accepted for example references.
+  docPath:
+    type: string
+    minLength: 1
+    pattern: '^(?!\s)(?!.*\s$)(?!.*(?:^|/)\.\.?(?:/|#|$))[^/\\#:\r\n\u0000]+(?:/[^/\\#:\r\n\u0000]+)*(?:#[A-Za-z0-9][A-Za-z0-9_.:-]*)?$'
+  editions:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items: {enum: [full, lite]}
+  findingCodes:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items: {type: string, pattern: '^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$'}
+  evidence:
+    type: object
+    additionalProperties: false
+    required: [path]
+    not: {required: [edition, editions]}
+    properties:
+      path: {$ref: '#/$defs/repoPath'}
+      edition: {enum: [full, lite]}
+      editions: {$ref: '#/$defs/editions'}
+  docEvidence:
+    type: object
+    additionalProperties: false
+    required: [path]
+    not: {required: [edition, editions]}
+    properties:
+      path: {$ref: '#/$defs/docPath'}
+      edition: {enum: [full, lite]}
+      editions: {$ref: '#/$defs/editions'}
+  proof:
+    type: object
+    additionalProperties: false
+    required: [path]
+    not: {required: [edition, editions]}
+    properties:
+      path: {$ref: '#/$defs/repoPath'}
+      edition: {enum: [full, lite]}
+      editions: {$ref: '#/$defs/editions'}
+      codes: {$ref: '#/$defs/findingCodes'}
+      fixtures:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {type: string, minLength: 1}
+  witness:
+    type: object
+    additionalProperties: false
+    required: [edition, base, mutate, expect]
+    properties:
+      edition: {enum: [full, lite]}
+      base: {$ref: '#/$defs/repoPath'}
+      mutate:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {$ref: '#/$defs/mutation'}
+      expect: {$ref: '#/$defs/findingCodes'}
+  mutation:
+    type: object
+    additionalProperties: false
+    required: [op, path]
+    properties:
+      op: {enum: [add, edit, delete]}
+      path: {$ref: '#/$defs/repoPath'}
+      content: {type: string}
+    allOf:
+      - if: {properties: {op: {enum: [add, edit]}}, required: [op]}
+        then: {required: [content]}
+      - if: {properties: {op: {const: delete}}, required: [op]}
+        then: {not: {required: [content]}}
+  caseReference:
+    type: string
+    pattern: '^(?:case-[1-9][0-9]*|(?:ruling:)?R[0-9]{2,3}(?:/case-[1-9][0-9]*)?|owner:[a-z][a-z0-9]*(?:-[a-z0-9]+)*)$'
+  caseReferences:
+    oneOf:
+      - {$ref: '#/$defs/caseReference'}
+      - type: array
+        minItems: 1
+        uniqueItems: true
+        items: {$ref: '#/$defs/caseReference'}

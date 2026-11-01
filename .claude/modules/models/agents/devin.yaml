@@ -1,0 +1,113 @@
+schema: starci/agent-card@1
+agent: devin
+kind: native-managed-agent
+model: devin-agent
+modelAuthority: configured-logical-runtime
+why: |-
+  Every agent launches the one way (modules/kernel/start-workflow.yaml): Orca's
+  orchestration worker-start --agent devin places the worker, launches the Devin CLI with the owner's per-agent default
+  args (Orca settings agentDefaultArgs.devin: --permission-mode bypass --respect-workspace-trust false), injects the Task
+  and owns its lifecycle. worker-start takes --model only for Claude, Codex and Cursor, so a Devin worker starts on its
+  CLI's default model: the account-selected model is deliberately not inferred, and attestation checks the agent alone.
+readiness:
+  screenPattern: '(?:Ask Devin|Message Devin|Type your message|Enter a prompt|(^|\n)\s*[>❯❭]\s*$)'
+  identityPattern: 'Devin'
+delivery:
+  mode: file-reference-above-inline-limit
+  prompt: 'Read <file> completely. It is your dispatched Task preamble and operation contract. Follow it exactly and report worker_done exactly once as specified.'
+submission:
+  stagedPattern: 'Pasted Content|\[Pasted text|<file>|orca-dispatch-'
+  activityPattern: 'Thinking|Working|Running|esc to (?:cancel|interrupt)|tokens'
+  settleMs: 3000
+  timeoutMs: 45000
+  maxEnter: 2
+# Liveness overrides of runtimes.yaml allocation.liveness (scripts/kernel/cli.mjs livenessMsOf).
+# Devin redraws nothing while a long tool call runs: its "⠠⠤ Thinking · 32m 53s (esc twice to
+# interrupt)" frame sat unchanged through a 20-minute e2e run, and the 10-minute activeStaleMs called
+# live Devin workers stale-active turn-idle and nudge-ready. Its timer covers the whole turn, not one phase.
+liveness:
+  activeStaleMs: 3600000
+  # Rows that prove a running turn (scripts/lib/terminal-liveness.mjs cardLivenessPatterns): above
+  # the input row with only chrome between, the frame reads active whatever the input row shows.
+  # Devin wraps a long spinner row by words, so the braille row may carry no digit and the last row
+  # of the block may be its hint alone. Captured 2026-09-25 on a live worker (an interface.
+  # implement leg), alternating with the one-row "(esc twice to interrupt)" form:
+  #   "⠀⠴ Writing .\.starciwork\features\collab\impl\todo-"
+  #   "  app-fe\evidence\surface-r2\tools\emit-evidence.mjs · 113m 0s · (1291c ·"
+  #   "  ctrl+o for details · alt+t to toggle)"
+  # The "❭ Guide Devin while it works" placeholder
+  # shows only while a turn runs ("❭ Ask Devin to build features..." at rest), but the rows above decide.
+  busyPatterns:
+    - '^\s*[⠀-⣿]{1,4}\s+\S'
+    - '·\s(?:\d+h\s)?(?:\d+m\s)?\d+s\s(?:·\s\(|\(esc)'
+    - 'ctrl\+o for details\s·\salt\+t\b'
+approvalMode:
+  working: dangerous
+  reasoning: dangerous
+  reason: >-
+    Every dispatched operation already passed the owner goal gate, exact owned-path admission and durable
+    lease fencing. The worker must therefore be non-interactive: per-command permission menus deadlock the
+    workflow without adding authority. Dangerous mode removes the UI prompt; the operation contract,
+    owned paths and Kernel settlement remain the actual boundary.
+start:
+  api: orchestration.worker-start
+  agentArgument: devin
+  # The agent's own approval-bypass mode. Orca applies it from settings.agentDefaultArgs; the host preflight refuses a launch
+  # when that setting lacks it (the agent would stop at an approval prompt no one answers).
+  bypassFlag: '--permission-mode bypass'
+  modelArgument: false
+release:
+  api: orchestration.worker-release
+  # worker-release alone does not end every agent (a released cursor worker kept its cursor-agent process running): the runtime then closes the
+  # worker's terminal and proves that no process of that terminal's shell tree remains (scripts/machine/worker-close.mjs, allocation.workerClose).
+  closeTerminal: true
+  verify: terminal-process-tree
+knownFailures:
+  - signal: 'Unknown model'
+    meaning: The --model flag named an id the account cannot run; the CLI exits before the prompt.
+    action: Fix the model pin in the route or config — do not retry the same id.
+  - signal: 'Agent connection lost: agent child exited: exit code: 0'
+    meaning: The spawned agent child process died; queued sends will not be processed.
+    action: Close the terminal and spawn a fresh agent; do not keep sending into the dead TUI.
+    seenAt: 2026-09-20
+  - signal: 'TUI sits at a permission menu (1 Yes / 2-4 allow-variants / 5 bypass / 8 No)'
+    meaning: Command approval is being asked per tool; the agent is stalled waiting for input.
+    action: 'Send "5" + Enter once (session bypass) — do not answer individual allows, they re-prompt per command kind.'
+    seenAt: 2026-09-20
+  - signal: 'devin opens a login menu instead of a prompt'
+    meaning: 'Missing credentials, or ACP_BACKEND leaked into the Orca host (scripts/lib/host-launch-env.mjs hostLaunchEnv strips it).'
+    action: devin auth login, or restart the Orca host without ACP_BACKEND.
+    seenAt: 2026-09-20
+  - signal: 'Client error: Protocol error (unimplemented): We are currently experiencing capacity issues with this serving model.'
+    meaning: The serving model (SWE-2 Max) has no capacity; every turn fails at once with a fresh trace ID and a nudge fails again.
+    action: Nothing to fix in the lane. The kernel opens the devin capacity circuit (capacityExhausted above) and routes the retry to the next pool of the order.
+    seenAt: '2026-09-25, %APPDATA%/devin/cli/logs ACP error -32013'
+  - signal: 'Spinner "Thinking" for >60 min with no output and no writes to disk'
+    meaning: Wedged agent, not a slow task — output freshness is the health signal.
+    action: Kill and respawn the agent; work is recovered by the next attempt surveying the tree.
+    seenAt: 2026-09-20
+verifiedAt: 2026-09-24
+verifiedAgainst: 'devin CLI v3000.10.27, Orca 1.4.209'
+forbidden:
+  - provider-native-subagent
+  - cloud-handoff
+  - dispatch-inject
+  - reuse-existing-terminal
+  - unsupervised-retain-as-success
+  - inferred-underlying-model
+capabilities:
+  # Evidence, a product ledger 2026-09-23: browser-dom — an interface.audit leg served the production build and
+  # drove all 12 cells with Playwright (runtime/DOM/a11y/computed-style evidence), two sibling legs settled pass
+  # on re-measured DOM. A drawing op on Devin gets images from the headless `starci work imagegen` call.
+  hostTools: [browser-dom]
+quota:
+  probe: cli:devin-auth
+  window: none
+# The serving model refuses turns while Cognition is short of capacity. A launch failure text matching `text`, or
+# a worker screen row matching `screen`, opens the devin provider-health circuit with failureKind capacity for
+# runtimes.yaml allocation.cooldownMs.capacity (scripts/agent/provider-outage.mjs; scripts/kernel/cli.mjs), so
+# route and dispatch skip devin-agent until it expires. The row may wrap, so the words match across line breaks.
+capacityExhausted:
+  text:
+    - 'experiencing capacity issues with this serving model'
+  screen: '^[\s│┃║|✕✗×!>*•●⚠⎿]*(?:[A-Za-z ]{0,24}error:\s*)?(?:Client error:\s+)?Protocol error \(\w+\):\s+We\s+are\s+currently\s+experiencing\s+capacity\s+issues'

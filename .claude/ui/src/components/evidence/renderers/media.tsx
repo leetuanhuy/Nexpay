@@ -1,0 +1,77 @@
+import type { Concept } from '../../concept';
+/** Names the C8 evidence concept this module belongs to, for the image and media renderer. */
+export const concept: Concept = 'C8';
+import { useId, useRef, useState } from 'react';
+import { MaximizeIcon } from 'lucide-react';
+import type { EvidenceFile } from '../../../contract';
+import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { formatBytes, Frame, toolbarBtn } from './common';
+import { t } from '../../../i18n/t';
+import { Button } from '../../ui/button';
+import { Alert } from '@heroui/react';
+import { MediaImage } from '../../ui/media-image';
+import { FeedbackState } from '../../feedback-state';
+
+/** Shows an image evidence file with its pixel size and bytes, and opens a fit-or-100% dialog to inspect it. */
+export const ImageView = ({ file }: Readonly<{ file: EvidenceFile }>) => {
+  const [dim, setDim] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [full, setFull] = useState(false);
+  const [open, setOpen] = useState(false);
+  const metaId = useId();
+  const meta = [dim, formatBytes(file.bytes), file.mediaType].filter(Boolean).join(' · ');
+  if (failed) return <Alert status="danger"><Alert.Content><Alert.Description>{t('Could not load image {name}.', { name: file.name })}</Alert.Description></Alert.Content></Alert>;
+  return (
+    <>
+      <Frame className="evidence-media-frame inline-block max-w-full">
+        <Button variant="ghost" type="button" onClick={() => setOpen(true)} title={t('Click to enlarge')} className="group relative block h-auto max-w-full rounded-none p-0 bg-default/40 focus-visible:outline-2 focus-visible:outline-ring">
+          <MediaImage src={file.href} alt={file.name} onStatusChange={status => { if (status === 'error') setFailed(true); }} onLoad={e => setDim(`${e.currentTarget.naturalWidth}×${e.currentTarget.naturalHeight}`)} frameClassName="max-w-full" className="max-h-72 max-w-full object-contain" />
+          <span className="absolute right-2 top-2 rounded-md bg-background/80 p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"><MaximizeIcon className="size-3.5" /></span>
+        </Button>
+        <div className="border-t bg-default/40 px-4 py-2 text-xs text-muted-foreground">{meta}</div>
+      </Frame>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent aria-describedby={metaId} containerProps={{ size: 'cover', className: 'starci-dialog-container p-4 sm:w-full sm:p-4' }} className="max-h-[calc(100dvh-32px)] min-h-0 min-w-0 max-w-none gap-4">
+          <DialogHeader>
+            <DialogTitle className="truncate pr-8 text-sm">{file.name}</DialogTitle>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="xs" type="button" className={toolbarBtn} aria-pressed={!full} onClick={() => setFull(false)}>{t('Fit')}</Button>
+              <Button variant="outline" size="xs" type="button" className={toolbarBtn} aria-pressed={full} onClick={() => setFull(true)}>100%</Button>
+              <span id={metaId} className="text-xs text-muted-foreground">{meta}</span>
+            </div>
+          </DialogHeader>
+          <DialogBody className="min-h-0 min-w-0">
+            <div className="max-h-[78vh] overflow-auto rounded-lg bg-default/40">
+              <MediaImage src={file.href} alt={file.name} frameClassName={full ? 'max-w-none' : 'flex w-full justify-center'} className={full ? 'max-w-none' : 'max-h-[76vh] max-w-full object-contain'} />
+            </div>
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+};
+
+const SPEEDS = [0.5, 1, 1.5, 2];
+
+/** Plays a video evidence file with a speed selector and its dimensions, duration and size. */
+export const VideoView = ({ file }: Readonly<{ file: EvidenceFile }>) => {
+  const ref = useRef<HTMLVideoElement>(null);
+  const [speed, setSpeed] = useState(1);
+  const [info, setInfo] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const setRate = (r: number) => { setSpeed(r); if (ref.current) ref.current.playbackRate = r; };
+  return (
+    <Frame className="evidence-media-frame max-w-full">
+      {failed ? <FeedbackState error>{t('Could not load video {name}.', { name: file.name })}</FeedbackState> : null}
+      {/* #t=0.1 makes the browser paint the first frame as the poster */}
+      <video ref={ref} src={`${file.href}#t=0.1`} controls preload="metadata" playsInline className="max-h-[70vh] w-full bg-default/40"
+        aria-label={file.name} onError={() => setFailed(true)}
+        onLoadedMetadata={e => { const v = e.currentTarget; setFailed(false); setInfo([`${v.videoWidth}×${v.videoHeight}`, Number.isFinite(v.duration) ? t('{n} sec', { n: Math.round(v.duration) }) : null].filter(Boolean).join(' · ')); }}><track kind="captions" /></video>
+      <div className="flex flex-wrap items-center gap-2 border-t bg-default/40 px-4 py-3 text-xs text-muted-foreground">
+        <span>{t('Speed')}</span>
+        {SPEEDS.map(r => <Button variant="outline" size="xs" key={r} type="button" className={toolbarBtn} disabled={failed} aria-pressed={speed === r} onClick={() => setRate(r)}>{r}×</Button>)}
+        <span className="ml-auto">{[info, formatBytes(file.bytes)].filter(Boolean).join(' · ')}</span>
+      </div>
+    </Frame>
+  );
+};

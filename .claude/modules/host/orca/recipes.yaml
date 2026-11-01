@@ -1,0 +1,89 @@
+schema: starci/orca-recipes@1
+api: api.yaml
+recipes:
+  start-devin-operation:
+    mode: orchestrated
+    actor: canonical-launcher
+    precondition: owner-assigned-positive-devin-agent-slot
+    sequence:
+      - assert-expected-active-dag-operation
+      - assert-explicit-capacity-gated-candidate
+      - orchestration.worker-start-spec-agent-devin
+      - assert-canonical-task-display-name
+      - orchestration.worker-show-attest-assignee-and-effective-agent
+    terminalName: "[Op] <operation> a<attempt> · <Workflow>"
+    taskCardinality: one
+    dispatchCardinality: one
+    agentCardinality: one
+    quotaTelemetry: launch-status
+  start-managed-operation:
+    mode: orchestrated
+    actor: canonical-launcher
+    sequence:
+      - assert-expected-active-dag-operation
+      - resolve-operation-provider-chain
+      - orchestration.worker-start-spec-current-worktree-with-resolved-model
+      - assert-canonical-task-display-name
+      - terminal.rename-agent-terminal
+      - orchestration.worker-show-and-attest-provider-identity
+    terminalName: "[Op] <operation>"
+  operation-candidate-fallthrough:
+    mode: orchestrated
+    actor: canonical-launcher
+    sequence:
+      - classify-worker-start-or-attestation-failure
+      - orchestration.worker-stop-when-a-dispatch-exists
+      - orchestration.worker-release-and-require-released-or-already_released
+      - record-attempt-with-effect-state
+      - start-next-candidate-only-when-effect-state-is-none
+      - return-typed-exhausted-or-reconciliation-result
+    forbiddenAfter: [partial-effects, unknown-effects]
+  operation-boundary:
+    actor: operation-agent
+    sequence:
+      - api-report-file
+      - idle
+  accept-operation:
+    actor: canonical-launcher
+    sequence:
+      - validate-normalized-operation-output
+      - orchestration.worker-release
+      - schedule-ready-operation-or-report-workflow-boundary
+
+  unstick-permission-prompt:
+    mode: direct
+    actor: launcher-or-kernel
+    sequence:
+      - terminal.read-screen-detect-permission-menu
+      - terminal.send-bypass-choice-with-enter
+      - terminal.read-screen-confirm-moving
+    note: 'Devin TUI: send "5" (Switch to bypass mode). Never approve per command kind — per-kind allows never generalize. Never answer individual allow options; they re-prompt per command kind.'
+  respawn-dead-agent-child:
+    mode: direct
+    actor: launcher-or-kernel
+    sequence:
+      - terminal.read-screen-detect-child-exit
+      - terminal.close
+      - orchestration.worker-stop-and-release
+      - orchestration.worker-start-fresh-attempt
+    signal: 'Agent connection lost: agent child exited'
+    note: 'A dead child never drains queued sends. The fresh agent must survey the tree for partial work — markers, not memory, carry state.'
+cliGotchas:
+  - 'orca worktree rm removes the worktree from Orca AND git — it deletes files on disk; it walks junctions and deletes what they lead to, and it never runs outside the runtime worktree API; never use it to "unregister" a path that must be kept.'
+  - 'terminal read --screen shows tail only; idle detection uses lastOutputAt freshness, not scrollback.'
+forbiddenSequences:
+  - chat-runs-the-kernel-loop
+  - kernel-implements-an-operation-itself
+  - operation-calls-another-operation
+  - devin-op-uses-provider-native-subagent-or-cloud-handoff
+  - devin-op-launched-without-explicit-workflow-slot
+  - devin-underlying-model-inferred-from-account-default
+  - terminal-send-outside-canonical-launcher
+  - dispatch-to-reused-terminal-operation
+  - dispatch-inject-operation
+  - unsupervised-operation-retain-as-success
+  - infer-architecture-sidearm-from-review
+  - create-task-before-dag-operation-admission
+  - accept-operation-effect-before-provider-attestation
+  - worker-start-with-literal-or-guessed-environment
+  - workflow-child-with-null-or-wrong-parent-lineage

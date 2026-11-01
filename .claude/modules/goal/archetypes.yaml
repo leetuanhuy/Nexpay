@@ -1,0 +1,255 @@
+# modules/goal/archetypes.yaml — which archetypes an owner prompt selects.
+#
+# scripts/route/route-plan.mjs reads this file: signalMatching and each
+# archetype's signals, supersedes, variants, conditionalLegs and surfaces. An
+# archetype contributes target state variables (S*, route-plan ARCHETYPE_STAR);
+# the planner derives the chain from them by backward-chaining over
+# modules/goal/legality.yaml producesVocabulary and the ops' route
+# prerequisites, then appends handover.review. No chain is declared here.
+
+schema: starci/module-goal-archetypes@1
+
+signalMatching:
+  normalization: >-
+    The prompt and every phrase are Unicode NFC-normalized, lower-cased and
+    whitespace-collapsed. Diacritics are kept: Vietnamese words that differ only by accents (for example the words for "slow" and "grade") never
+    match each other, and an unaccented spelling matches only when it is
+    listed as its own phrase.
+  phrase: >-
+    A phrase hits where no letter, mark, digit or underscore touches either of
+    its word-character ends; a phrase that starts with punctuation
+    (".starciwork") needs no boundary before it, and a trailing "*" drops the
+    end boundary so the phrase matches as a word prefix ("integrat*").
+  archetypeMatch: >-
+    An archetype's signals is one alternative {phrases, requires, excludes} or a
+    list of them. An alternative matches when one of its phrases hits, every
+    requires group has a hit and no excludes phrase hits; the archetype matches
+    when any alternative does. A signals block without phrases is structural
+    (fanout) and is decided by the planner, not by phrases.
+  order: >-
+    Archetypes are tested in the order below; the first surviving match names
+    the scope kind and later matches' hints override earlier ones.
+  sequence:
+    - workspace-canonicalization
+    - greenfield-scaffold
+    - spec-foundation
+    - feature-build-fullstack
+    - investigate-first
+    - refactor
+    - external-integration
+    - assisted-uat-prepare
+    - assisted-uat-verify
+    - unit-verify
+    - verify-only
+    - feature-build-with-ui
+    - feature-build-backend
+  precedence: >-
+    A matched archetype's supersedes list removes those archetypes from the
+    match set before the union is taken — a lifecycle scope (specification,
+    scaffold) names repositories and surfaces as nouns without asking to build
+    them, so the generic build priors it supersedes never join its chain. A
+    lifecycle scope holds only while the prompt carries no delivery demand:
+    its excludes cite $buildIntent, so a build prompt that also asks to close
+    spec gaps keeps its implement legs. Repository names and product nouns
+    (full-app, "Code challenge") are not delivery demands.
+  phraseSets:
+    buildIntent: [end to end, end-to-end, full-stack, fullstack feature, build fullstack, làm fullstack, tính năng fullstack, backend and frontend, frontend and backend, backend và frontend, frontend và backend, đúng thiết kế, sản phẩm chạy được, tới sản phẩm, e2e xanh, test xanh, tests xanh, uat trình duyệt, trên trình duyệt, tests green, e2e green, working product, running product, làm trọn tính năng, trọn tính năng, implement the*, implement it]
+    canonIntent: [conform to canon, conform to the canon, conform to the starci canon, conform to starci, canon conformance, canon-conformance, canon debt, canon findings, starci canon, starci-canon, starci-like, technical debt, tech debt, code-quality debt, lint debt, dọn nợ, nợ kỹ thuật, nợ code, trả nợ code, chuẩn hoá source, chuẩn hóa source, chuẩn hoá code, chuẩn hóa code, theo chuẩn starci, chuẩn starci]
+    e2eIntent: [e2e, e2e-spec*, end-to-end test*, end to end test*, end-to-end verif*, end to end verif*, end-to-end proof*, end to end proof*, end-to-end check*, end to end check*, end-to-end suite*, end to end suite*, test end-to-end, test end to end, kiểm thử e2e, kiểm thử end-to-end, kiểm thử end to end, chạy e2e, test e2e]
+    uatIntent: [uat, acceptance test*, acceptance testing, browser uat, nghiệm thu, kiểm thử uat, chạy uat, uat trình duyệt]
+    proofNegation: [no, without, skip, do not, does not, never, none, zero, lacks, lacking, missing, absent, không, chưa, bỏ qua, thiếu]
+    integrationIntent: [integration test*, integration testing, integration verif*, integration proof*, integration check*, live verification, live verify, live integration*, live provider*, real provider*, live oauth, live smtp, live payment*, live sso, oauth live, smtp live, payment live, sso live, verify oauth*, verify smtp*, verify payment*, verify sso*, kiểm thử tích hợp, kiểm tra tích hợp, xác minh tích hợp, chạy tích hợp, kiểm thử live, xác minh live, chạy live, test tích hợp]
+    proofStateCue: [still to be, yet to be, not yet, to be built, to be implemented, to be written, chưa được xây, còn phải xây, còn phải viết]
+    brandIntent: [brand, thương hiệu, mascot, linh vật, token màu, brand token, bộ nhận diện, logo]
+  proofLegs: >-
+    E2E runs manually only (owner ruling 2026-09-29): e2e.verify (api.X verified) and uat.verify (ui.X verified)
+    join a chain only when the prompt explicitly asks for them (phraseSets.e2eIntent / uatIntent); a mention whose clause
+    carries a phraseSets.proofNegation cue ("no UAT", "skip e2e") or whose sentence carries a phraseSets.proofStateCue cue
+    ("the e2e tests are still to be built") describes a state and asks for nothing, and it never cancels another kind or sentence. Without that ask a backend build ends at impl.X done (backend) and an
+    interface build at ui.X audited; review.verify still closes the chain. An explicit ask adds the proof
+    variable to whichever archetype matched.
+  integrationLeg: >-
+    Live integration verification runs on explicit request / before release only (owner ruling 2026-09-29):
+    integration.verify (integration.X verified: real OAuth/IdP, SMTP, payment, external provider with real credentials)
+    joins a chain only when the prompt asks for it (phraseSets.integrationIntent, read with the same
+    negation and current-state cues). Without that ask an external-integration prompt ends at impl.X done (backend) and no provision.ask
+    custody leg precedes it; the kernel defers an already-approved integration.verify leg the goal did not ask for
+    (scripts/route/spec-deferral.mjs). "Integrate X" asks to build the integration, not to prove it live.
+  phraseSetReference: >-
+    A phrase written "$name" in phrases, requires or excludes stands for every
+    phrase of phraseSets.name.
+  noMatch: >-
+    No surviving match means S* cannot be formed: route-plan reports the INTENT
+    tier (needs-owner) and define-goal prints the chain as `underivable (kernel
+    will derive at boot)`. No archetype is a default.
+  enforcedBy: scripts/route/route-plan.mjs (loadArchetypeSignals, intentToStar)
+
+archetypes:
+
+  # --- workspace-canonicalization ---
+  - id: workspace-canonicalization
+    signals:
+      note: >-
+        An explicit canonicalize/normalize/migrate/refactor request naming
+        .starciwork, .starcistacks, the Work tree or the application-stack
+        package. Merely describing a product/landing experience as "canonical"
+        does not match this lifecycle scope.
+      phrases: [canonicaliz*, canonicalis*, normaliz*, normalis*, migrat*, refactor, chuẩn hoá, chuẩn hóa, tái cấu trúc, di trú]
+      requires:
+        - [.starciwork, .starcistacks, work tree, application stack, application-stack, cây work]
+
+  # --- spec-foundation ---
+  - id: spec-foundation
+    signals:
+      note: >-
+        Author or complete the specification of a product: rebuild a canonical
+        .starciwork from an existing Work source, review and extend the SRS,
+        write the SDS, declare the application stacks — no product code.
+        Repositories and surfaces appear as nouns, so the generic build priors
+        are superseded.
+      phrases: [srs, sds, đặc tả, specification*, software requirements, software design]
+      requires:
+        - [author*, write, writing, complete, extend, rebuild, reconstruct, declare, define, viết, soạn, bổ sung, hoàn thiện, tái lập, khai báo, xây dựng đặc tả]
+      excludes: [implement*, scaffold*, base repo, $buildIntent]
+    supersedes: [feature-build-fullstack, feature-build-with-ui, feature-build-backend, external-integration, verify-only, refactor]
+    conditionalLegs:
+      note: >-
+        A leg a specification goal carries only when the prompt asks for it.
+        An entry adds its variable to S* when any `when` phrase hits the
+        prompt; route-plan --work drops the leg again when a settled record
+        (legality.yaml settledOutOfBand) already holds the variable, and the
+        plan lists that record under assumed.
+      entries:
+        - {op: brand.decide, var: "brand: settled", when: [$brandIntent]}
+
+  # --- greenfield-scaffold ---
+  - id: greenfield-scaffold
+    signals:
+      note: >-
+        Create new base repositories: toolchain, generated hooks and CI (starci app sync), the
+        first source tree (starci app scaffold <name>: platform config, logging and errors and the health endpoint for a back
+        end, the next-intl [locale] shell and the health route for a front end) — source setup with no
+        business. The stack is fixed by CONTEXT.md and the toolchain by
+        the @starci presets and `starci app sync`, so no decide leg precedes it.
+      phrases: [scaffold*, base repo, base repository, repository baseline, repo baseline, greenfield, khởi tạo repo, dựng repo, dựng base repo, tạo repo mới, bootstrap the repo*]
+      excludes: [$buildIntent]
+    supersedes: [spec-foundation, feature-build-fullstack, feature-build-with-ui, feature-build-backend, external-integration, verify-only, refactor]
+    surfaces:
+      backend: [backend, back-end, nestjs, nest, code be, api, máy chủ]
+      frontend: [frontend, front-end, next.js, nextjs, fe, giao diện, ui]
+      package: [shared package, new package, library package, thư viện dùng chung, gói dùng chung]
+    surfaceRule: >-
+      Each surface whose phrases hit adds its scaffold leg; when no surface is
+      named, backend and frontend are both scaffolded (every project pairs a
+      NestJS backend with a Next.js frontend). package.scaffold joins only on a
+      package phrase.
+
+  # --- feature-build-fullstack ---
+  - id: feature-build-fullstack
+    signals:
+      note: >-
+        "build X end to end", "X backend and frontend", "full-stack X" — one
+        feature delivered through both the API and the interface to a running
+        product. Naming repositories that happen to be a backend and a frontend
+        is not this signal; lifecycle scopes supersede it.
+      phrases: [end to end, end-to-end, full-stack, fullstack feature, build fullstack, làm fullstack, tính năng fullstack, backend and frontend, frontend and backend, back end and front end, backend và frontend, frontend và backend, be và fe, fe và be, tới sản phẩm chạy được, đến sản phẩm chạy được, làm trọn tính năng, trọn tính năng]
+    supersedes: [feature-build-with-ui, feature-build-backend, verify-only]
+
+  # --- feature-build-with-ui ---
+  - id: feature-build-with-ui
+    signals:
+      note: >-
+        "code fe X", "build the X screen/page", "add a UI for X", "implement the
+        X frontend" — a new feature whose scope names an interface.
+      phrases: [code fe, frontend, front-end, ui, screen, page, dashboard, giao diện, màn hình, trang chủ, trang web, giao dien, man hinh]
+      excludes: [$canonIntent]
+
+  # --- assisted uat for genuine human checkpoints ---
+  - id: assisted-uat
+    signals:
+      note: >-
+        "prepare assisted UAT", "run manual UAT", "verify the human-gated
+        browser flow", "test the OTP/CAPTCHA/3DS/external consent checkpoint".
+        A third-party dependency alone is not this signal when it remains fully
+        automatable. The two stages match separately (variants).
+    variants:
+      - id: assisted-uat-prepare
+        signals:
+          phrases: [prepare, generate, package, author, chuẩn bị, soạn]
+          requires:
+            - [assisted uat, manual uat, human-gated uat, human gated uat, uat thủ công, uat có hỗ trợ]
+          excludes: [receipt*, biên nhận, run assisted, run manual, run the assisted, execute assisted, verify assisted, verify manual, accept assisted, reconcile assisted, chạy uat]
+      - id: assisted-uat-verify
+        signals:
+          - phrases: [run, execute, verify, accept, reconcile, receipt*, chạy, xác minh, nghiệm thu, biên nhận]
+            requires:
+              - [assisted uat, manual uat, human-gated uat, human gated uat, uat thủ công, uat có hỗ trợ]
+          - phrases: [otp, captcha, 3ds, external consent]
+            requires:
+              - [uat, acceptance, browser flow, nghiệm thu]
+
+  # --- feature-build-backend ---
+  - id: feature-build-backend
+    signals:
+      note: >-
+        "build the X API/endpoint/service", "implement X in the backend", "add
+        the X worker/job" — a feature with no interface surface.
+      phrases: [api, endpoint, backend, back-end, service, worker, job, code be, webhook, dịch vụ, máy chủ]
+      excludes: [$canonIntent]
+
+  # --- refactor ---
+  - id: refactor
+    signals:
+      note: >-
+        "refactor X", "clean up X", "rename/restructure X without changing
+        behaviour", "clean up debt X to the starci standard" (in Vietnamese) — a behaviour-invariant change
+        to existing delivered code. A canon-conformance request ($canonIntent)
+        is this archetype with code.refactor params.canonFamilies: canon-scan
+        measures the findings and cuts the slices, and review.verify lint
+        proves zero. A request naming the Work or stack roots is
+        workspace-canonicalization.
+      phrases: [refactor, clean up, cleanup, clean-up, restructure, rename, tái cấu trúc, dọn dẹp code, dọn code, đổi tên, $canonIntent]
+      excludes: [.starciwork, .starcistacks, work tree, application stack, application-stack, $buildIntent]
+
+  # --- external-integration ---
+  - id: external-integration
+    signals:
+      note: >-
+        "integrate X", "connect to <provider>", "wire up payments/SMS/email/SSO/
+        invoicing with Y" — a declared external system the product must reach.
+      phrases: [integrat*, connect to*, wire up*, vnpay*, stripe*, paypal*, momo*, sso*, oauth*, payment*, sms*, email provider*, tích hợp, kết nối với, thanh toán, cổng thanh toán]
+
+  # --- unit-verify ---
+  - id: unit-verify
+    signals:
+      note: >-
+        "run the full unit suite", "run the whole unit suite" (in Vietnamese) - an explicit ask for the product repository's whole unit run
+        (unit.verify). A code-writing op's own scoped specs are never this ask, and no other request plans this leg.
+      phrases: [full unit, full unit suite, whole unit suite, entire unit suite, all unit tests, run all unit, toàn bộ unit, tất cả unit test, chạy toàn bộ unit]
+
+  # --- verify-only ---
+  - id: verify-only
+    signals:
+      note: >-
+        "lint check the repo", "verify X", "review the Y changes", "run the
+        checks on Z" — an audit request with no build intent. A build or
+        refactor verb anywhere means the audit word names the target ("refactor
+        the audit module"), not the request.
+      phrases: [lint, verify, review, audit, check repo, check the repo, inspect, kiểm tra, rà soát, đánh giá code]
+      excludes: [$canonIntent, build, implement, add, extend*, expand*, update, modify, create, code, làm, integrate, refactor, clean up, cleanup, clean-up, restructure, rename, fix, xây, xây dựng, thêm, mở rộng, cập nhật, bổ sung, tạo, sửa, viết, tích hợp, tái cấu trúc, assisted uat, manual uat, human-gated uat, human gated uat]
+
+  # --- investigate-first ---
+  - id: investigate-first
+    signals:
+      note: >-
+        "the app is a bit laggy", "X is slow", "Y feels broken", "Z
+        takes forever" — a symptom report with no named fix. The build target is
+        UNKNOWN until evidence says where the cost/defect lives.
+      phrases: [lag, laggy, slow, sluggish, feels broken, takes forever, chậm, hơi lag, giật lag, bị đơ, tải lâu, load lâu]
+
+  # --- fan-out ---
+  - id: fanout
+    signals:
+      structural: >-
+        No phrases: the planner sets the fanout hint when the matched
+        archetypes target two or more state-variable families.

@@ -1,0 +1,84 @@
+// frontier-parked.mjs - which queued jobs are parked behind a recorded wait through their dependency chain.
+//
+// A job queued `--after` (or behind an earlier leg, its cut's seam, a record it dependsOn) a job that a
+// typed wait holds reads queuedBecause dependency, yet nothing but that wait can release it: it runs only
+// after the held job does. starci kernel status counted it as engaged work, so a workflow whose only open operations
+// were a peer-wait-held job and its dependant read frontier `engaged` instead of `peer-wait`, and the
+// supervisor's stall check (scripts/supervisor/stall.mjs, which reads that frontier) alerted STALLED on a
+// workflow correctly parked on its peer (a subscription workflow: ord-6
+// --after ord-3, ord-3 held by peer-wait; a debt workflow read "queued: peer-wait 1,
+// dependency 1"). starci kernel status (cmdStatus) is the one place that judges it; stall reads the frontier.
+
+/**
+ * The wait at the end of each queued dependant's chain. `queued` is starci kernel status frontier.queued
+ * ([{jobId, queuedBecause, blockedBy}]), `heldSettle` its heldSettleJobs ([{jobId, heldBecause, blockedBy}]).
+ * A queued job held by an owner-gate or peer-wait, or a settle a wait defers, is a root; a queued job whose
+ * queuedBecause is `dependency` and whose blockedBy.job is a root or another parked dependant is parked
+ * behind that root. Returns Map jobId -> {heldBecause, incident, peer?, via, settle?} for the dependants only
+ * (`via` is the held job the chain ends in; `settle` when that job's settle is what the wait holds). A chain
+ * that ends in anything else (a running job, a ready or capacity-queued job, a cycle) parks nothing.
+ */
+// The wait root a dependency chain ends in, memoized: null while `jobId` is no parked dependant.
+const rootOf = (roots, memo, byId, jobId, seen) => {
+  if (roots.has(jobId)) return roots.get(jobId);
+  if (memo.has(jobId)) return memo.get(jobId);
+  const item = byId.get(jobId);
+  if (item?.queuedBecause !== 'dependency' || !item.blockedBy?.job || seen.has(jobId)) return null;
+  seen.add(jobId);
+  const root = rootOf(roots, memo, byId, item.blockedBy.job, seen);
+  memo.set(jobId, root);
+  return root;
+};
+
+const queuedRootsOf = (queued) => {
+  const roots = new Map();
+  for (const item of queued) {
+    if (['owner-gate', 'peer-wait', 'supervisor-gate'].includes(item.queuedBecause) && item.blockedBy?.incident) {
+      roots.set(item.jobId, { heldBecause: item.queuedBecause, incident: item.blockedBy.incident, ...(item.blockedBy.peer ? { peer: item.blockedBy.peer } : {}), via: item.jobId });
+    }
+  }
+  return roots;
+};
+
+const addSettleRoots = (roots, heldSettle) => {
+  for (const item of heldSettle) {
+    if (item.blockedBy?.incident) roots.set(item.jobId, { heldBecause: item.heldBecause, incident: item.blockedBy.incident, ...(item.blockedBy.peer ? { peer: item.blockedBy.peer } : {}), via: item.jobId, settle: true });
+  }
+};
+
+export function parkedBehindWaits(queued = [], heldSettle = []) {
+  const roots = queuedRootsOf(queued);
+  addSettleRoots(roots, heldSettle);
+  const byId = new Map(queued.map((item) => [item.jobId, item]));
+  const memo = new Map();
+  const out = new Map();
+  for (const item of queued) {
+    if (item.queuedBecause !== 'dependency') continue;
+    const root = rootOf(roots, memo, byId, item.jobId, new Set());
+    if (root) out.set(item.jobId, root);
+  }
+  return out;
+}
+
+/** A queued job parked behind a recorded wait names the wait in its detail; a job outside any wait is left as it is. */
+export const noteParkedBehind = (item, root) => {
+  if (!root) return;
+  item.parkedBehind = root;
+  const deferred = root.settle ? ' (its settle is deferred)' : '';
+  item.detail = `${item.detail ?? ''}; parked behind ${root.heldBecause} ${root.incident} through ${root.via}${deferred}`;
+};
+
+/**
+ * Open operations a recorded wait holds, as the frontier's engaged test counts them: every queued job a
+ * peer-wait holds, every settle a wait defers, and every dependant parked behind either (a dependant
+ * parked behind an owner-gate-held queued job counts like that job does: as open). `parked` is
+ * parkedBehindWaits' map.
+ */
+// Autopilot (scripts/kernel/autopilot-run.mjs): a job a supervisor-gate holds, or one deferred (to the final review, or
+// to the handover credential checklist), is no open work of the Kernel's either.
+const HELD_ELSEWHERE = new Set(['peer-wait', 'supervisor-gate', 'deferred', 'deferred-to-handover']);
+export function waitHeldOperations(queued = [], heldSettle = [], parked = new Map()) {
+  const peerHeld = queued.filter((item) => HELD_ELSEWHERE.has(item.queuedBecause)).length;
+  const behind = [...parked.values()].filter((root) => root.settle || HELD_ELSEWHERE.has(root.heldBecause)).length;
+  return peerHeld + heldSettle.length + behind;
+}

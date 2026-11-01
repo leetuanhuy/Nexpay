@@ -1,0 +1,175 @@
+schema: starci/knowledge-source@1
+id: ui.composition.accent
+title: Accent composition
+appliesTo:
+  - ui
+family: composition
+purpose: |-
+  This file answers one question: the page has a small budget of strongest emphasis, so where is it
+  spent, and what does spending it there promise?
+  Accent is scarce by design. Every extra dominant treatment reduces what the previous one meant, so
+  the decision is about allocation, not about paint. Nothing in this file may change what the product
+  is claiming; accent only makes an existing claim easier to find.
+  Applicability: API examples belong to the documented Grammar family; verify installed source and
+  the selected `.starciwork` specification before use. Gap labels here are findings, not dispatch commands.
+rules:
+  - id: ACCENT-1
+    title: One dominant decision accent
+    governs: |-
+      Governs how many strongest treatments a decision region may hold.
+    cases:
+      - id: case-1
+        when: A decision region offers one clear next action
+        assert: |-
+          Exactly one dominant accent sits inside that decision owner, on `Button variant="primary"`, whether it carries `onPress` or `href`
+      - id: case-2
+        when: Sibling actions share the region
+        assert: |-
+          Each sibling carries a weaker published variant that states its real consequence
+      - id: case-3
+        when: Two peer choices genuinely carry equal consequence
+        assert: |-
+          Neither carries the dominant accent, and no paint breaks the tie
+      - id: case-4
+        when: Separate regions each have their own next step
+        assert: |-
+          Each dominant accent is counted within its own decision owner, and none is counted twice
+      - id: case-5
+        when: |-
+          The count would change in a compact layout or a loading state
+        assert: |-
+          The count of dominant accents is identical in every state and at every width
+  - id: ACCENT-2
+    title: Compact identity accent
+    governs: |-
+      Governs the small visual anchor that helps a reader scan peers.
+    cases:
+      - id: case-1
+        when: |-
+          Peer features, rows, or sections need a compact anchor for scanning
+        assert: |-
+          `IconTile tone="neutral"`, or `Icon` in its declared role, carries it, with a reviewed semantic glyph named in the `.starciwork` specification. Owner ruling 2026-09-27: an identity tile is neutral; it spends no accent (ACCENT-6)
+      - id: case-2
+        when: The anchor sits beside a name
+        assert: |-
+          The visible text identity remains, and the mark never replaces it
+      - id: case-3
+        when: The direction wants a different plate size or shape
+        assert: |-
+          The published geometry carries it, at `sm` 32 or `md` 40 nominal CSS pixels, and no coloured rounded square is rebuilt around an icon
+      - id: case-4
+        when: |-
+          The glyph would be the only identity for an unfamiliar feature
+        assert: |-
+          Every unfamiliar feature carries a name; no glyph is its sole identity
+      - id: case-5
+        when: A tile is tempted to take a coloured tone
+        assert: |-
+          Only a tile that reports a real outcome takes `success`, `warning` or `danger`, under ACCENT-5; no tile takes `accent` to mark who a peer is, and summary or fact tiles stay `neutral`
+  - id: ACCENT-3
+    title: Selection, destination, and focus stay distinct
+    governs: |-
+      Governs three treatments that tend to collapse into one another.
+    cases:
+      - id: case-1
+        when: |-
+          A region can hold a persistent selection, a destination, a command emphasis, and keyboard focus at once
+        assert: |-
+          Each of the four resolves to its own published owner and its own treatment
+      - id: case-2
+        when: Selection is being expressed
+        assert: |-
+          Selection carries a non-colour cue and survives focus moving elsewhere
+      - id: case-3
+        when: A destination sits inside body copy
+        assert: |-
+          It is identifiable as a destination at rest, before hover and before focus
+      - id: case-4
+        when: Colour is removed, or the viewer is in forced colours
+        assert: |-
+          All three remain distinguishable, because none relies on fill alone
+      - id: case-5
+        when: A brief hover is mistaken for selection
+        assert: No transient cue carries a persistent value
+  - id: ACCENT-4
+    title: Accent progress requires a real measurement
+    governs: Governs the accent fill that reads as completion.
+    cases:
+      - id: case-1
+        when: Authority supplies a verified value from 0 to 100
+        assert: |-
+          `Progress` carries a truthful `label` and that `value`, and the accent fill presents that measurement only
+      - id: case-2
+        when: The value has not resolved
+        assert: |-
+          `isSkeleton` is bound, and no zero-length bar states a measurement nobody made
+      - id: case-3
+        when: |-
+          A bar, ring, or line is decorative, or expresses a ranking rather than completion
+        assert: It carries no progress semantics at all
+      - id: case-4
+        when: The fill is tempting to read as an outcome
+        assert: |-
+          The fill states a measurement, and a separate outcome owner states the outcome
+  - id: ACCENT-5
+    title: Outcome and destructive authority are not accent
+    governs: Governs the treatments accent must not stand in for.
+    cases:
+      - id: case-1
+        when: |-
+          Content reports success, warning, danger, pending, or selection
+        assert: |-
+          `Badge`, a presentation-state owner, or the current-state owner carries it; the primary accent carries none of them
+      - id: case-2
+        when: A final destructive CTA is required
+        assert: |-
+          A typed danger action treatment is required first, and while `ButtonVariant` publishes no danger value the `.starciwork` specification records that gap
+      - id: case-3
+        when: Local red would bridge that gap today
+        assert: |-
+          No local red and no family repaint of `primary` appears against that action
+      - id: case-4
+        when: An ordinary primary action looks consequential
+        assert: |-
+          Consequence and confirmation are named in the product decision, not inferred from the emphasis
+      - id: case-5
+        when: A notice (attention, a last result) carries an outcome tone
+        assert: |-
+          The DNA `Alert` carries it as the HeroUI Alert renders it (owner ruling 2026-09-27): the white `--surface` row with its surface shadow, a small indicator glyph on the left of the title and the title itself in the tone's soft-foreground, a muted description, and the grammar `Button` as its action in the variant the grammar Alert gives its tone, as HeroUI's own Alert examples pair them (accent/informative → `primary`, danger/negative → `danger`, every other tone → `secondary`; grammar 0.5.3); by default (`appearance="surface"`) the tone never fills the Alert's background, and no `IconTile` stands in for its indicator
+      - id: case-6
+        when: A notice must read as part of the surface or band it sits in (a row's detail, a wizard step, a status beside a form) rather than float above it
+        assert: |-
+          Owner ruling 2026-10-11: the DNA `Alert` takes `appearance="soft"` (@starci/grammar 0.9.2) - the same anatomy on its tone's soft tint at half strength (`--<tone>-soft` mixed 50% with transparent: informative accent-soft, affirmative success-soft, cautionary warning-soft, negative danger-soft, other tones default-soft) and no shadow. The tint is the grammar's, never an app class; the tone still reports a real outcome under case-1; an informative soft Alert spends accent-soft and counts inside the ACCENT-6 budget; a page-level notice on the canvas keeps the default `surface` row
+  - id: ACCENT-6
+    title: The page's colour budget is mostly neutral
+    governs: |-
+      Governs how much of a page's painted area colour may take, and the only places accent may be spent.
+    cases:
+      - id: case-1
+        when: The direction allocates colour across a whole page
+        assert: |-
+          About ninety percent of the painted content area is neutral - canvas, surfaces, foreground and muted text, separators - and accent fills, accent-soft grounds and accent text together stay under ten percent of it
+      - id: case-2
+        when: Accent is placed
+        assert: |-
+          It sits only on the primary action (ACCENT-1), the focus indicator, a verified measurement fill (ACCENT-4), the current-selection indicator, and the page's one signature moment ([DISCIPLINE-3](taste.yaml)); headings, eyebrows, numbers, card borders, identity tiles and summary cells take none
+      - id: case-3
+        when: A status tone is placed
+        assert: |-
+          `success`, `warning` and `danger` appear only where authority reports that real state (ACCENT-5); no status hue marks a category, a peer or a decoration
+      - id: case-4
+        when: The canvas behind the page's surfaces is chosen
+        assert: |-
+          The Grammar default stands - the HeroUI `--background` grey under white surfaces (owner ruling 2026-09-27); a brand-tinted canvas appears only after an owner ruling the brand record carries as a declared token
+      - id: case-5
+        when: On a working (console) page, an accent-filled slab (an ink band, a tinted ribbon, a filled header) would share the first screen with the primary action
+        assert: |-
+          Owner ruling 2026-10-11: the primary action is the one accent mass the eye finds first. A second full-accent area in the same viewport competes with it ("two reds") and reads as alarm on a brand whose accent is red, so figures, headers and summaries stay on neutral surfaces; the ink band is reserved for the product's overview signature moment, never repeated under every page header, and never carries a primary of its own hue. A marketing or entry page (landing, sign-in) may spend its one art band as the signature moment (DISCIPLINE-3) beside the primary, as long as that band holds no button and the page shows one primary per command (CTA-1 case-5)
+    notThisRule: |-
+      how many dominant accents one decision region holds is ACCENT-1, and which owner carries an outcome is ACCENT-5. Measuring the accent share of a capture is TASTE-5 case-5.
+doesNotDecide: |-
+  Which rank the content carries is [Hierarchy](hierarchy.yaml), and which action deserves the decision
+  emphasis is [CTA](cta.yaml). Which conditions the state owners can be in is [State](state.yaml).
+  Whether a distinction survives forced colours and reduced motion once rendered is
+  [Accessibility](../proof/accessibility.yaml) and [Motion](../proof/motion.yaml), and whether the
+  emphasis claims something authority never said is [Render truth](../proof/render-truth.yaml).

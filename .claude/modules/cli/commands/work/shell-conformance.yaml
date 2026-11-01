@@ -1,0 +1,12 @@
+group: work
+verb: shell-conformance
+owner: runtime
+summary: check Work and implementation records against the measured frontend shell
+impl: {script: scripts/work/ui/shell-conformance.mjs}
+positional:
+  - {name: target, required: true, variadic: false}
+flags: []
+exit: {"0": conformant, "1": refused or suspect records, "2": bad usage}
+json: flag
+examples: ['starci work shell-conformance .starciwork --json']
+editions: [full]

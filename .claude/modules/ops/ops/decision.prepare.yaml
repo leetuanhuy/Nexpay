@@ -1,0 +1,171 @@
+schema: starci/op@1
+id: decision.prepare
+goal:
+  en: "Prepare one decision the runtime takes provisionally - the question, why it matters, the
+    options analysed per side, one recommendation - or answer the question from the records the
+    product already decided. The runtime never decides for the owner: it carries the recommendation
+    into the work and the owner overturns it later with workflow-answer. A provision (a credential,
+    an account, a dataset, an authority) is not prepared here; that is provision.ask, the one
+    operation that waits for the owner."
+nodeKinds: [business]
+completionProfile: business
+sideEffects: []
+graphPolicy:
+  mode: selected-scope-only
+  location: shared
+  prerequisiteState: done
+  dispatch: never
+reads:
+  - id: question
+    path: the operation goal (section 'Question for the owner') and the operation that asked it
+    purpose:
+      en: Read the question exactly as it was raised - by which operation, of which kind (business,
+        design, authority, credential), what it blocks - before anything is written.
+  - id: decided
+    path: .starciwork/features/<feature>/**/index.yaml (done)
+    purpose:
+      en: Read every decided flat Work record the question touches - rules, requirements, data, decisions,
+        design, contracts, integrations. A decided record that already settles the question is the
+        answer, named by id; the owner is not asked twice.
+  - id: environment
+    path: <app>/<bound-paths> + .starcistacks/application-stacks.yaml + .starciwork/_resources/identities/<identity-slug>/resource.yaml
+    purpose:
+      en: For a credential or configuration question, read where the code reads the value - the exact
+        variable name - and which identity:<identity-slug> alias in the selected backend Stack environment
+        (.starcistacks/<env>/secrets/<identity-slug>.enc, app-relative) holds it. The resource metadata names the custody and variable.
+  - id: standard
+    path: docs/architecture.md + docs/code-pattern-enforcement.md + knowledge/op-gate.yaml + knowledge/design-patterns.yaml + knowledge/architecture-rules.yaml + knowledge/hfs/rules.yaml
+    purpose:
+      en: shared
+      vi: "Chuẩn mà quyết định và bản ghi của op dẫn ra: knowledge/op-gate.yaml (proofs.read-knowledge), các tệp knowledge liệt kê ở bước ĐỌC và bản đồ slot hfs của mọi bản ghi op viết (starci app explain ở gốc app). Các tệp được đọc tại chỗ và ghi kèm sha256 vào bản tóm tắt ĐỌC; không chép lại vào bản ghi."
+writes:
+  - id: decision
+    path: .starciwork/features/<feature>/decision/<slug>/index.yaml
+    fields:
+      - schema
+      - id
+      - title
+      - state
+      - outcome
+      - tension
+      - question
+      - options
+      - recommendation
+      - recommendationReason
+      - change
+    content:
+      en: One work/policy-decision@1 record draft (id decision.<feature>.<slug>, state todo, outcome open,
+        the shape of the existing policy decisions of the tree), carrying in order the question;
+        tension, naming by id the decided records the question strains between and the statement of
+        that strain; the options, each with an id, a summary and its consequence for the design, the
+        rules, the security and authority, and what it costs; and exactly one recommendation with
+        its reason. Real product-shaped content, no placeholder, no secret value. The options array
+        contains at least two distinct concrete mutually exclusive policy outcomes in the exact
+        presentation order before owner presentation. Questions beginning with Whether are agenda
+        topics, not yes/no decisions. Repair an unprepared options array in this operation before
+        requesting an answer.
+  - id: read-digest
+    path: STARCI_JOB_SCRATCH/read-digest.json
+    schema: starci/read-digest@1
+    content:
+      en: "The READ digest (read-digest.mjs --knowledge): every knowledge file the decision cites and the hfs slot of every record written, each with its sha256."
+      vi: "Bản tóm tắt ĐỌC (read-digest.mjs --knowledge): mọi tệp knowledge mà quyết định dẫn ra và slot hfs của mọi bản ghi đã viết, kèm sha256 của từng tệp."
+steps:
+  - reads: [standard, question]
+    writes: [read-digest]
+    action:
+      en: "READ the standard before deciding (knowledge/op-gate.yaml proofs.read-knowledge): run starci gate read --root <app> --touch <every record this op will write> --knowledge knowledge/design-patterns.yaml knowledge/architecture-rules.yaml knowledge/hfs/rules.yaml <and the knowledge/patterns files of the kinds the question concerns> --out $STARCI_JOB_SCRATCH/read-digest.json, and read what it records - the knowledge files in place and the hfs slot map of each record (slot, tier, rules). A question the standard already answers is answered from it (cite the rule or pattern id) like one the records decided; each option analysed names the rules it keeps or breaks, and the recommendation never breaks a canon rule silently. A record the op comes to write later is added with --touch and read the same way; REPORT with read-digest.json attached."
+      vi: "ĐỌC chuẩn trước khi quyết định (knowledge/op-gate.yaml proofs.read-knowledge): chạy starci gate read --root <app> --touch <mọi bản ghi op sẽ viết> --knowledge knowledge/design-patterns.yaml knowledge/architecture-rules.yaml knowledge/hfs/rules.yaml <và các tệp knowledge/patterns của loại mà câu hỏi liên quan> --out $STARCI_JOB_SCRATCH/read-digest.json, rồi đọc những gì nó ghi - các tệp knowledge tại chỗ và bản đồ slot hfs của từng bản ghi (slot, tầng, luật). Câu hỏi mà chuẩn đã trả lời thì trả lời từ chuẩn (dẫn mã luật hoặc pattern) như câu hỏi bản ghi đã quyết; mỗi phương án phân tích nêu các luật nó giữ hoặc phá, và khuyến nghị không bao giờ ngầm phá một luật canon. Bản ghi phát sinh về sau được thêm bằng --touch và đọc theo cùng cách; BÁO CÁO kèm read-digest.json."
+  - reads:
+      - question
+      - decided
+    writes: []
+    action:
+      en: "Try the decided records first. When one settles the question, report done with the first line
+        of the summary exactly \"answered-from: <record id>\" followed by the answer in one
+        paragraph, and write nothing. A question of business, design, authority, security, money or
+        customer data is the owner's to answer; only a mechanical one is not."
+  - reads:
+      - question
+      - decided
+      - environment
+    writes: [decision]
+    action:
+      en: Otherwise write the one policy-decision record draft with the question, the decided records it
+        strains between named in tension.records, the numbered options analysed per side and one
+        recommendation. A provision is not prepared here; that is provision.ask. Never the value
+        itself.
+  - reads:
+      - question
+    writes: []
+    action:
+      en: Print the question and its numbered options in this terminal and say that the owner may answer
+        here with the number, or later with workflow-answer; do not wait - a decision is taken
+        provisionally on the recommendation and the owner overturns it later.
+  - reads:
+      - question
+    writes: []
+    action:
+      en: 'Run `starci runtime validate` and report done exactly once: first line "decision: <record id>", then
+        "recommended: <n>", then the options numbered as the owner will answer them. If the owner
+        happened to answer here already, the first line is "answered-by-owner: <n>" instead.'
+proofs:
+  - id: decided-first
+    requirement:
+      en: A question a decided record settles is answered from that record, by id, and no record is
+        written.
+  - id: one-record
+    requirement:
+      en: Otherwise exactly one policy-decision record draft exists with the question, the tension records
+        by id, the numbered options analysed per side and one recommendation, and the workspace
+        validates. The explicit options array contains concrete selectable outcomes, not an agenda
+        of topics.
+  - id: asked-in-the-terminal
+    requirement:
+      en: The question and its numbered options were printed in this operation's own terminal, with both
+        ways to answer them, before any report was sent.
+  - id: no-secret
+    requirement:
+      en: No value of any credential or secret appears in the record, the report, the terminal or anywhere
+        else; a credential is put into the selected backend Stack environment's encrypted identity
+        custody by the owner's own command and this operation verifies only that it is present.
+  - id: checkpointed
+    requirement:
+      en: Every Work record file this operation wrote under its owned paths is committed by the runtime
+        as its workflow's checkpoint when the operation settles green (scripts/kernel/workflow-checkpoint.mjs
+        checkpointOp). The operation never commits and changes nothing outside its owned paths; settle
+        refuses workflow-foreign-commit or workflow-foreign-change otherwise.
+  - id: read-knowledge
+    requirement:
+      en: "starci kernel settle re-reads the attached read-digest.json (runtime check op-proof, proof read-knowledge): a done whose digest is missing (op-read-digest-missing), names no knowledge file or leaves a written record without its hfs slot (op-read-digest-no-knowledge) is refused."
+      vi: "starci kernel settle tự đọc lại read-digest.json đính kèm (check op-proof, proof read-knowledge): done thiếu bản tóm tắt (op-read-digest-missing), không nêu tệp knowledge nào hoặc có bản ghi đã viết thiếu slot hfs (op-read-digest-no-knowledge) đều bị từ chối."
+    check: scripts/kernel/gate-settle.mjs
+judge:
+  - by: machine
+    measures: [declared-checks, work-hygiene, op-proof:read-knowledge]
+    proofs: [one-record, read-knowledge]
+    why: "the settler re-runs the record validator over the records written, the Work files are checked for hygiene and the READ of the standard is re-read from the digest"
+  - by: owner
+    why: "the runtime never decides for the owner: it carries the recommendation into the work and the owner overturns it later"
+blockers:
+  - code: QUESTION_UNCLEAR
+    condition:
+      en: The question names no decidable choice and no record it touches; the operation that asked it is
+        sent back to state it.
+  - code: DECLARED_DEPENDENCY_UNMET
+    condition:
+      en: The feature the question belongs to has no records to draft the decision under.
+placeholders:
+  feature: shared
+  app: shared
+  bound-paths: shared
+  env: shared
+  identity-slug: Identity custody slug in a credential declaration, distinct from the decision slug
+  slug: Stable decision slug
+layoutPolicy:
+  checks: [starci-validate]
+route:
+  nodeKinds: [business]
+  phase: [decide, cross-cutting]
+  intent: [decision, prepare, owner-question]
+  prerequisites: [a decidable question raised by another op]
