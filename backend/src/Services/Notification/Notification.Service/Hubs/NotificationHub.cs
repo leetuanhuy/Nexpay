@@ -55,3 +55,4 @@ public class NotificationHub : Hub
             ?? Context.UserIdentifier;
     }
 }
+

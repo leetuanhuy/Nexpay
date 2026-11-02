@@ -45,7 +45,6 @@ public class OrderPaymentFailedConsumer : IConsumer<OrderPaymentFailedIntegratio
 
         // Push real-time notification
         await _hubContext.Clients.Group(userGroup).SendAsync("ReceiveNotification", payload, context.CancellationToken);
-        await _hubContext.Clients.User(message.UserId.ToString()).SendAsync("ReceiveNotification", payload, context.CancellationToken);
 
         // Push direct order status failure event
         await _hubContext.Clients.Group(userGroup).SendAsync("OrderFailed", new
@@ -56,3 +55,4 @@ public class OrderPaymentFailedConsumer : IConsumer<OrderPaymentFailedIntegratio
         }, context.CancellationToken);
     }
 }
+

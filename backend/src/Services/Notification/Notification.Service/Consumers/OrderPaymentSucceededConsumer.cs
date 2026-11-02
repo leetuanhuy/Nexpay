@@ -45,7 +45,6 @@ public class OrderPaymentSucceededConsumer : IConsumer<OrderPaymentSucceededInte
 
         // Push real-time notification
         await _hubContext.Clients.Group(userGroup).SendAsync("ReceiveNotification", payload, context.CancellationToken);
-        await _hubContext.Clients.User(message.UserId.ToString()).SendAsync("ReceiveNotification", payload, context.CancellationToken);
 
         // Push direct order status completion event
         await _hubContext.Clients.Group(userGroup).SendAsync("OrderCompleted", new
@@ -57,3 +56,4 @@ public class OrderPaymentSucceededConsumer : IConsumer<OrderPaymentSucceededInte
         }, context.CancellationToken);
     }
 }
+

@@ -71,18 +71,18 @@ export function App() {
 
   // Load user data upon authentication & connect to SignalR WebSockets Hub
   useEffect(() => {
-    if (authVM.isAuthenticated) {
+    if (authVM.isAuthenticated && authVM.user) {
       walletVM.fetchWallet();
       ledgerVM.fetchTransactions();
       paymentVM.fetchOrders();
-      signalRNotificationService.startConnection();
-    } else {
+      signalRNotificationService.startConnection('', authVM.user.id);
+    } else if (!authVM.isAuthenticated) {
       signalRNotificationService.stopConnection();
       if (!authVM.loading && !authVM.user) {
         setIsAuthOpen(true);
       }
     }
-  }, [authVM.isAuthenticated, authVM.loading]);
+  }, [authVM.isAuthenticated, authVM.user, authVM.loading]);
 
   const handleRefreshAll = () => {
     walletVM.fetchWallet();

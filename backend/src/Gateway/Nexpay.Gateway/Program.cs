@@ -4,14 +4,15 @@ using Microsoft.AspNetCore.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. CORS Configuration (Allows Frontend apps to communicate seamlessly)
+// 1. CORS Configuration (Allows Frontend apps & SignalR WebSockets with Credentials)
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
     {
-        policy.AllowAnyOrigin()
+        policy.SetIsOriginAllowed(_ => true)
               .AllowAnyMethod()
-              .AllowAnyHeader();
+              .AllowAnyHeader()
+              .AllowCredentials();
     });
 });
 
@@ -71,6 +72,7 @@ app.MapGet("/", () => Results.Ok(new
     }
 }));
 
+// Run Reverse Proxy
 app.MapReverseProxy();
 
 app.Run();

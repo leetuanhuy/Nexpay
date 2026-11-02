@@ -31,7 +31,7 @@ export const ToastNotification: React.FC<ToastNotificationProps> = ({
   };
 
   return (
-    <div className="fixed top-20 right-4 sm:right-8 z-50 max-w-sm w-full animate-bounce">
+    <div className="fixed top-20 right-4 sm:right-8 z-50 max-w-sm w-full transition-all duration-300">
       <div
         className={`p-4 rounded-3xl bg-slate-950/95 backdrop-blur-xl border shadow-2xl flex items-start space-x-3.5 transition-all duration-300 ${
           isSuccess
@@ -83,3 +83,4 @@ export const ToastNotification: React.FC<ToastNotificationProps> = ({
     </div>
   );
 };
+

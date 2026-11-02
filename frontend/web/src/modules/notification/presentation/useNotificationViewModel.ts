@@ -43,7 +43,10 @@ export const useNotificationViewModel = (
         isRead: false,
       };
 
-      setNotifications((prev) => [item, ...prev].slice(0, 50));
+      setNotifications((prev) => {
+        if (prev.some((n) => n.id === item.id)) return prev;
+        return [item, ...prev].slice(0, 50);
+      });
       setActiveToast(item);
     });
 
@@ -101,3 +104,4 @@ export const useNotificationViewModel = (
     dismissToast,
   };
 };
+

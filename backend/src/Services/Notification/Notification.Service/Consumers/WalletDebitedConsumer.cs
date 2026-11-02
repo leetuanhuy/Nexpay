@@ -45,7 +45,6 @@ public class WalletDebitedConsumer : IConsumer<WalletDebitedIntegrationEvent>
 
         // Push real-time notification
         await _hubContext.Clients.Group(userGroup).SendAsync("ReceiveNotification", payload, context.CancellationToken);
-        await _hubContext.Clients.User(message.UserId.ToString()).SendAsync("ReceiveNotification", payload, context.CancellationToken);
 
         // Push balance update event
         await _hubContext.Clients.Group(userGroup).SendAsync("BalanceUpdated", new

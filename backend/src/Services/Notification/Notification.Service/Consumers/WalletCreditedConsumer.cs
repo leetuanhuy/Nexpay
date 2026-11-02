@@ -43,9 +43,8 @@ public class WalletCreditedConsumer : IConsumer<WalletCreditedIntegrationEvent>
             Timestamp: DateTime.UtcNow
         );
 
-        // Push real-time notification to user group and user identifier
+        // Push real-time notification to user group
         await _hubContext.Clients.Group(userGroup).SendAsync("ReceiveNotification", payload, context.CancellationToken);
-        await _hubContext.Clients.User(message.UserId.ToString()).SendAsync("ReceiveNotification", payload, context.CancellationToken);
 
         // Push balance update event for instant wallet card refresh without polling
         await _hubContext.Clients.Group(userGroup).SendAsync("BalanceUpdated", new

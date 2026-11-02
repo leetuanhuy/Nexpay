@@ -11,3 +11,4 @@ public record NotificationPayload(
     DateTime Timestamp,
     bool IsRead = false
 );
+
