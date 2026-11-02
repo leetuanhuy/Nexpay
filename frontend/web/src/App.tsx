@@ -6,6 +6,7 @@ import { useWalletViewModel } from './modules/wallet/presentation/useWalletViewM
 import { useLedgerViewModel } from './modules/wallet/presentation/useLedgerViewModel';
 import { VirtualCard } from './modules/wallet/presentation/VirtualCard';
 import { TopUpModal } from './modules/wallet/presentation/TopUpModal';
+import { WithdrawModal } from './modules/wallet/presentation/WithdrawModal';
 import { LedgerTable } from './modules/wallet/presentation/LedgerTable';
 import { usePaymentViewModel } from './modules/payment/presentation/usePaymentViewModel';
 import { CheckoutSimulator } from './modules/payment/presentation/CheckoutSimulator';
@@ -30,6 +31,7 @@ import {
 export function App() {
   const [activeTab, setActiveTab] = useState<'checkout' | 'ledger' | 'orders' | 'architecture'>('checkout');
   const [isTopUpOpen, setIsTopUpOpen] = useState<boolean>(false);
+  const [isWithdrawOpen, setIsWithdrawOpen] = useState<boolean>(false);
   const [isAuthOpen, setIsAuthOpen] = useState<boolean>(false);
   const [gatewayConnected, setGatewayConnected] = useState<boolean>(false);
 
@@ -192,6 +194,7 @@ export function App() {
             cardholderName={authVM.user?.fullName}
             loading={walletVM.loading}
             onTopUp={() => setIsTopUpOpen(true)}
+            onWithdraw={() => setIsWithdrawOpen(true)}
             onRefresh={walletVM.fetchWallet}
           />
         </section>
@@ -297,6 +300,13 @@ export function App() {
       <TopUpModal
         isOpen={isTopUpOpen}
         onClose={() => setIsTopUpOpen(false)}
+        onSuccess={handleRefreshAll}
+      />
+
+      <WithdrawModal
+        isOpen={isWithdrawOpen}
+        onClose={() => setIsWithdrawOpen(false)}
+        currentBalance={walletVM.wallet?.balance}
         onSuccess={handleRefreshAll}
       />
 

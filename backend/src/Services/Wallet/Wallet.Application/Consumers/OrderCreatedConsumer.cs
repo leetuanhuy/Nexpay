@@ -52,6 +52,19 @@ public class OrderCreatedConsumer : IConsumer<OrderCreatedIntegrationEvent>
                 transaction.Id
             );
 
+            // Publish real-time WalletDebited event for instant notification & balance sync
+            await _publishEndpoint.Publish(new WalletDebitedIntegrationEvent(
+                EventId: Guid.NewGuid(),
+                OccurredOnUtc: DateTime.UtcNow,
+                UserId: message.UserId,
+                WalletId: transaction.WalletId,
+                Amount: transaction.Amount,
+                BalanceBefore: transaction.BalanceBefore,
+                BalanceAfter: transaction.BalanceAfter,
+                ReferenceId: message.OrderCode,
+                Description: $"Payment for order #{message.OrderCode}"
+            ), context.CancellationToken);
+
             // Publish success event back to Saga
             await _publishEndpoint.Publish(new OrderPaymentSucceededIntegrationEvent(
                 EventId: Guid.NewGuid(),
@@ -84,4 +97,3 @@ public class OrderCreatedConsumer : IConsumer<OrderCreatedIntegrationEvent>
         }
     }
 }
-

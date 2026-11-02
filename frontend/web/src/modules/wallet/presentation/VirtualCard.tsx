@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import {
   Wifi,
   ShieldCheck,
-  ArrowUpRight,
   PlusCircle,
+  MinusCircle,
   RefreshCw,
   Eye,
   EyeOff,
@@ -23,16 +23,14 @@ interface VirtualCardProps {
   wallet: Wallet | null;
   cardholderName?: string;
   loading: boolean;
-  onTopUp: () => void;
-  onRefresh: () => void;
+  onTopUp: () => void;  onWithdraw?: () => void;  onRefresh: () => void;
 }
 
 export const VirtualCard: React.FC<VirtualCardProps> = ({
   wallet,
   cardholderName = 'Nexpay VIP Member',
   loading,
-  onTopUp,
-  onRefresh,
+  onTopUp,  onWithdraw = () => {},  onRefresh,
 }) => {
   const [showCardNumber, setShowCardNumber] = useState<boolean>(false);
   const [isCopied, setIsCopied] = useState<boolean>(false);
@@ -223,16 +221,26 @@ export const VirtualCard: React.FC<VirtualCardProps> = ({
           </div>
 
           {/* Primary Action Button */}
-          <Button
-            onClick={onTopUp}
-            variant="primary"
-            size="lg"
-            className="w-full justify-between shadow-lg shadow-emerald-500/20 mb-4"
-            icon={<PlusCircle className="h-5 w-5" />}
-          >
-            <span className="font-bold text-sm">Deposit / Top Up Wallet</span>
-            <ArrowUpRight className="h-4 w-4 ml-auto" />
-          </Button>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <Button
+              onClick={onTopUp}
+              variant="primary"
+              size="md"
+              className="justify-center shadow-lg shadow-emerald-500/20"
+              icon={<PlusCircle className="h-4 w-4" />}
+            >
+              <span className="font-bold text-xs sm:text-sm">+ Top Up</span>
+            </Button>
+            <Button
+              onClick={onWithdraw}
+              variant="secondary"
+              size="md"
+              className="justify-center border border-slate-700 hover:border-rose-500/50 hover:bg-rose-500/10 text-slate-300 hover:text-rose-300"
+              icon={<MinusCircle className="h-4 w-4 text-rose-400" />}
+            >
+              <span className="font-bold text-xs sm:text-sm">- Withdraw</span>
+            </Button>
+          </div>
 
           {/* Spending Limit Meter */}
           <div className="space-y-2 p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800/80">
