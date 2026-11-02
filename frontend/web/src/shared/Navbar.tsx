@@ -7,11 +7,18 @@ import {
   Terminal,
 } from 'lucide-react';
 import type { User } from '../modules/auth/domain/User';
+import type { NotificationItem } from '../modules/notification/domain/NotificationItem';
+import { NotificationBell } from '../modules/notification/presentation/NotificationBell';
 import { Button } from './Button';
 
 interface NavbarProps {
   user: User | null;
   gatewayConnected: boolean;
+  unreadCount?: number;
+  notifications?: NotificationItem[];
+  onMarkAsRead?: (id: string) => void;
+  onMarkAllAsRead?: () => void;
+  onClearNotifications?: () => void;
   onLogout: () => void;
   onOpenAuth: () => void;
 }
@@ -19,6 +26,11 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({
   user,
   gatewayConnected,
+  unreadCount = 0,
+  notifications = [],
+  onMarkAsRead = () => {},
+  onMarkAllAsRead = () => {},
+  onClearNotifications = () => {},
   onLogout,
   onOpenAuth,
 }) => {
@@ -46,7 +58,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Right side controls */}
-        <div className="flex items-center space-x-3 sm:space-x-4">
+        <div className="flex items-center space-x-2.5 sm:space-x-3.5">
           {/* Quick links to Developer Portals */}
           <div className="hidden lg:flex items-center space-x-2">
             <a
@@ -79,6 +91,17 @@ export const Navbar: React.FC<NavbarProps> = ({
               {gatewayConnected ? 'Healthy' : 'Connecting...'}
             </span>
           </div>
+
+          {/* Real-time Notification Bell */}
+          {user && (
+            <NotificationBell
+              notifications={notifications}
+              unreadCount={unreadCount}
+              onMarkAsRead={onMarkAsRead}
+              onMarkAllAsRead={onMarkAllAsRead}
+              onClear={onClearNotifications}
+            />
+          )}
 
           {/* User Section */}
           {user ? (

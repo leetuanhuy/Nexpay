@@ -11,6 +11,9 @@ import { usePaymentViewModel } from './modules/payment/presentation/usePaymentVi
 import { CheckoutSimulator } from './modules/payment/presentation/CheckoutSimulator';
 import { OrdersHistory } from './modules/payment/presentation/OrdersHistory';
 import { ArchitectureTopology } from './shared/ArchitectureTopology';
+import { useNotificationViewModel } from './modules/notification/presentation/useNotificationViewModel';
+import { ToastNotification } from './modules/notification/presentation/ToastNotification';
+import { signalRNotificationService } from './core/realtime/SignalRNotificationService';
 import { defaultHttpClient } from './core/http/HttpClient';
 import { CurrencyFormatter } from './core/utils/formatters';
 import {
@@ -21,6 +24,7 @@ import {
   Wallet as WalletIcon,
   RefreshCw,
   ShieldCheck,
+  Radio,
 } from 'lucide-react';
 
 export function App() {
@@ -41,6 +45,14 @@ export function App() {
 
   const paymentVM = usePaymentViewModel(handleSagaSuccess);
 
+  // Real-Time Notification & Balance Synchronization (Zero-Polling)
+  const handleRealTimeBalanceUpdate = useCallback(() => {
+    walletVM.fetchWallet();
+    ledgerVM.fetchTransactions();
+  }, [walletVM, ledgerVM]);
+
+  const notificationVM = useNotificationViewModel(handleRealTimeBalanceUpdate);
+
   // Ping API Gateway health (YARP :5000)
   const checkGateway = useCallback(async () => {
     try {
@@ -57,14 +69,18 @@ export function App() {
     return () => clearInterval(interval);
   }, [checkGateway]);
 
-  // Load user data upon authentication
+  // Load user data upon authentication & connect to SignalR WebSockets Hub
   useEffect(() => {
     if (authVM.isAuthenticated) {
       walletVM.fetchWallet();
       ledgerVM.fetchTransactions();
       paymentVM.fetchOrders();
-    } else if (!authVM.loading && !authVM.user) {
-      setIsAuthOpen(true);
+      signalRNotificationService.startConnection();
+    } else {
+      signalRNotificationService.stopConnection();
+      if (!authVM.loading && !authVM.user) {
+        setIsAuthOpen(true);
+      }
     }
   }, [authVM.isAuthenticated, authVM.loading]);
 
@@ -79,10 +95,21 @@ export function App() {
       {/* Background ambient lighting */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[400px] bg-gradient-to-b from-emerald-500/10 via-teal-500/5 to-transparent blur-3xl pointer-events-none -z-10" />
 
-      {/* Header */}
+      {/* Floating Real-Time Toast Notification */}
+      <ToastNotification
+        notification={notificationVM.activeToast}
+        onDismiss={notificationVM.dismissToast}
+      />
+
+      {/* Header with Real-Time Notification Bell */}
       <Navbar
         user={authVM.user}
         gatewayConnected={gatewayConnected}
+        unreadCount={notificationVM.unreadCount}
+        notifications={notificationVM.notifications}
+        onMarkAsRead={notificationVM.markAsRead}
+        onMarkAllAsRead={notificationVM.markAllAsRead}
+        onClearNotifications={notificationVM.clearNotifications}
         onLogout={authVM.logout}
         onOpenAuth={() => setIsAuthOpen(true)}
       />
@@ -140,13 +167,16 @@ export function App() {
             </div>
           </div>
 
-          {/* Card 4: Architecture Status */}
+          {/* Card 4: SignalR & Architecture Status */}
           <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800 flex items-center justify-between shadow-lg">
             <div>
-              <span className="text-xs text-slate-400 font-semibold mb-1 block">System Mesh</span>
+              <div className="flex items-center space-x-1.5 text-xs text-slate-400 font-semibold mb-1">
+                <Radio className="h-3.5 w-3.5 text-emerald-400 animate-pulse" />
+                <span>SignalR WebSockets</span>
+              </div>
               <p className="text-sm font-black text-emerald-400 flex items-center space-x-1.5 mt-1">
                 <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping inline-block" />
-                <span>10 Containers Online</span>
+                <span>Live Event Stream Active</span>
               </p>
             </div>
             <div className="p-3 rounded-2xl bg-emerald-500/10 text-emerald-400">
@@ -279,7 +309,7 @@ export function App() {
       {/* Footer */}
       <footer className="border-t border-slate-800/80 py-8 mt-16 bg-slate-950/60 text-center text-xs text-slate-500 space-y-1">
         <p className="font-semibold text-slate-400">
-          Nexpay Enterprise Microservices Ecosystem • .NET 10 • Clean Architecture
+          Nexpay Enterprise Microservices Ecosystem • .NET 10 • Clean Architecture • SignalR Real-Time
         </p>
         <p className="text-[11px] text-slate-500">
           Identity (5248) • Wallet (5249) • Payment (5251) • Notification (5250) • Gateway (5000) • RabbitMQ (15672) • Seq (5341)

@@ -29,7 +29,7 @@ const SERVICES: ServiceNode[] = [
     protocol: 'HTTP/2',
     status: 'Healthy',
     tech: 'Microsoft YARP (.NET 10)',
-    description: 'Central entry point routing /api/v1/auth, /api/v1/wallets, /api/v1/payments.',
+    description: 'Central entry point routing /api/v1/auth, /api/v1/wallets, /api/v1/payments, /hubs.',
   },
   {
     name: 'Identity.API',
@@ -63,12 +63,12 @@ const SERVICES: ServiceNode[] = [
   },
   {
     name: 'Notification.Service',
-    role: 'Event Consumer & Alerts Dispatcher',
+    role: 'Real-Time SignalR Hub & Event Dispatcher',
     port: 5250,
-    protocol: 'Background Worker',
+    protocol: 'WebSockets / SignalR',
     status: 'Healthy',
-    tech: '.NET 10 Worker • MassTransit Consumer',
-    description: 'Consumes integration events from RabbitMQ and delivers notification logs.',
+    tech: 'ASP.NET Core SignalR • MassTransit',
+    description: 'Streams real-time push notifications, toast alerts, and live balance updates to the browser.',
   },
   {
     name: 'RabbitMQ Message Broker',

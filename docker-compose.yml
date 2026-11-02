@@ -186,6 +186,9 @@ services:
       - RabbitMQ__Username=${RABBITMQ_DEFAULT_USER:-guest}
       - RabbitMQ__Password=${RABBITMQ_DEFAULT_PASS:-guest}
       - Seq__ServerUrl=http://seq:80
+      - JwtSettings__Secret=Nexpay_Super_Secret_Key_For_JWT_Signing_2026_AtLeast32Bytes!
+      - JwtSettings__Issuer=Nexpay.Identity
+      - JwtSettings__Audience=Nexpay.Client
     ports:
       - "5250:8080"
     depends_on:
@@ -253,6 +256,7 @@ services:
       - ReverseProxy__Clusters__identity-cluster__Destinations__identity-service__Address=http://identity-service:8080
       - ReverseProxy__Clusters__wallet-cluster__Destinations__wallet-service__Address=http://wallet-service:8080
       - ReverseProxy__Clusters__payment-cluster__Destinations__payment-service__Address=http://payment-service:8080
+      - ReverseProxy__Clusters__notification-cluster__Destinations__notification-service__Address=http://notification-service:8080
     ports:
       - "5000:8080"
     depends_on:
@@ -261,6 +265,8 @@ services:
       wallet-service:
         condition: service_healthy
       payment-service:
+        condition: service_healthy
+      notification-service:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/8080' || exit 1"]

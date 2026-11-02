@@ -1,10 +1,11 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import type { PaymentOrder } from '../domain/PaymentOrder';
 import { HttpPaymentRepository } from '../infrastructure/HttpPaymentRepository';
 import { defaultHttpClient } from '../../../core/http/HttpClient';
 import { CheckoutOrderUseCase } from '../application/CheckoutOrderUseCase';
 import { GetOrderByIdUseCase } from '../application/GetOrderByIdUseCase';
 import { GetMyOrdersUseCase } from '../application/GetMyOrdersUseCase';
+import { signalRNotificationService } from '../../../core/realtime/SignalRNotificationService';
 
 export const usePaymentViewModel = (onSagaSuccess?: () => void) => {
   const [orders, setOrders] = useState<PaymentOrder[]>([]);
@@ -12,6 +13,11 @@ export const usePaymentViewModel = (onSagaSuccess?: () => void) => {
   const [sagaStep, setSagaStep] = useState<number>(0); // 0: Idle, 1: Initiated, 2: RabbitMQ Processing, 3: Completed, 4: Failed
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+
+  const activeOrderIdRef = useRef<string | null>(null);
+  activeOrderIdRef.current = activeOrder?.id || null;
+
+  const pollingIntervalRef = useRef<any>(null);
 
   const { checkoutOrderUseCase, getOrderByIdUseCase, getMyOrdersUseCase } = useMemo(() => {
     const repo = new HttpPaymentRepository(defaultHttpClient);
@@ -37,6 +43,38 @@ export const usePaymentViewModel = (onSagaSuccess?: () => void) => {
     }
   }, [getMyOrdersUseCase]);
 
+  // Real-Time SignalR Event Subscriptions for Instant Saga Resolution
+  useEffect(() => {
+    const unsubCompleted = signalRNotificationService.onOrderCompleted((data) => {
+      if (activeOrderIdRef.current && activeOrderIdRef.current.toLowerCase() === data.orderId.toLowerCase()) {
+        if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+        setActiveOrder((prev) => (prev ? { ...prev, status: 'Completed' } : null));
+        setSagaStep(3); // Completed!
+        setLoading(false);
+        onSagaSuccess?.();
+        fetchOrders();
+      }
+    });
+
+    const unsubFailed = signalRNotificationService.onOrderFailed((data) => {
+      if (activeOrderIdRef.current && activeOrderIdRef.current.toLowerCase() === data.orderId.toLowerCase()) {
+        if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+        setActiveOrder((prev) => (prev ? { ...prev, status: 'Failed', failureReason: data.reason } : null));
+        setSagaStep(4); // Failed!
+        setError(data.reason || 'Payment failed during wallet debit.');
+        setLoading(false);
+        onSagaSuccess?.();
+        fetchOrders();
+      }
+    });
+
+    return () => {
+      unsubCompleted();
+      unsubFailed();
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+    };
+  }, [onSagaSuccess, fetchOrders]);
+
   const checkout = async (amount: number, description?: string) => {
     try {
       setLoading(true);
@@ -47,9 +85,11 @@ export const usePaymentViewModel = (onSagaSuccess?: () => void) => {
       setActiveOrder(order);
       setSagaStep(2); // RabbitMQ choreography in progress
 
-      // Poll order status to track Saga completion
+      // Fallback Polling (in case WebSockets connection has jitter)
       let attempts = 0;
-      const interval = setInterval(async () => {
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+
+      pollingIntervalRef.current = setInterval(async () => {
         attempts++;
         try {
           const updated = await getOrderByIdUseCase.execute(order.id);
@@ -57,28 +97,28 @@ export const usePaymentViewModel = (onSagaSuccess?: () => void) => {
 
           if (updated.status === 'Completed') {
             setSagaStep(3); // Completed!
-            clearInterval(interval);
+            clearInterval(pollingIntervalRef.current);
             setLoading(false);
             onSagaSuccess?.();
             fetchOrders();
           } else if (updated.status === 'Failed') {
-            setSagaStep(4); // Failed (Insufficient balance, etc.)
+            setSagaStep(4); // Failed!
             setError(updated.failureReason || 'Payment failed during wallet debit.');
-            clearInterval(interval);
+            clearInterval(pollingIntervalRef.current);
             setLoading(false);
             onSagaSuccess?.();
             fetchOrders();
           }
 
           if (attempts > 25) {
-            clearInterval(interval);
+            clearInterval(pollingIntervalRef.current);
             setLoading(false);
             if (updated.status === 'Pending') {
               setError('Saga transaction took longer than expected. Please check order history.');
             }
           }
         } catch {
-          clearInterval(interval);
+          clearInterval(pollingIntervalRef.current);
           setLoading(false);
         }
       }, 600);
