@@ -74,3 +74,4 @@ public class WalletTransferredConsumer : IConsumer<WalletTransferredIntegrationE
         }, context.CancellationToken);
     }
 }
+

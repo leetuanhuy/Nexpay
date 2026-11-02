@@ -5,6 +5,8 @@ import {
   Copy,
   Check,
   Download,
+  Link as LinkIcon,
+  Lock,
 } from 'lucide-react';
 import { Modal } from '../../../shared/Modal';
 import { Button } from '../../../shared/Button';
@@ -16,6 +18,7 @@ interface MyQrCodeModalProps {
   onClose: () => void;
   user: User | null;
   walletId?: string;
+  onOpenAuth?: () => void;
 }
 
 export const MyQrCodeModal: React.FC<MyQrCodeModalProps> = ({
@@ -23,11 +26,12 @@ export const MyQrCodeModal: React.FC<MyQrCodeModalProps> = ({
   onClose,
   user,
   walletId,
+  onOpenAuth,
 }) => {
   const [amount, setAmount] = useState<number | ''>('');
   const [note, setNote] = useState<string>('');
-  const [qrDataUrl, setQrDataUrl] = useState<string>('');
-  const [copied, setCopied] = useState<boolean>(false);
+  const [qrSvg, setQrSvg] = useState<string>('');
+  const [copiedType, setCopiedType] = useState<'email' | 'link' | null>(null);
 
   useEffect(() => {
     if (!isOpen || !user) return;
@@ -43,32 +47,84 @@ export const MyQrCodeModal: React.FC<MyQrCodeModalProps> = ({
       note: note || undefined,
     });
 
-    QRCode.toDataURL(payload, {
-      width: 320,
-      margin: 2,
-      color: {
-        dark: '#022c22', // Deep emerald
-        light: '#ffffff',
-      },
-    })
-      .then((url) => setQrDataUrl(url))
-      .catch((err) => console.error('Failed to generate QR code:', err));
+    const qrLib: any = (QRCode as any).default || QRCode;
+
+    qrLib
+      .toString(payload, {
+        type: 'svg',
+        width: 320,
+        margin: 2,
+        color: {
+          dark: '#022c22', // Deep emerald
+          light: '#ffffff',
+        },
+      })
+      .then((svg: string) => {
+        setQrSvg(svg);
+      })
+      .catch((err: any) => {
+        console.error('Failed to generate QR SVG:', err);
+      });
   }, [isOpen, user, walletId, amount, note]);
 
-  if (!isOpen || !user) return null;
+  if (!isOpen) return null;
 
-  const handleCopyPayload = () => {
+  if (!user) {
+    return (
+      <Modal isOpen={isOpen} onClose={onClose} maxWidth="sm">
+        <div className="py-8 text-center flex flex-col items-center space-y-4">
+          <div className="p-4 rounded-3xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+            <Lock className="h-8 w-8" />
+          </div>
+          <h3 className="text-base font-bold text-white">Authentication Required</h3>
+          <p className="text-xs text-slate-400 max-w-xs">
+            Please log in or register an account to view and share your personal payment QR code.
+          </p>
+          <div className="flex items-center space-x-3 pt-2">
+            <Button type="button" onClick={onClose} variant="ghost" size="md">
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenAuth?.();
+              }}
+              variant="primary"
+              size="md"
+            >
+              Login to Nexpay
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  const handleCopyEmail = () => {
     navigator.clipboard.writeText(user.email);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setCopiedType('email');
+    setTimeout(() => setCopiedType(null), 2000);
+  };
+
+  const handleCopyLink = () => {
+    const link = `${window.location.origin}/?transferTo=${encodeURIComponent(user.email)}${
+      amount ? `&amount=${amount}` : ''
+    }`;
+    navigator.clipboard.writeText(link);
+    setCopiedType('link');
+    setTimeout(() => setCopiedType(null), 2000);
   };
 
   const handleDownloadQr = () => {
-    if (!qrDataUrl) return;
+    if (!qrSvg) return;
+    const blob = new Blob([qrSvg], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = qrDataUrl;
-    a.download = `nexpay-qr-${user.email}.png`;
+    a.href = url;
+    a.download = `nexpay-qr-${user.email}.svg`;
     a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -87,21 +143,22 @@ export const MyQrCodeModal: React.FC<MyQrCodeModalProps> = ({
       <div className="flex flex-col items-center space-y-4">
         {/* QR Frame Card */}
         <div className="p-4 rounded-3xl bg-white shadow-2xl flex flex-col items-center border border-slate-200">
-          {qrDataUrl ? (
-            <img
-              src={qrDataUrl}
-              alt="Nexpay Payment QR"
-              className="w-56 h-56 rounded-2xl"
-            />
-          ) : (
-            <div className="w-56 h-56 flex items-center justify-center text-xs text-slate-400">
-              Generating QR...
-            </div>
-          )}
+          <div className="w-56 h-56 flex items-center justify-center overflow-hidden rounded-2xl bg-white">
+            {qrSvg ? (
+              <div
+                className="w-full h-full flex items-center justify-center [&>svg]:w-full [&>svg]:h-full [&>svg]:block"
+                dangerouslySetInnerHTML={{ __html: qrSvg }}
+              />
+            ) : (
+              <div className="text-xs text-slate-400 animate-pulse font-medium">
+                Generating QR...
+              </div>
+            )}
+          </div>
 
           <div className="mt-3 text-center">
             <h4 className="text-sm font-black text-slate-900">{user.fullName}</h4>
-            <p className="text-xs text-slate-500 font-medium">{user.email}</p>
+            <p className="text-xs text-slate-500 font-mono font-medium">{user.email}</p>
             {amount ? (
               <p className="text-sm font-mono font-black text-emerald-600 mt-1">
                 Requesting: {CurrencyFormatter.formatVND(Number(amount))}
@@ -148,28 +205,39 @@ export const MyQrCodeModal: React.FC<MyQrCodeModalProps> = ({
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="grid grid-cols-2 gap-2.5 w-full pt-1">
+        {/* Action Buttons: 3 buttons (Copy Email, Copy Link, Download) */}
+        <div className="grid grid-cols-3 gap-2 w-full pt-1">
           <Button
             type="button"
-            onClick={handleCopyPayload}
+            onClick={handleCopyEmail}
             variant="secondary"
-            size="md"
-            className="justify-center text-xs"
-            icon={copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+            size="sm"
+            className="justify-center text-[11px] px-2"
+            icon={copiedType === 'email' ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
           >
-            {copied ? 'Copied Email' : 'Copy Email'}
+            {copiedType === 'email' ? 'Copied' : 'Email'}
+          </Button>
+
+          <Button
+            type="button"
+            onClick={handleCopyLink}
+            variant="secondary"
+            size="sm"
+            className="justify-center text-[11px] px-2"
+            icon={copiedType === 'link' ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <LinkIcon className="h-3.5 w-3.5" />}
+          >
+            {copiedType === 'link' ? 'Copied' : 'Link'}
           </Button>
 
           <Button
             type="button"
             onClick={handleDownloadQr}
             variant="secondary"
-            size="md"
-            className="justify-center text-xs"
-            icon={<Download className="h-4 w-4" />}
+            size="sm"
+            className="justify-center text-[11px] px-2"
+            icon={<Download className="h-3.5 w-3.5" />}
           >
-            Download QR
+            Save QR
           </Button>
         </div>
       </div>

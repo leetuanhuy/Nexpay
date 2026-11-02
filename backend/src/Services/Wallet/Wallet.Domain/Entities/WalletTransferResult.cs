@@ -12,3 +12,4 @@ public record WalletTransferResult(
     decimal ReceiverBalanceAfter,
     DateTime CreatedAtUtc
 );
+

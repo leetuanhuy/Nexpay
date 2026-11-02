@@ -8,6 +8,7 @@ import {
   Search,
   History,
   ShieldCheck,
+  ClipboardPaste,
 } from 'lucide-react';
 import { Modal } from '../../../shared/Modal';
 import { Button } from '../../../shared/Button';
@@ -102,6 +103,60 @@ export const TransferModal: React.FC<TransferModalProps> = ({
     setLookupError(null);
   };
 
+  const handleParseQrOrLink = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text || !text.trim()) return;
+
+      let emailOrId = text.trim();
+      let transferAmount: number | null = null;
+      let transferNote: string | null = null;
+
+      // Check if JSON QR payload
+      if (text.startsWith('{') && text.includes('nexpay')) {
+        try {
+          const parsed = JSON.parse(text);
+          emailOrId = parsed.receiverEmail || parsed.receiverId;
+          if (parsed.amount) transferAmount = Number(parsed.amount);
+          if (parsed.note) transferNote = parsed.note;
+        } catch {
+          // ignore
+        }
+      } else if (text.includes('transferTo=')) {
+        try {
+          const url = new URL(text);
+          const to = url.searchParams.get('transferTo');
+          const amt = url.searchParams.get('amount');
+          if (to) emailOrId = to;
+          if (amt) transferAmount = Number(amt);
+        } catch {
+          // ignore
+        }
+      }
+
+      setQuery(emailOrId);
+      if (transferAmount) setAmount(transferAmount);
+      if (transferNote) setDescription(transferNote);
+
+      setLookingUp(true);
+      setLookupError(null);
+      const authRepo = new HttpAuthRepository(defaultHttpClient);
+      const useCase = new LookupRecipientUseCase(authRepo);
+      const res = await useCase.execute(emailOrId);
+
+      if (currentUserId && res.id.toLowerCase() === currentUserId.toLowerCase()) {
+        setLookupError('You cannot transfer money to your own wallet.');
+        setRecipient(null);
+      } else {
+        setRecipient(res);
+      }
+    } catch (err: any) {
+      setLookupError('Unable to parse clipboard: ' + (err.message || 'Check clipboard.'));
+    } finally {
+      setLookingUp(false);
+    }
+  };
+
   const handleTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!recipient) return;
@@ -175,9 +230,20 @@ export const TransferModal: React.FC<TransferModalProps> = ({
 
           {/* Step 1: Find Recipient */}
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-              Recipient Email or User ID
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-semibold text-slate-300">
+                Recipient Email or User ID
+              </label>
+              <button
+                type="button"
+                onClick={handleParseQrOrLink}
+                className="text-[11px] text-teal-400 hover:text-teal-300 transition flex items-center space-x-1 cursor-pointer font-medium"
+                title="Paste QR payload, Link, or Email from clipboard"
+              >
+                <ClipboardPaste className="h-3.5 w-3.5" />
+                <span>Paste QR / Link</span>
+              </button>
+            </div>
             <div className="flex items-center space-x-2">
               <div className="relative flex-1">
                 <input

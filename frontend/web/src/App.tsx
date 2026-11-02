@@ -36,6 +36,7 @@ export function App() {
   const [isWithdrawOpen, setIsWithdrawOpen] = useState<boolean>(false);
   const [isTransferOpen, setIsTransferOpen] = useState<boolean>(false);
   const [isQrOpen, setIsQrOpen] = useState<boolean>(false);
+  const [qrTransferData, setQrTransferData] = useState<{ recipientEmail?: string; amount?: number } | null>(null);
   const [isAuthOpen, setIsAuthOpen] = useState<boolean>(false);
   const [gatewayConnected, setGatewayConnected] = useState<boolean>(false);
 
@@ -58,6 +59,25 @@ export function App() {
   }, [walletVM, ledgerVM]);
 
   const notificationVM = useNotificationViewModel(handleRealTimeBalanceUpdate);
+
+  // Check for QR deep link (?transferTo=...&amount=...)
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const transferTo = params.get('transferTo');
+      const amountStr = params.get('amount');
+      if (transferTo) {
+        setQrTransferData({
+          recipientEmail: transferTo,
+          amount: amountStr ? parseInt(amountStr) : undefined,
+        });
+        setIsTransferOpen(true);
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    } catch {
+      // Ignore
+    }
+  }, []);
 
   // Ping API Gateway health (YARP :5000)
   const checkGateway = useCallback(async () => {
@@ -318,9 +338,18 @@ export function App() {
 
       <TransferModal
         isOpen={isTransferOpen}
-        onClose={() => setIsTransferOpen(false)}
+        onClose={() => {
+          setIsTransferOpen(false);
+          setQrTransferData(null);
+        }}
         currentUserId={authVM.user?.id}
         currentBalance={walletVM.wallet?.balance}
+        initialRecipient={
+          qrTransferData?.recipientEmail
+            ? { id: '', fullName: qrTransferData.recipientEmail, email: qrTransferData.recipientEmail }
+            : undefined
+        }
+        initialAmount={qrTransferData?.amount}
         onSuccess={handleRefreshAll}
       />
 
@@ -329,6 +358,7 @@ export function App() {
         onClose={() => setIsQrOpen(false)}
         user={authVM.user}
         walletId={walletVM.wallet?.id}
+        onOpenAuth={() => setIsAuthOpen(true)}
       />
 
       <AuthModal

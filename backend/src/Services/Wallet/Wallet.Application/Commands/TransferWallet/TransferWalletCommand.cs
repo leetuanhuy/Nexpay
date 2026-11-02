@@ -105,3 +105,4 @@ public class TransferWalletCommandHandler : ICommandHandler<TransferWalletComman
         }
     }
 }
+

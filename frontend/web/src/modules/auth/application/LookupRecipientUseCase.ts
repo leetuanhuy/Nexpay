@@ -12,3 +12,4 @@ export class LookupRecipientUseCase {
     return await this.authRepository.lookup(query.trim());
   }
 }
+
