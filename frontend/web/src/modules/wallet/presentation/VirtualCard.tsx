@@ -4,6 +4,8 @@ import {
   ShieldCheck,
   PlusCircle,
   MinusCircle,
+  Send,
+  QrCode,
   RefreshCw,
   Eye,
   EyeOff,
@@ -23,14 +25,18 @@ interface VirtualCardProps {
   wallet: Wallet | null;
   cardholderName?: string;
   loading: boolean;
-  onTopUp: () => void;  onWithdraw?: () => void;  onRefresh: () => void;
+  onTopUp: () => void;  onWithdraw?: () => void;
+  onTransfer?: () => void;
+  onShowQr?: () => void;  onRefresh: () => void;
 }
 
 export const VirtualCard: React.FC<VirtualCardProps> = ({
   wallet,
   cardholderName = 'Nexpay VIP Member',
   loading,
-  onTopUp,  onWithdraw = () => {},  onRefresh,
+  onTopUp,  onWithdraw = () => {},
+  onTransfer = () => {},
+  onShowQr = () => {},  onRefresh,
 }) => {
   const [showCardNumber, setShowCardNumber] = useState<boolean>(false);
   const [isCopied, setIsCopied] = useState<boolean>(false);
@@ -221,7 +227,7 @@ export const VirtualCard: React.FC<VirtualCardProps> = ({
           </div>
 
           {/* Primary Action Button */}
-          <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="grid grid-cols-2 gap-2.5 mb-4">
             <Button
               onClick={onTopUp}
               variant="primary"
@@ -232,6 +238,15 @@ export const VirtualCard: React.FC<VirtualCardProps> = ({
               <span className="font-bold text-xs sm:text-sm">+ Top Up</span>
             </Button>
             <Button
+              onClick={onTransfer}
+              variant="secondary"
+              size="md"
+              className="justify-center border border-teal-500/40 bg-teal-500/10 hover:bg-teal-500/20 text-teal-300 shadow-md shadow-teal-500/10"
+              icon={<Send className="h-4 w-4 text-teal-400" />}
+            >
+              <span className="font-bold text-xs sm:text-sm">⇄ Transfer</span>
+            </Button>
+            <Button
               onClick={onWithdraw}
               variant="secondary"
               size="md"
@@ -239,6 +254,15 @@ export const VirtualCard: React.FC<VirtualCardProps> = ({
               icon={<MinusCircle className="h-4 w-4 text-rose-400" />}
             >
               <span className="font-bold text-xs sm:text-sm">- Withdraw</span>
+            </Button>
+            <Button
+              onClick={onShowQr}
+              variant="secondary"
+              size="md"
+              className="justify-center border border-slate-700 hover:border-indigo-500/50 hover:bg-indigo-500/10 text-slate-300 hover:text-indigo-300"
+              icon={<QrCode className="h-4 w-4 text-indigo-400" />}
+            >
+              <span className="font-bold text-xs sm:text-sm">⚄ My QR</span>
             </Button>
           </div>
 

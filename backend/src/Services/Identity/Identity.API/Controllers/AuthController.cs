@@ -182,4 +182,42 @@ public class AuthController : ControllerBase
 
         return Ok(new UserDto(user.Id, user.Email, user.FullName, user.Role, user.Status));
     }
+    /// <summary>
+    /// Looks up user profile by email or user ID for P2P transfers
+    /// </summary>
+    [Authorize]
+    [HttpGet("lookup")]
+    public async Task<IActionResult> LookupUser([FromQuery] string query, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return BadRequest(new { error = "Search query is required." });
+        }
+
+        query = query.Trim().ToLowerInvariant();
+
+        UserEntity? user = null;
+
+        if (Guid.TryParse(query, out var queryGuid))
+        {
+            user = await _context.Users.FirstOrDefaultAsync(u => u.Id == queryGuid && u.Status == "Active", ct);
+        }
+
+        if (user == null)
+        {
+            user = await _context.Users.FirstOrDefaultAsync(u => u.Email.ToLower() == query && u.Status == "Active", ct);
+        }
+
+        if (user == null)
+        {
+            return NotFound(new { error = "Recipient user not found." });
+        }
+
+        return Ok(new
+        {
+            id = user.Id,
+            email = user.Email,
+            fullName = user.FullName
+        });
+    }
 }

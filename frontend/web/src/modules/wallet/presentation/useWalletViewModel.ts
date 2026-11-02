@@ -5,18 +5,20 @@ import { defaultHttpClient } from '../../../core/http/HttpClient';
 import { GetMyWalletUseCase } from '../application/GetMyWalletUseCase';
 import { TopUpWalletUseCase } from '../application/TopUpWalletUseCase';
 import { WithdrawWalletUseCase } from '../application/WithdrawWalletUseCase';
+import { TransferWalletUseCase } from '../application/TransferWalletUseCase';
 
 export const useWalletViewModel = () => {
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { getMyWalletUseCase, topUpWalletUseCase, withdrawWalletUseCase } = useMemo(() => {
+  const { getMyWalletUseCase, topUpWalletUseCase, withdrawWalletUseCase, transferWalletUseCase } = useMemo(() => {
     const repo = new HttpWalletRepository(defaultHttpClient);
     return {
       getMyWalletUseCase: new GetMyWalletUseCase(repo),
       topUpWalletUseCase: new TopUpWalletUseCase(repo),
       withdrawWalletUseCase: new WithdrawWalletUseCase(repo),
+      transferWalletUseCase: new TransferWalletUseCase(repo),
     };
   }, []);
 
@@ -65,6 +67,21 @@ export const useWalletViewModel = () => {
     }
   };
 
+  const transfer = async (receiverUserId: string, amount: number, description?: string) => {
+    try {
+      setLoading(true);
+      setError(null);
+      const result = await transferWalletUseCase.execute(receiverUserId, amount, description);
+      await fetchWallet();
+      return result;
+    } catch (err: any) {
+      setError(err.message || 'Transfer failed.');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return {
     wallet,
     loading,
@@ -72,6 +89,7 @@ export const useWalletViewModel = () => {
     fetchWallet,
     topUp,
     withdraw,
+    transfer,
     clearError: () => setError(null),
   };
 };

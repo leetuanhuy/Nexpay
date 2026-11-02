@@ -1,4 +1,4 @@
-import type { IWalletRepository } from '../domain/IWalletRepository';
+import type { IWalletRepository, WalletTransferResult } from '../domain/IWalletRepository';
 import type { Wallet } from '../domain/Wallet';
 import type { WalletTransaction } from '../domain/WalletTransaction';
 import type { IHttpClient } from '../../../core/http/HttpClient';
@@ -24,8 +24,15 @@ export class HttpWalletRepository implements IWalletRepository {
     });
   }
 
+  async transfer(receiverUserId: string, amount: number, description?: string): Promise<WalletTransferResult> {
+    return await this.http.post<WalletTransferResult>('/api/wallets/transfer', {
+      receiverUserId,
+      amount,
+      description: description || 'P2P Wallet Transfer',
+    });
+  }
+
   async getTransactions(limit: number = 50): Promise<WalletTransaction[]> {
     return await this.http.get<WalletTransaction[]>(`/api/wallets/transactions?limit=${limit}`);
   }
 }
-

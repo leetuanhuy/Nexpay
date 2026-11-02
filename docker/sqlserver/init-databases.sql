@@ -297,6 +297,148 @@ BEGIN
 END;
 GO
 
+-- 3. TRANSFER WALLET (Atomic Double-Entry P2P Transfer with Deadlock Prevention)
+CREATE OR ALTER PROCEDURE sp_TransferWallet
+    @SenderUserId UNIQUEIDENTIFIER,
+    @ReceiverUserId UNIQUEIDENTIFIER,
+    @Amount DECIMAL(18, 4),
+    @Description NVARCHAR(500) = NULL,
+    @ReferenceId NVARCHAR(100) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    IF (@SenderUserId = @ReceiverUserId)
+    BEGIN
+        THROW 50005, 'Sender and receiver cannot be the same account.', 1;
+    END
+
+    IF (@Amount <= 0)
+    BEGIN
+        THROW 50004, 'Transfer amount must be greater than zero.', 1;
+    END
+
+    BEGIN TRANSACTION;
+        DECLARE @SenderWalletId UNIQUEIDENTIFIER;
+        DECLARE @SenderBalance DECIMAL(18, 4);
+        DECLARE @SenderStatus NVARCHAR(50);
+
+        DECLARE @ReceiverWalletId UNIQUEIDENTIFIER;
+        DECLARE @ReceiverBalance DECIMAL(18, 4);
+        DECLARE @ReceiverStatus NVARCHAR(50);
+
+        -- DEADLOCK PREVENTION: Always lock rows in deterministic monotonic order of UserId
+        IF (@SenderUserId < @ReceiverUserId)
+        BEGIN
+            SELECT @SenderWalletId = Id, @SenderBalance = Balance, @SenderStatus = Status
+            FROM Wallets WITH (UPDLOCK, ROWLOCK)
+            WHERE UserId = @SenderUserId;
+
+            SELECT @ReceiverWalletId = Id, @ReceiverBalance = Balance, @ReceiverStatus = Status
+            FROM Wallets WITH (UPDLOCK, ROWLOCK)
+            WHERE UserId = @ReceiverUserId;
+        END
+        ELSE
+        BEGIN
+            SELECT @ReceiverWalletId = Id, @ReceiverBalance = Balance, @ReceiverStatus = Status
+            FROM Wallets WITH (UPDLOCK, ROWLOCK)
+            WHERE UserId = @ReceiverUserId;
+
+            SELECT @SenderWalletId = Id, @SenderBalance = Balance, @SenderStatus = Status
+            FROM Wallets WITH (UPDLOCK, ROWLOCK)
+            WHERE UserId = @SenderUserId;
+        END
+
+        -- Validate Wallets
+        IF (@SenderWalletId IS NULL)
+        BEGIN
+            ROLLBACK TRANSACTION;
+            THROW 50001, 'Sender wallet not found.', 1;
+        END
+
+        IF (@ReceiverWalletId IS NULL)
+        BEGIN
+            ROLLBACK TRANSACTION;
+            THROW 50006, 'Receiver wallet not found.', 1;
+        END
+
+        IF (@SenderStatus <> 'Active')
+        BEGIN
+            ROLLBACK TRANSACTION;
+            THROW 50003, 'Sender wallet is not active.', 1;
+        END
+
+        IF (@ReceiverStatus <> 'Active')
+        BEGIN
+            ROLLBACK TRANSACTION;
+            THROW 50007, 'Receiver wallet is not active.', 1;
+        END
+
+        IF (@SenderBalance < @Amount)
+        BEGIN
+            ROLLBACK TRANSACTION;
+            THROW 50002, 'Insufficient wallet balance for this transfer.', 1;
+        END
+
+        -- Execute Balance Updates
+        DECLARE @SenderNewBalance DECIMAL(18, 4) = @SenderBalance - @Amount;
+        DECLARE @ReceiverNewBalance DECIMAL(18, 4) = @ReceiverBalance + @Amount;
+        DECLARE @Now DATETIME2 = SYSUTCDATETIME();
+
+        UPDATE Wallets
+        SET Balance = @SenderNewBalance, UpdatedAtUtc = @Now
+        WHERE Id = @SenderWalletId;
+
+        UPDATE Wallets
+        SET Balance = @ReceiverNewBalance, UpdatedAtUtc = @Now
+        WHERE Id = @ReceiverWalletId;
+
+        -- Record Double-Entry Audit Ledger Transactions
+        DECLARE @SenderTxId UNIQUEIDENTIFIER = NEWID();
+        DECLARE @ReceiverTxId UNIQUEIDENTIFIER = NEWID();
+
+        -- 1. Debit from Sender
+        INSERT INTO WalletTransactions (
+            Id, WalletId, Amount, Type,
+            BalanceBefore, BalanceAfter,
+            ReferenceId, ReferenceType, Description, CreatedAtUtc
+        )
+        VALUES (
+            @SenderTxId, @SenderWalletId, @Amount, 'Debit',
+            @SenderBalance, @SenderNewBalance,
+            @ReferenceId, 'Transfer_Out', @Description, @Now
+        );
+
+        -- 2. Credit to Receiver
+        INSERT INTO WalletTransactions (
+            Id, WalletId, Amount, Type,
+            BalanceBefore, BalanceAfter,
+            ReferenceId, ReferenceType, Description, CreatedAtUtc
+        )
+        VALUES (
+            @ReceiverTxId, @ReceiverWalletId, @Amount, 'Credit',
+            @ReceiverBalance, @ReceiverNewBalance,
+            @ReferenceId, 'Transfer_In', @Description, @Now
+        );
+
+    COMMIT TRANSACTION;
+
+    -- Return Transfer Result
+    SELECT
+        SenderTransactionId = @SenderTxId,
+        ReceiverTransactionId = @ReceiverTxId,
+        SenderWalletId = @SenderWalletId,
+        ReceiverWalletId = @ReceiverWalletId,
+        Amount = @Amount,
+        SenderBalanceBefore = @SenderBalance,
+        SenderBalanceAfter = @SenderNewBalance,
+        ReceiverBalanceBefore = @ReceiverBalance,
+        ReceiverBalanceAfter = @ReceiverNewBalance,
+        CreatedAtUtc = @Now;
+END;
+GO
+
 -- =========================================================================
 -- 4. SCHEMA: Nexpay_PaymentDb
 -- =========================================================================

@@ -13,3 +13,4 @@ export class WithdrawWalletUseCase {
     return await this.walletRepository.debit(amount, description || 'ATM / Bank Withdrawal');
   }
 }
+

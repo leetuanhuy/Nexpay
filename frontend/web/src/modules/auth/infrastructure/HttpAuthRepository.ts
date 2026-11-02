@@ -1,4 +1,4 @@
-import type { IAuthRepository } from '../domain/IAuthRepository';
+import type { IAuthRepository, RecipientInfo } from '../domain/IAuthRepository';
 import type { AuthSession } from '../domain/AuthSession';
 import type { User } from '../domain/User';
 import type { IHttpClient } from '../../../core/http/HttpClient';
@@ -22,5 +22,8 @@ export class HttpAuthRepository implements IAuthRepository {
   async getCurrentUser(): Promise<User> {
     return await this.http.get<User>('/api/auth/me');
   }
-}
 
+  async lookup(query: string): Promise<RecipientInfo> {
+    return await this.http.get<RecipientInfo>(`/api/auth/lookup?query=${encodeURIComponent(query)}`);
+  }
+}

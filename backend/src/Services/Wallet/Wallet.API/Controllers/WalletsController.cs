@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Wallet.Application.Commands.CreateWallet;
 using Wallet.Application.Commands.CreditWallet;
 using Wallet.Application.Commands.DebitWallet;
+using Wallet.Application.Commands.TransferWallet;
 using Wallet.Application.Queries.GetTransactions;
 using Wallet.Application.Queries.GetWalletByUserId;
 
@@ -125,6 +126,28 @@ public class WalletsController : ControllerBase
     }
 
     /// <summary>
+    /// Transfers money atomically to another user's wallet via sp_TransferWallet with deadlock prevention
+    /// </summary>
+    [HttpPost("transfer")]
+    public async Task<IActionResult> TransferWallet([FromBody] TransferWalletRequest request, CancellationToken ct)
+    {
+        var command = new TransferWalletCommand(
+            CurrentUserId,
+            request.ReceiverUserId,
+            request.Amount,
+            request.Description ?? "P2P Wallet Transfer",
+            request.ReferenceId
+        );
+
+        var result = await _sender.Send(command, ct);
+
+        if (result.IsFailure)
+            return BadRequest(new { error = result.Error });
+
+        return Ok(result.Value);
+    }
+
+    /// <summary>
     /// Retrieves transaction audit ledger for authenticated user
     /// </summary>
     [HttpGet("transactions")]
@@ -143,3 +166,4 @@ public class WalletsController : ControllerBase
 public record CreateWalletRequest(Guid? UserId, string? Currency);
 public record CreditWalletRequest(decimal Amount, string? Description, string? ReferenceId);
 public record DebitWalletRequest(decimal Amount, string? Description, string? ReferenceId);
+public record TransferWalletRequest(Guid ReceiverUserId, decimal Amount, string? Description, string? ReferenceId);

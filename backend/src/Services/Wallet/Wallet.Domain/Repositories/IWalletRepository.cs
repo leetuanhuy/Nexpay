@@ -28,4 +28,12 @@ public interface IWalletRepository
         string? referenceId = null,
         string? referenceType = "Payment",
         CancellationToken cancellationToken = default);
+
+    Task<WalletTransferResult> TransferViaProcedureAsync(
+        Guid senderUserId,
+        Guid receiverUserId,
+        decimal amount,
+        string description,
+        string? referenceId = null,
+        CancellationToken cancellationToken = default);
 }

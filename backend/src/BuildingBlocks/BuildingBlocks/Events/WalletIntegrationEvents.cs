@@ -24,3 +24,20 @@ public record WalletCreditedIntegrationEvent(
     string? Description
 ) : IIntegrationEvent;
 
+public record WalletTransferredIntegrationEvent(
+    Guid EventId,
+    DateTime OccurredOnUtc,
+    Guid SenderUserId,
+    Guid ReceiverUserId,
+    Guid SenderWalletId,
+    Guid ReceiverWalletId,
+    Guid SenderTransactionId,
+    Guid ReceiverTransactionId,
+    decimal Amount,
+    decimal SenderBalanceBefore,
+    decimal SenderBalanceAfter,
+    decimal ReceiverBalanceBefore,
+    decimal ReceiverBalanceAfter,
+    string? ReferenceId,
+    string? Description
+) : IIntegrationEvent;

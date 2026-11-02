@@ -7,6 +7,8 @@ import { useLedgerViewModel } from './modules/wallet/presentation/useLedgerViewM
 import { VirtualCard } from './modules/wallet/presentation/VirtualCard';
 import { TopUpModal } from './modules/wallet/presentation/TopUpModal';
 import { WithdrawModal } from './modules/wallet/presentation/WithdrawModal';
+import { TransferModal } from './modules/wallet/presentation/TransferModal';
+import { MyQrCodeModal } from './modules/wallet/presentation/MyQrCodeModal';
 import { LedgerTable } from './modules/wallet/presentation/LedgerTable';
 import { usePaymentViewModel } from './modules/payment/presentation/usePaymentViewModel';
 import { CheckoutSimulator } from './modules/payment/presentation/CheckoutSimulator';
@@ -32,6 +34,8 @@ export function App() {
   const [activeTab, setActiveTab] = useState<'checkout' | 'ledger' | 'orders' | 'architecture'>('checkout');
   const [isTopUpOpen, setIsTopUpOpen] = useState<boolean>(false);
   const [isWithdrawOpen, setIsWithdrawOpen] = useState<boolean>(false);
+  const [isTransferOpen, setIsTransferOpen] = useState<boolean>(false);
+  const [isQrOpen, setIsQrOpen] = useState<boolean>(false);
   const [isAuthOpen, setIsAuthOpen] = useState<boolean>(false);
   const [gatewayConnected, setGatewayConnected] = useState<boolean>(false);
 
@@ -195,6 +199,8 @@ export function App() {
             loading={walletVM.loading}
             onTopUp={() => setIsTopUpOpen(true)}
             onWithdraw={() => setIsWithdrawOpen(true)}
+            onTransfer={() => setIsTransferOpen(true)}
+            onShowQr={() => setIsQrOpen(true)}
             onRefresh={walletVM.fetchWallet}
           />
         </section>
@@ -308,6 +314,21 @@ export function App() {
         onClose={() => setIsWithdrawOpen(false)}
         currentBalance={walletVM.wallet?.balance}
         onSuccess={handleRefreshAll}
+      />
+
+      <TransferModal
+        isOpen={isTransferOpen}
+        onClose={() => setIsTransferOpen(false)}
+        currentUserId={authVM.user?.id}
+        currentBalance={walletVM.wallet?.balance}
+        onSuccess={handleRefreshAll}
+      />
+
+      <MyQrCodeModal
+        isOpen={isQrOpen}
+        onClose={() => setIsQrOpen(false)}
+        user={authVM.user}
+        walletId={walletVM.wallet?.id}
       />
 
       <AuthModal

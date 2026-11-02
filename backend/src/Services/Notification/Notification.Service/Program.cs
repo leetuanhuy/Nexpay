@@ -90,6 +90,7 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<WalletCreditedConsumer>();
     x.AddConsumer<OrderPaymentSucceededConsumer>();
     x.AddConsumer<OrderPaymentFailedConsumer>();
+    x.AddConsumer<WalletTransferredConsumer>();
 
     x.UsingRabbitMq((context, cfg) =>
     {

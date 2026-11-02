@@ -27,7 +27,6 @@ public class WalletRepository : IWalletRepository
     public async Task<WalletEntity?> GetByUserIdAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         return await _context.Wallets
-            .Include(w => w.Transactions)
             .FirstOrDefaultAsync(w => w.UserId == userId, cancellationToken);
     }
 
@@ -51,6 +50,7 @@ public class WalletRepository : IWalletRepository
             .Where(t => t.WalletId == walletId)
             .OrderByDescending(t => t.CreatedAtUtc)
             .Take(limit)
+            .AsNoTracking()
             .ToListAsync(cancellationToken);
     }
 
@@ -104,6 +104,31 @@ public class WalletRepository : IWalletRepository
                 .ToListAsync(cancellationToken);
 
             return result.FirstOrDefault() ?? throw new WalletDomainException("Debit stored procedure executed but failed to return a transaction record.");
+        }
+        catch (SqlException ex)
+        {
+            throw new WalletDomainException(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Executes atomic P2P transfer between two wallets via sp_TransferWallet with monotonic row locks
+    /// </summary>
+    public async Task<WalletTransferResult> TransferViaProcedureAsync(
+        Guid senderUserId,
+        Guid receiverUserId,
+        decimal amount,
+        string description,
+        string? referenceId = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await _context.Database
+                .SqlQuery<WalletTransferResult>($"EXEC sp_TransferWallet @SenderUserId={senderUserId}, @ReceiverUserId={receiverUserId}, @Amount={amount}, @Description={description}, @ReferenceId={referenceId}")
+                .ToListAsync(cancellationToken);
+
+            return result.FirstOrDefault() ?? throw new WalletDomainException("Transfer stored procedure executed but failed to return a result record.");
         }
         catch (SqlException ex)
         {
