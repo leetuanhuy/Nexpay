@@ -7,6 +7,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Payment.API.Consumers;
 using Payment.API.Data;
+using Payment.API.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,6 +15,10 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddHealthChecks();
 builder.Services.AddEndpointsApiExplorer();
+
+// Payment Services (VietQR Generator & HMAC-SHA256 Security)
+builder.Services.AddScoped<IVietQrService, VietQrService>();
+builder.Services.AddScoped<IWebhookSecurityService, WebhookSecurityService>();
 
 // Configure Swagger with JWT Bearer Support
 builder.Services.AddSwaggerGen(c =>

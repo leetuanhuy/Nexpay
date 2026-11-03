@@ -31,3 +31,14 @@ public record OrderPaymentFailedIntegrationEvent(
     string Reason
 ) : IIntegrationEvent;
 
+public record TopUpPaymentCompletedIntegrationEvent(
+    Guid EventId,
+    DateTime OccurredOnUtc,
+    Guid OrderId,
+    string OrderCode,
+    Guid UserId,
+    decimal Amount,
+    string Currency,
+    string PaymentMethod,
+    string? ExternalTransactionId
+) : IIntegrationEvent;

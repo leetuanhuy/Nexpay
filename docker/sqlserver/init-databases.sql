@@ -457,7 +457,13 @@ BEGIN
         Description NVARCHAR(500) NULL,
         FailureReason NVARCHAR(500) NULL,
         CreatedAtUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-        UpdatedAtUtc DATETIME2 NULL
+        UpdatedAtUtc DATETIME2 NULL,
+        OrderType NVARCHAR(50) NOT NULL DEFAULT 'Checkout', -- Checkout, TopUp
+        PaymentMethod NVARCHAR(50) NOT NULL DEFAULT 'InternalWallet', -- InternalWallet, VietQR, PayOS
+        ExternalTransactionId NVARCHAR(100) NULL,
+        QrCodeUrl NVARCHAR(1000) NULL,
+        CheckoutUrl NVARCHAR(1000) NULL,
+        ExpiresAtUtc DATETIME2 NULL
     );
     CREATE INDEX IX_PaymentOrders_UserId ON PaymentOrders(UserId);
     CREATE INDEX IX_PaymentOrders_OrderCode ON PaymentOrders(OrderCode);

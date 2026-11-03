@@ -86,6 +86,8 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<UserRegisteredConsumer>();
     // Register Consumer for Saga OrderCreatedIntegrationEvent
     x.AddConsumer<OrderCreatedConsumer>();
+    // Register Consumer for Phase 10 Top-up Webhook Settlement
+    x.AddConsumer<TopUpPaymentCompletedConsumer>();
 
     x.UsingRabbitMq((context, cfg) =>
     {

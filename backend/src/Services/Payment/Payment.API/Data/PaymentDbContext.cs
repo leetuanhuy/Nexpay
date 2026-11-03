@@ -31,6 +31,12 @@ public class PaymentDbContext : DbContext
             builder.Property(o => o.Amount).HasPrecision(18, 4).IsRequired();
             builder.Property(o => o.Currency).HasMaxLength(3).IsRequired();
             builder.Property(o => o.Status).HasMaxLength(50).IsRequired();
+            builder.Property(o => o.OrderType).HasMaxLength(50).IsRequired();
+            builder.Property(o => o.PaymentMethod).HasMaxLength(50).IsRequired();
+            builder.Property(o => o.ExternalTransactionId).HasMaxLength(100);
+            builder.Property(o => o.QrCodeUrl).HasMaxLength(1000);
+            builder.Property(o => o.CheckoutUrl).HasMaxLength(1000);
+            builder.Property(o => o.ExpiresAtUtc);
             builder.Property(o => o.Description).HasMaxLength(500);
             builder.Property(o => o.FailureReason).HasMaxLength(500);
             builder.Property(o => o.CreatedAtUtc).IsRequired();
